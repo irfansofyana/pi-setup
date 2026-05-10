@@ -151,7 +151,31 @@ Current policy:
 
 Run `/reload` or restart Pi after changing the policy.
 
-## 3. Configure secrets
+## 3. Theme
+
+This setup includes a Gruvbox Dark theme. For global use, place it at:
+
+```text
+~/.pi/agent/themes/gruvbox-dark.json
+```
+
+This repo also keeps a project-local copy at:
+
+```text
+.pi/themes/gruvbox-dark.json
+```
+
+Enable it in Pi via `/settings`, or add this to your Pi settings:
+
+```json
+{
+  "theme": "gruvbox-dark"
+}
+```
+
+Run `/reload` or restart Pi after changing theme discovery/settings.
+
+## 4. Configure secrets
 
 Add only the keys you use to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
@@ -183,7 +207,7 @@ source ~/.zshrc
 source ~/.bashrc
 ```
 
-## 4. Authenticate LLM providers
+## 5. Authenticate LLM providers
 
 Start Pi and run:
 
@@ -226,7 +250,7 @@ Switch models later with:
 /model
 ```
 
-## 5. Configure MCP
+## 6. Configure MCP
 
 Pi MCP adapter reads standard MCP config files automatically. Preferred locations:
 
@@ -352,7 +376,7 @@ mcp({ tool: "tool_name", args: '{"query":"example"}' })
 
 Important: `args` is a JSON string, not a JSON object.
 
-## 6. Install agent skills
+## 7. Install agent skills
 
 ### Skills from `irfansofyana/ai-marketplace`
 
@@ -378,7 +402,7 @@ npx skills add https://github.com/anthropics/skills --skill frontend-design --gl
 npx skills add https://github.com/anthropics/skills --skill skill-creator --global
 ```
 
-## 7. Verify the setup
+## 8. Verify the setup
 
 Inside Pi:
 
