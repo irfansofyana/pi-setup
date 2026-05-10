@@ -125,7 +125,7 @@ Current policy:
     "subagent": "ask"
   },
   "bash": {
-    "*": "ask"
+    "git*": "allow"
   },
   "mcp": {
     "*": "ask",
