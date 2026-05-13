@@ -229,6 +229,15 @@ export default function agentmemoryExtension(pi: ExtensionAPI) {
     sessionId = sessionFile ? path.basename(sessionFile).replace(/\.[^.]+$/, "") : `ephemeral-${crypto.randomUUID().slice(0, 8)}`;
     currentProject = process.cwd();
     await refreshStatus(ctx);
+
+    // Register a session record so the viewer can group observations by session.
+    // Upstream Pi integration omits this, which is why sessions appear empty in
+    // the viewer even though /observe succeeds.
+    if (lastHealthOk) {
+      await callAgentMemory("session/start", {
+        body: { sessionId, project: currentProject, cwd: currentProject },
+      });
+    }
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -257,7 +266,7 @@ export default function agentmemoryExtension(pi: ExtensionAPI) {
     if (!lastHealthOk || !lastPrompt) return;
     const assistantText = getLastAssistantText(event.messages as unknown[]);
     if (!assistantText) return;
-    void callAgentMemory("observe", {
+    await callAgentMemory("observe", {
       body: {
         hookType: "post_tool_use",
         sessionId,
