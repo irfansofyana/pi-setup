@@ -118,6 +118,7 @@ Current policy:
     "tavily_*": "allow",
     "exa_*": "allow",
     "brave_search_*": "allow",
+    "ask_user_question": "allow",
     "write": "ask",
     "edit": "ask",
     "bash": "ask",
