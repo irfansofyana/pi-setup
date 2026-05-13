@@ -9,9 +9,11 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - LiteLLM provider support for company-hosted LiteLLM proxies
 - Ollama Cloud provider support with direct cloud model discovery and optional web tools
 - Subagent support for delegated workflows
+- Intercom coordination between parent and child agents
 - Permission approval gates for tools, bash, MCP, skills, and external paths
 - Context-mode workflows and context tooling with `context-mode`
 - User-question and Markdown preview helpers
+- Todo tracking and task management with `rpiv-todo`
 - A curated set of agent skills for research, reviews, diagrams, frontend work, and decision sparring
 
 ## Prerequisites
@@ -56,7 +58,8 @@ pi install npm:pi-subagents
 # Permission system: approval gates for tools, bash, MCP, skills, and special operations
 pi install npm:pi-permission-system
 
-# Tool display: compact tool output and nicer edit/write diffs
+# Intercom: coordination channel between parent and child subagents
+pi install npm:pi-intercom
 
 # Context mode: switchable context/mode workflows
 pi install npm:context-mode
@@ -66,6 +69,9 @@ pi install npm:@juicesharp/rpiv-ask-user-question
 
 # Markdown preview extension
 pi install npm:pi-markdown-preview
+
+# Todo: task tracking and todo management
+pi install npm:@juicesharp/rpiv-todo
 
 # LiteLLM provider: connect Pi to a self-hosted/company LiteLLM proxy
 pi install npm:pi-provider-litellm
