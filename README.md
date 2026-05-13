@@ -10,7 +10,6 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Ollama Cloud provider support with direct cloud model discovery and optional web tools
 - Subagent support for delegated workflows
 - Permission approval gates for tools, bash, MCP, skills, and external paths
-- Nicer tool output and edit/write diff rendering with `pi-tool-display`
 - Context-mode workflows and context tooling with `context-mode`
 - User-question and Markdown preview helpers
 - A curated set of agent skills for research, reviews, diagrams, frontend work, and decision sparring
@@ -58,7 +57,6 @@ pi install npm:pi-subagents
 pi install npm:pi-permission-system
 
 # Tool display: compact tool output and nicer edit/write diffs
-pi install npm:pi-tool-display
 
 # Context mode: switchable context/mode workflows
 pi install npm:context-mode

@@ -33,7 +33,6 @@ Keep README install instructions aligned with these packages unless intentionall
 pi install npm:pi-mcp-adapter
 pi install npm:pi-subagents
 pi install npm:pi-permission-system
-pi install npm:pi-tool-display
 pi install npm:context-mode
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
