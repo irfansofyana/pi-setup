@@ -15,6 +15,21 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - A curated set of agent skills for research, reviews, diagrams, frontend work, and decision sparring
+- Persistent cross-session memory via `agentmemory`
+
+## How to use this repo
+
+The `pi/` directory in this repository contains **example/template files** for your Pi agent configuration (themes, extensions, etc.).
+
+> ⚠️ **Do not** blindly copy the entire `pi/` folder to `~/.pi/` — that will overwrite your existing Pi installation, settings, and any extensions you already have. Instead, copy only the specific files you need:
+>
+> ```bash
+> # Example: copy just the theme
+> cp pi/themes/gruvbox-dark.json ~/.pi/agent/themes/
+>
+> # Example: copy just the agentmemory extension backup
+> cp -r pi/extensions/agentmemory ~/.pi/agent/extensions/
+> ```
 
 ## Prerequisites
 
@@ -92,6 +107,7 @@ Useful extension commands inside Pi:
 /login litellm       # Configure LiteLLM base URL and API key
 /litellm-refresh        # Refresh discovered LiteLLM models
 /ollama-cloud-refresh # Refresh discovered Ollama Cloud models
+/agentmemory-status     # Check agentmemory health
 /reload                 # Reload extensions, skills, prompts, and config
 ```
 
@@ -167,7 +183,7 @@ This setup includes a Gruvbox Dark theme. For global use, place it at:
 This repo also keeps a project-local copy at:
 
 ```text
-.pi/themes/gruvbox-dark.json
+pi/themes/gruvbox-dark.json
 ```
 
 Enable it in Pi via `/settings`, or add this to your Pi settings:
@@ -264,7 +280,7 @@ Pi MCP adapter reads standard MCP config files automatically. Preferred location
 | `~/.config/mcp/mcp.json` | Global shared MCP config | Works across MCP-compatible tools |
 | `.mcp.json` | Project-local shared MCP config | Preferred for project-specific servers |
 | `~/.pi/agent/mcp.json` | Pi global override | Pi-specific settings/imports |
-| `.pi/mcp.json` | Pi project override | Pi-specific project overrides |
+| `pi/mcp.json` | Pi project-local example | Copy what you need to `~/.pi/agent/mcp.json` |
 
 Recommended global config path:
 
@@ -407,7 +423,63 @@ npx skills add https://github.com/anthropics/skills --skill frontend-design --gl
 npx skills add https://github.com/anthropics/skills --skill skill-creator --global
 ```
 
-## 8. Verify the setup
+## 8. Agent memory (agentmemory)
+
+Persistent cross-session memory via [agentmemory](https://github.com/rohitg00/agentmemory). It captures what the agent does, compresses it into searchable memory, and injects relevant context when the next session starts. Shared across Pi, Claude Code, Codex CLI, Gemini CLI, Hermes, OpenClaw, and more.
+
+### Start the memory server
+
+In a separate terminal:
+
+```bash
+npx @agentmemory/agentmemory
+```
+
+The server runs on `http://localhost:3111` by default. Keep this terminal open while using Pi.
+
+### Install the Pi extension
+
+The integration files are copied to `~/.pi/agent/extensions/agentmemory/`. A project-local backup is also kept at `pi/extensions/agentmemory/` in this repo.
+
+Pi auto-discovers extensions in this directory. If you prefer explicit loading, add it to `~/.pi/agent/settings.json`:
+
+```json
+{
+  "extensions": ["~/.pi/agent/extensions/agentmemory"]
+}
+```
+
+Run `/reload` or restart Pi after changes.
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `AGENTMEMORY_URL` | `http://localhost:3111` | agentmemory server URL |
+| `AGENTMEMORY_SECRET` | (none) | Bearer token for protected instances |
+| `AGENTMEMORY_REQUIRE_HTTPS` | (off) | Set to `1` to refuse sending bearer tokens over plaintext HTTP to non-loopback hosts |
+
+Add any needed variables to your shell profile.
+
+### Verify
+
+Inside Pi:
+
+```text
+/reload
+/agentmemory-status
+```
+
+You should see `agentmemory healthy` and a footer status like `🧠 agentmemory`.
+
+Available tools/commands:
+
+- `memory_health` — confirm the memory server is reachable
+- `memory_search` — search prior decisions, bugs, workflows, and preferences
+- `memory_save` — write durable facts back to long-term memory
+- `/agentmemory-status` — quick health check from inside Pi
+
+## 9. Verify the setup
 
 Inside Pi:
 
@@ -425,6 +497,14 @@ Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
 ```
 
+Test agentmemory:
+
+```text
+/agentmemory-status
+memory_save content="This project uses Express with TypeScript"
+memory_search query="Express TypeScript"
+```
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -435,6 +515,8 @@ Review README.md for clarity and missing setup steps.
 | Direct MCP tools do not appear | Run `/mcp reconnect <server-name>` then `/reload` |
 | Too many MCP tools in context | Remove `directTools: true` or set `directTools` to a small list of tool names |
 | Skills do not trigger | Restart Pi or run `/reload`, then confirm the skill appears in the startup header |
+| agentmemory not responding | Ensure `npx @agentmemory/agentmemory` is running and `AGENTMEMORY_URL` is correct |
+| `/agentmemory-status` shows unhealthy | Check the server terminal for errors; verify port 3111 is free |
 
 ## Maintenance
 
