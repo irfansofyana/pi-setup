@@ -1,0 +1,5 @@
+# Pi runtime data
+data/
+
+# OS files
+.DS_Store
