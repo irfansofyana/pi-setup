@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -230,9 +230,9 @@ export default function agentmemoryExtension(pi: ExtensionAPI) {
     currentProject = process.cwd();
     await refreshStatus(ctx);
 
-    // Register a session record so the viewer can group observations by session.
-    // Upstream Pi integration omits this, which is why sessions appear empty in
-    // the viewer even though /observe succeeds.
+    // Local patch (not yet upstream): register a session record so the viewer
+    // can group observations by session. Without this, the viewer shows empty
+    // sessions even though /observe succeeds.
     if (lastHealthOk) {
       await callAgentMemory("session/start", {
         body: { sessionId, project: currentProject, cwd: currentProject },

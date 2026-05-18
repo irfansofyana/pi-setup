@@ -139,6 +139,7 @@ Current policy:
     "exa_*": "allow",
     "brave_search_*": "allow",
     "ask_user_question": "allow",
+    "todo": "allow",
     "write": "ask",
     "edit": "ask",
     "bash": "ask",
@@ -461,7 +462,7 @@ The server runs on `http://localhost:3111` by default. Keep this terminal open w
 
 The integration files are copied to `~/.pi/agent/extensions/agentmemory/`. A project-local backup is also kept at `pi/extensions/agentmemory/` in this repo.
 
-Pi auto-discovers extensions in this directory. If you prefer explicit loading, add it to `~/.pi/agent/settings.json`:
+Pi auto-discovers extensions in this directory, but explicit loading in `~/.pi/agent/settings.json` is more robust and makes the dependency visible:
 
 ```json
 {
@@ -471,6 +472,8 @@ Pi auto-discovers extensions in this directory. If you prefer explicit loading, 
 
 Run `/reload` or restart Pi after changes.
 
+> **Note:** Upstream `agentmemory` now ships `agentmemory connect` for automated agent wiring. The pi adapter is currently a stub, so manual copy-and-reload remains the recommended install path for now.
+
 ### Environment variables
 
 | Variable | Default | Description |
@@ -478,6 +481,9 @@ Run `/reload` or restart Pi after changes.
 | `AGENTMEMORY_URL` | `http://localhost:3111` | agentmemory server URL |
 | `AGENTMEMORY_SECRET` | (none) | Bearer token for protected instances |
 | `AGENTMEMORY_REQUIRE_HTTPS` | (off) | Set to `1` to refuse sending bearer tokens over plaintext HTTP to non-loopback hosts |
+| `AGENTMEMORY_DEBUG` | (off) | Set to `1` to trace MCP shim probe and standalone fallback decisions to stderr |
+| `AGENTMEMORY_VIEWER_URL` | (derived) | Override the viewer URL printed by `agentmemory status` |
+| `AGENTMEMORY_EXPORT_ROOT` | `~/agentmemory-backup` | Default destination for `agentmemory export` |
 
 Add any needed variables to your shell profile.
 
