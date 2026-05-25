@@ -33,7 +33,7 @@ Keep README install instructions aligned with these packages unless intentionall
 pi install npm:pi-mcp-adapter
 pi install npm:pi-subagents
 pi install npm:pi-intercom
-pi install npm:pi-permission-system
+pi install npm:@gotgenes/pi-permission-system
 pi install npm:context-mode
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
@@ -42,9 +42,17 @@ pi install npm:pi-provider-litellm
 pi install npm:pi-ollama-cloud
 ```
 
+`@gotgenes/pi-permission-system` requires `@earendil-works/pi-coding-agent>=0.75.0` but `pi-provider-litellm@1.2.2` pins `^0.74.0`, causing an npm peer dep conflict. Install it manually:
+
+```bash
+cd ~/.pi/agent/npm
+npm install @earendil-works/pi-coding-agent@latest  # update inner copy first
+npm install @gotgenes/pi-permission-system --legacy-peer-deps
+```
+
 ## Permission policy notes
 
-- `~/.pi/agent/pi-permissions.jsonc` is the global policy path.
+- `~/.pi/agent/extensions/pi-permission-system/config.json` is the global policy path.
 - README should include the current intended policy.
 - Tavily, Exa, and Brave search tools should be allowed without approval.
 - Mutating tools (`write`, `edit`) and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.

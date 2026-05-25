@@ -71,7 +71,7 @@ pi install npm:pi-mcp-adapter
 pi install npm:pi-subagents
 
 # Permission system: approval gates for tools, bash, MCP, skills, and special operations
-pi install npm:pi-permission-system
+pi install npm:@gotgenes/pi-permission-system
 
 # Intercom: coordination channel between parent and child subagents
 pi install npm:pi-intercom
@@ -116,21 +116,18 @@ Useful extension commands inside Pi:
 Create the global Pi permission policy file:
 
 ```bash
-$EDITOR ~/.pi/agent/pi-permissions.jsonc
+mkdir -p ~/.pi/agent/extensions/pi-permission-system
+$EDITOR ~/.pi/agent/extensions/pi-permission-system/config.json
 ```
 
 Current policy:
 
 ```jsonc
 {
-  "defaultPolicy": {
-    "tools": "ask",
-    "bash": "ask",
-    "mcp": "ask",
-    "skills": "allow",
-    "special": "ask"
-  },
-  "tools": {
+  "$schema": "https://raw.githubusercontent.com/gotgenes/pi-permission-system/main/schemas/permissions.schema.json",
+  "permissionReviewLog": true,
+  "permission": {
+    "*": "ask",
     "read": "allow",
     "grep": "allow",
     "find": "allow",
@@ -142,34 +139,33 @@ Current policy:
     "todo": "allow",
     "write": "ask",
     "edit": "ask",
-    "bash": "ask",
-    "mcp": "ask",
-    "subagent": "ask"
-  },
-  "bash": {
-    "git*": "allow"
-  },
-  "mcp": {
-    "*": "ask",
-    "tavily": "allow",
-    "tavily:*": "allow",
-    "tavily_*": "allow",
-    "exa": "allow",
-    "exa:*": "allow",
-    "exa_*": "allow",
-    "brave-search": "allow",
-    "brave-search:*": "allow",
-    "brave-search_*": "allow",
-    "brave_search_*": "allow"
-  },
-  "skills": {
-    "*": "allow"
-  },
-  "special": {
+    "subagent": "ask",
+    "bash": {
+      "*": "ask",
+      "git*": "allow"
+    },
+    "mcp": {
+      "*": "ask",
+      "tavily": "allow",
+      "tavily:*": "allow",
+      "tavily_*": "allow",
+      "exa": "allow",
+      "exa:*": "allow",
+      "exa_*": "allow",
+      "brave-search": "allow",
+      "brave-search:*": "allow",
+      "brave-search_*": "allow",
+      "brave_search_*": "allow"
+    },
+    "skill": {
+      "*": "allow"
+    },
     "external_directory": "ask"
   }
 }
 ```
+
+> **Note:** `@gotgenes/pi-permission-system` uses a flat `permission` format. If you still have a legacy `~/.pi/agent/pi-permissions.jsonc` from the old `pi-permission-system` extension, move or remove it — the new extension will warn about legacy files but still reads them for backward compatibility.
 
 Run `/reload` or restart Pi after changing the policy.
 
