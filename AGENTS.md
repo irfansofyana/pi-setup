@@ -38,16 +38,7 @@ pi install npm:context-mode
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
-pi install npm:pi-provider-litellm
-pi install npm:pi-ollama-cloud
-```
-
-`@gotgenes/pi-permission-system` requires `@earendil-works/pi-coding-agent>=0.75.0` but `pi-provider-litellm@1.2.2` pins `^0.74.0`, causing an npm peer dep conflict. Install it manually:
-
-```bash
-cd ~/.pi/agent/npm
-npm install @earendil-works/pi-coding-agent@latest  # update inner copy first
-npm install @gotgenes/pi-permission-system --legacy-peer-deps
+pi install git:github.com/irfansofyana/pi-9router-ext
 ```
 
 ## Permission policy notes

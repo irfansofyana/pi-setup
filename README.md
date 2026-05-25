@@ -6,8 +6,6 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 
 - Pi coding agent installed globally
 - MCP adapter for Tavily, Exa, Brave Search, and optional OAuth/bearer-token servers
-- LiteLLM provider support for company-hosted LiteLLM proxies
-- Ollama Cloud provider support with direct cloud model discovery and optional web tools
 - Subagent support for delegated workflows
 - Intercom coordination between parent and child agents
 - Permission approval gates for tools, bash, MCP, skills, and external paths
@@ -88,11 +86,8 @@ pi install npm:pi-markdown-preview
 # Todo: task tracking and todo management
 pi install npm:@juicesharp/rpiv-todo
 
-# LiteLLM provider: connect Pi to a self-hosted/company LiteLLM proxy
-pi install npm:pi-provider-litellm
-
-# Ollama Cloud provider: direct Ollama Cloud models and optional web tools
-pi install npm:pi-ollama-cloud
+# 9router: model routing extension
+pi install git:github.com/irfansofyana/pi-9router-ext
 ```
 
 Restart Pi after installing extensions.
@@ -104,9 +99,6 @@ Useful extension commands inside Pi:
 /mcp setup           # Guided MCP setup
 /mcp tools           # List available MCP tools
 /permission-system   # Open pi-permission-system settings
-/login litellm       # Configure LiteLLM base URL and API key
-/litellm-refresh        # Refresh discovered LiteLLM models
-/ollama-cloud-refresh # Refresh discovered Ollama Cloud models
 /agentmemory-status     # Check agentmemory health
 /reload                 # Reload extensions, skills, prompts, and config
 ```
@@ -209,12 +201,6 @@ export BRAVE_API_KEY="BSA..."
 # Optional work MCP server examples
 export WORK_CUSTOM_HEADER="..."
 export WORK_MCP_TOKEN="..."
-
-# Optional LiteLLM provider credentials
-export LITELLM_API_KEY="..."
-
-# Optional Ollama Cloud credentials
-export OLLAMA_API_KEY="..."
 ```
 
 Reload your shell:
@@ -240,27 +226,6 @@ Configure the providers you use, for example:
 - OpenRouter
 - Kimi For Coding
 - Anthropic via `ANTHROPIC_API_KEY`
-- Company LiteLLM proxy via `/login litellm`
-
-For LiteLLM, run:
-
-```text
-/login litellm
-```
-
-Enter your company LiteLLM base URL and API key. The `pi-provider-litellm` extension discovers models from `/model/info` and falls back to `/v1/models`. Refresh discovered models with:
-
-```text
-/litellm-refresh
-```
-
-For Ollama Cloud, set `OLLAMA_API_KEY`, restart Pi or run `/reload`, then refresh models:
-
-```text
-/ollama-cloud-refresh
-```
-
-Ollama Cloud models appear under the `ollama-cloud` provider in `/model`. The extension can also register `ollama_web_search` and `ollama_web_fetch` tools.
 
 Switch models later with:
 
