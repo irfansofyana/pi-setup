@@ -423,15 +423,9 @@ The server runs on `http://localhost:3111` by default. Keep this terminal open w
 
 The integration files are copied to `~/.pi/agent/extensions/agentmemory/`. A project-local backup is also kept at `pi/extensions/agentmemory/` in this repo.
 
-Pi auto-discovers extensions in this directory, but explicit loading in `~/.pi/agent/settings.json` is more robust and makes the dependency visible:
+Pi auto-discovers extensions placed in `~/.pi/agent/extensions/`. Do **not** also add the extension to the `packages` array in `settings.json` — that causes a double-load and tool name conflicts (`memory_health`, `memory_search`, `memory_save` will all fail to register).
 
-```json
-{
-  "extensions": ["~/.pi/agent/extensions/agentmemory"]
-}
-```
-
-Run `/reload` or restart Pi after changes.
+Run `/reload` or restart Pi after copying the files.
 
 > **Note:** Upstream `agentmemory` now ships `agentmemory connect` for automated agent wiring. The pi adapter is currently a stub, so manual copy-and-reload remains the recommended install path for now.
 
