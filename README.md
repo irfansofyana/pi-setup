@@ -66,7 +66,7 @@ Install the required extensions:
 pi install npm:pi-mcp-adapter
 
 # Subagents: adds delegated-agent workflows
-pi install npm:pi-subagents
+pi install npm:@tintinweb/pi-subagents
 
 # Permission system: approval gates for tools, bash, MCP, skills, and special operations
 pi install npm:@gotgenes/pi-permission-system
