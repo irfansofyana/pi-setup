@@ -39,6 +39,8 @@ pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
 pi install git:github.com/irfansofyana/pi-9router-ext
+# Caveman: manual install (git clone to ~/.pi/agent/git/github.com/jonjonrankin/pi-caveman)
+# pi install git:github.com/jonjonrankin/pi-caveman
 ```
 
 ## Permission policy notes
