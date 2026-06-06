@@ -87,7 +87,7 @@ pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
 
 # 9router: model routing extension
-pi install git:github.com/irfansofyana/pi-9router-ext
+pi install npm:pi-9router-ext
 
 # Caveman: ultra-compressed communication mode (manual install)
 # pi install git:github.com/jonjonrankin/pi-caveman
