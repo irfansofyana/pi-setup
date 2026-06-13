@@ -368,7 +368,7 @@ Important: `args` is a JSON string, not a JSON object.
 
 ```bash
 npx skills add irfansofyana/ai-marketplace --global --skill mermaid
-npx skills add irfansofyana/ai-marketplace --global --skill web-researcher
+npx skills add irfansofyana/ai-marketplace --global --skill 9router-web-researcher
 npx skills add irfansofyana/ai-marketplace --global --skill code-review
 npx skills add irfansofyana/ai-marketplace --global --skill decision-sparring
 npx skills add irfansofyana/ai-marketplace --global --skill idea-refinery
@@ -476,7 +476,7 @@ Inside Pi:
 Then test the workflow:
 
 ```text
-Use web-researcher to find current Pi MCP adapter docs.
+Use 9router-web-researcher to find current Pi MCP adapter docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
 ```
