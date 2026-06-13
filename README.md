@@ -14,6 +14,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Todo tracking and task management with `rpiv-todo`
 - A curated set of agent skills for research, reviews, diagrams, frontend work, decision sparring, and Notion workflows
 - Notion CLI (`ntn`) plus Notion agent skills from `makenotion/skills`
+- Optional Understand-Anything plugin/skills for Pi codebase graphs
 - Persistent cross-session memory via `agentmemory`
 
 ## How to use this repo
@@ -401,7 +402,57 @@ npx skills add makenotion/skills --global
 npx skills add makenotion/skills --global --skill notion-cli
 ```
 
-## 8. Notion CLI (`ntn`)
+## 8. Optional: Understand-Anything for Pi
+
+Understand-Anything adds Pi slash commands for codebase knowledge graphs, dashboards, chat, diffs, and onboarding guides.
+
+Manual install from the Egonex fork:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Egonex-AI/Understand-Anything/main/install.sh | bash
+```
+
+When prompted, choose:
+
+```text
+pi
+```
+
+The installer should clone/link files under your home directory, typically:
+
+```text
+~/.understand-anything/repo
+~/.understand-anything-plugin
+```
+
+Then reload Pi:
+
+```text
+/reload
+```
+
+Useful commands inside Pi:
+
+```text
+/understand
+/understand-dashboard
+/understand-chat How does authentication work?
+/understand-diff
+/understand-explain README.md
+/understand-onboard
+```
+
+For first test, run it in a small throwaway repo before using a large codebase.
+
+If you want to remove it later:
+
+```bash
+cd ~/.understand-anything/repo
+bash install.sh --uninstall pi
+rm -rf ~/.understand-anything ~/.understand-anything-plugin
+```
+
+## 9. Notion CLI (`ntn`)
 
 Install the official Notion CLI:
 
@@ -449,7 +500,7 @@ ntn workers --help
 
 Run `/reload` or restart Pi after installing skills or changing environment variables.
 
-## 9. Agent memory (agentmemory)
+## 10. Agent memory (agentmemory)
 
 Persistent cross-session memory via [agentmemory](https://github.com/rohitg00/agentmemory). It captures what the agent does, compresses it into searchable memory, and injects relevant context when the next session starts. Shared across Pi, Claude Code, Codex CLI, Gemini CLI, Hermes, OpenClaw, and more.
 
@@ -524,7 +575,7 @@ Available tools/commands:
 - `memory_save` — write durable facts back to long-term memory
 - `/agentmemory-status` — quick health check from inside Pi
 
-## 10. Verify the setup
+## 11. Verify the setup
 
 Inside Pi:
 
