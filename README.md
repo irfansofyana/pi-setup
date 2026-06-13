@@ -12,7 +12,8 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Context-mode workflows and context tooling with `context-mode`
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
-- A curated set of agent skills for research, reviews, diagrams, frontend work, and decision sparring
+- A curated set of agent skills for research, reviews, diagrams, frontend work, decision sparring, and Notion workflows
+- Notion CLI (`ntn`) plus Notion agent skills from `makenotion/skills`
 - Persistent cross-session memory via `agentmemory`
 
 ## How to use this repo
@@ -388,7 +389,67 @@ npx skills add https://github.com/anthropics/skills --skill frontend-design --gl
 npx skills add https://github.com/anthropics/skills --skill skill-creator --global
 ```
 
-## 8. Agent memory (agentmemory)
+### Skills from `makenotion/skills`
+
+Install Notion skills so Pi agents can use Notion CLI workflows instead of guessing command syntax:
+
+```bash
+# Install all Notion skills
+npx skills add makenotion/skills --global
+
+# Or install only the Notion CLI skill
+npx skills add makenotion/skills --global --skill notion-cli
+```
+
+## 8. Notion CLI (`ntn`)
+
+Install the official Notion CLI:
+
+```bash
+# macOS/Linux recommended installer
+curl -fsSL https://ntn.dev | bash
+
+# Or install with npm. Requires Node.js 22+ and npm 10+.
+npm install --global ntn
+```
+
+Verify:
+
+```bash
+ntn --version
+ntn --help
+```
+
+Authenticate and configure access:
+
+```bash
+# Workspace login for Notion Workers and token commands
+ntn login
+
+# API/files commands use an integration token today
+export NOTION_API_TOKEN="secret_..."
+```
+
+Add `NOTION_API_TOKEN` to your shell profile if you want Pi sessions to use it:
+
+```bash
+# ~/.zshrc or ~/.bashrc
+export NOTION_API_TOKEN="secret_..."
+```
+
+Useful commands:
+
+```bash
+ntn api ls
+ntn api --help
+ntn api <endpoint> --docs
+ntn files --help
+ntn workers --help
+```
+
+Run `/reload` or restart Pi after installing skills or changing environment variables.
+
+## 9. Agent memory (agentmemory)
 
 Persistent cross-session memory via [agentmemory](https://github.com/rohitg00/agentmemory). It captures what the agent does, compresses it into searchable memory, and injects relevant context when the next session starts. Shared across Pi, Claude Code, Codex CLI, Gemini CLI, Hermes, OpenClaw, and more.
 
@@ -463,7 +524,7 @@ Available tools/commands:
 - `memory_save` — write durable facts back to long-term memory
 - `/agentmemory-status` — quick health check from inside Pi
 
-## 9. Verify the setup
+## 10. Verify the setup
 
 Inside Pi:
 
@@ -479,6 +540,19 @@ Then test the workflow:
 Use 9router-web-researcher to find current Pi MCP adapter docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
+```
+
+Test Notion integration:
+
+```bash
+ntn --version
+ntn api ls
+```
+
+Inside Pi, ask:
+
+```text
+Use the notion-cli skill to list Notion API endpoints.
 ```
 
 Test agentmemory:
