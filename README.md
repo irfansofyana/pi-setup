@@ -406,17 +406,13 @@ npx skills add makenotion/skills --global --skill notion-cli
 
 Understand-Anything adds Pi slash commands for codebase knowledge graphs, dashboards, chat, diffs, and onboarding guides.
 
-Manual install from the Egonex fork:
+Manual install from the Egonex fork, passing Pi as the platform directly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Egonex-AI/Understand-Anything/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Egonex-AI/Understand-Anything/main/install.sh | bash -s pi
 ```
 
-When prompted, choose:
-
-```text
-pi
-```
+Do not type `pi` at the interactive numeric prompt; choose Pi's menu number if you use the interactive path.
 
 The installer should clone/link files under your home directory, typically:
 
