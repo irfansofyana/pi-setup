@@ -384,6 +384,7 @@ npx skills add irfansofyana/ai-marketplace --global --skill idea-refinery
 ```bash
 npx skills@latest add mattpocock/skills --global --skill grill-me
 npx skills@latest add mattpocock/skills --global --skill caveman
+npx skills@latest add mattpocock/skills --global --skill teach
 ```
 
 ### Skills from `anthropics/skills`
