@@ -393,6 +393,14 @@ npx skills add https://github.com/anthropics/skills --skill frontend-design --gl
 npx skills add https://github.com/anthropics/skills --skill skill-creator --global
 ```
 
+### Skills from `hardikpandya/stop-slop`
+
+A single-skill repo that catches and removes AI-writing tells (banned phrases, structural clichés, sentence-level rules). Useful when editing or reviewing prose in Pi.
+
+```bash
+npx skills add hardikpandya/stop-slop --global --skill stop-slop
+```
+
 ### Skills from `makenotion/skills`
 
 Install Notion skills so Pi agents can use Notion CLI workflows instead of guessing command syntax:
