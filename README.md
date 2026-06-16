@@ -91,6 +91,9 @@ pi install npm:@juicesharp/rpiv-todo
 # 9router: model routing extension
 pi install npm:pi-9router-ext
 
+# Ponytail: ponytail extension
+pi install git:github.com/DietrichGebert/ponytail
+
 # Caveman: ultra-compressed communication mode (manual install)
 # pi install git:github.com/jonjonrankin/pi-caveman
 ```
