@@ -384,6 +384,7 @@ npx skills add irfansofyana/ai-marketplace --global --skill idea-refinery
 ```bash
 npx skills@latest add mattpocock/skills --global --skill grill-me
 npx skills@latest add mattpocock/skills --global --skill caveman
+npx skills@latest add mattpocock/skills --global --skill teach
 ```
 
 ### Skills from `anthropics/skills`
@@ -391,6 +392,14 @@ npx skills@latest add mattpocock/skills --global --skill caveman
 ```bash
 npx skills add https://github.com/anthropics/skills --skill frontend-design --global
 npx skills add https://github.com/anthropics/skills --skill skill-creator --global
+```
+
+### Skills from `hardikpandya/stop-slop`
+
+A single-skill repo that catches and removes AI-writing tells (banned phrases, structural clichés, sentence-level rules). Useful when editing or reviewing prose in Pi.
+
+```bash
+npx skills add hardikpandya/stop-slop --global --skill stop-slop
 ```
 
 ### Skills from `makenotion/skills`
