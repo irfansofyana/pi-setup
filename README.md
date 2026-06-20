@@ -76,9 +76,6 @@ pi install npm:@tintinweb/pi-subagents
 # Permission system: approval gates for tools, bash, MCP, skills, and special operations
 pi install npm:@gotgenes/pi-permission-system
 
-# Intercom: coordination channel between parent and child subagents
-pi install npm:pi-intercom
-
 # Context mode: switchable context/mode workflows
 pi install npm:context-mode
 
