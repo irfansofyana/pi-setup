@@ -27,56 +27,56 @@ const PI_LINES = [
 ];
 
 const WORKING_JOKES = [
-	"real devs test in prod",
-	"prod is my staging",
-	"works on my prod",
-	"unit tests are vibes",
-	"QA? you mean users?",
-	"LGTM from orbit",
-	"ship now, pray later",
-	"hotfix-driven dev",
-	"CI failed emotionally",
-	"lint chose violence",
-	"git blame my intern",
-	"merge conflict cardio",
-	"regex ate the ticket",
-	"null broke parole",
-	"undefined has entered",
-	"one more console.log",
-	"TODO is product plan",
-	"legacy means revenue",
-	"cache invalidates me",
-	"YAML wants a sacrifice",
-	"JSON comma missing",
-	"npm brought friends",
-	"docker lied again",
-	"localhost gaslighting",
-	"rollback is feature",
-	"bug has stakeholder",
-	"feature has bugs",
-	"Friday deploy enjoyer",
-	"prod heard you type",
-	"logs say skill issue",
-	"stack overflow oracle",
-	"rubber duck resigned",
-	"types filing lawsuit",
-	"compiler needs proof",
-	"API ghosted again",
-	"DB says maybe later",
-	"cron slept through it",
-	"state went feral",
-	"race condition won",
-	"thread needs therapy",
-	"memory leak premium",
-	"pointer points at you",
-	"semicolons unionized",
-	"tabs versus spaces war",
-	"branch has side quests",
-	"commit message: trust",
-	"works until observed",
-	"cloud is someone else's bug",
-	"deadline-driven design",
-	"deploy gods demand logs",
+	"Real programmers test in production.",
+	"It works on my machine.",
+	"There are 10 types of people: binary and confused.",
+	"Cache invalidation, naming, off-by-one: the holy trinity.",
+	"To understand recursion, first understand recursion.",
+	"UDP joke sent. You may not get it.",
+	"SQL query walks into a bar: can I join?",
+	"99 bugs in the code; patch one, now 127.",
+	"Programmer: coffee-to-code converter.",
+	"I test rarely; when I do, it is prod.",
+	"Debugging: detective story where you did it.",
+	"Code works perfectly until someone uses it.",
+	"My code has no bugs, only random features.",
+	"Talk is cheap. Show me the code.",
+	"Ctrl+S is my love language.",
+	"Java devs wear glasses because they don't C#.",
+	"Password set to incorrect. Hint built in.",
+	"QA orders -1 beers, 0 beers, and a lizard.",
+	"Lightbulb bug? Hardware team owns that.",
+	"Lightbulb has finite TTL; known issue.",
+	"Java: now with extra ProblemFactory.",
+	"Regex solved it; now we have two bugs.",
+	"Final_final_REALLY_final.ts",
+	"git push --force: because chaos is fun.",
+	"Scrum: meeting that should be an email.",
+	"Agile: lost, but flexible.",
+	"Frontend sees color; backend sees NULL.",
+	"Undefined is not a function; it is a lifestyle.",
+	"Python devs don't die; they keep iterating.",
+	"HTML joke failed: not well structured.",
+	"Semicolon walks into a bar; parse error.",
+	"I love F5. Very refreshing.",
+	"Stack Overflow is my senior engineer.",
+	"Deploying Friday, for science.",
+	"Client says: can we just add this?",
+	"Coffee in, code out, bugs retained.",
+	"Off-by-one errors are easy to make twice.",
+	"Distributed systems have two hard problems: 2.",
+	"Exactly-once delivery arrived twice.",
+	"Naming things took longer than the feature.",
+	"I changed one line; build changed religion.",
+	"YAML: spaces with trust issues.",
+	"Docker works here. Best I can do.",
+	"TODO eventually becomes architecture.",
+	"Legacy code means revenue.",
+	"Lint chose violence today.",
+	"Compiler wants receipts.",
+	"Rubber duck asked for PTO.",
+	"Production heard you whisper demo.",
+	"In code we trust; in coffee we debug.",
 ];
 
 function run(command: string, args: string[]): string | undefined {
@@ -172,9 +172,12 @@ function funnySpinner(theme: Theme): WorkingIndicatorOptions {
 	const jokes = [...shuffled(WORKING_JOKES), ...shuffled(WORKING_JOKES), ...shuffled(WORKING_JOKES)];
 	return {
 		frames: jokes.flatMap((joke) =>
-			orbit.map((frame, index) => `${theme.fg(colors[index]!, frame)} ${theme.fg("muted", joke)}`),
+			orbit.flatMap((frame, index) => {
+				const marker = theme.fg(colors[index]!, frame);
+				return [`${marker} ${theme.fg("muted", joke)}`, `${marker} ${theme.fg("dim", joke)}`];
+			}),
 		),
-		intervalMs: 420,
+		intervalMs: 500,
 	};
 }
 
@@ -187,5 +190,10 @@ export default function piSignature(pi: ExtensionAPI) {
 		ctx.ui.setWorkingMessage("");
 		ctx.ui.setWorkingIndicator(funnySpinner(ctx.ui.theme));
 		ctx.ui.setTitle(`π · ${owner} · Irfan's Pi setup`);
+	});
+
+	pi.on("agent_start", async (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		ctx.ui.setWorkingIndicator(funnySpinner(ctx.ui.theme));
 	});
 }
