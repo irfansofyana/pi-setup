@@ -25,7 +25,10 @@ The `pi/` directory in this repository contains **example/template files** for y
 >
 > ```bash
 > # Example: copy just the theme
-> cp pi/themes/gruvbox-dark.json ~/.pi/agent/themes/
+> cp pi/themes/irfan-gruvbox.json ~/.pi/agent/themes/
+>
+> # Example: copy just the signature UI extension
+> cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
 >
 > # Example: copy just the agentmemory extension backup
 > cp -r pi/extensions/agentmemory ~/.pi/agent/extensions/
@@ -72,9 +75,6 @@ pi install npm:@tintinweb/pi-subagents
 
 # Permission system: approval gates for tools, bash, MCP, skills, and special operations
 pi install npm:@gotgenes/pi-permission-system
-
-# Intercom: coordination channel between parent and child subagents
-pi install npm:pi-intercom
 
 # Context mode: switchable context/mode workflows
 pi install npm:context-mode
@@ -169,29 +169,36 @@ Current policy:
 
 Run `/reload` or restart Pi after changing the policy.
 
-## 3. Theme
+## 3. Signature UI and theme
 
-This setup includes a Gruvbox Dark theme. For global use, place it at:
+This setup includes:
 
-```text
-~/.pi/agent/themes/gruvbox-dark.json
+- `irfan-gruvbox` — Gruvbox Dark base with a personal theme name
+- `pi-signature.ts` — big gradient `π` signature header, auto-detected running user, fixed `crafted from Irfan's Pi setup` credit, and a `π` working spinner with short programmer-joke flavor text
+
+Install globally:
+
+```bash
+mkdir -p ~/.pi/agent/themes ~/.pi/agent/extensions
+cp pi/themes/irfan-gruvbox.json ~/.pi/agent/themes/
+cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
 ```
 
-This repo also keeps a project-local copy at:
-
-```text
-pi/themes/gruvbox-dark.json
-```
-
-Enable it in Pi via `/settings`, or add this to your Pi settings:
+Enable the theme in Pi via `/settings`, or add this to your Pi settings:
 
 ```json
 {
-  "theme": "gruvbox-dark"
+  "theme": "irfan-gruvbox"
 }
 ```
 
-Run `/reload` or restart Pi after changing theme discovery/settings.
+Override the displayed owner if needed:
+
+```bash
+export PI_SIGNATURE_NAME="Your Name"
+```
+
+Run `/reload` or restart Pi after changing theme or extension files.
 
 ## 4. Configure secrets
 

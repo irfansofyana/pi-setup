@@ -31,14 +31,13 @@ Keep README install instructions aligned with these packages unless intentionall
 
 ```bash
 pi install npm:pi-mcp-adapter
-pi install npm:pi-subagents
-pi install npm:pi-intercom
+pi install npm:@tintinweb/pi-subagents
 pi install npm:@gotgenes/pi-permission-system
 pi install npm:context-mode
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
-pi install git:github.com/irfansofyana/pi-9router-ext
+pi install npm:pi-9router-ext
 pi install git:github.com/DietrichGebert/ponytail
 # Caveman: manual install (git clone to ~/.pi/agent/git/github.com/jonjonrankin/pi-caveman)
 # pi install git:github.com/jonjonrankin/pi-caveman
