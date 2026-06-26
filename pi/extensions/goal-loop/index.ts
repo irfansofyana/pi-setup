@@ -227,6 +227,49 @@ export function shouldAutoContinue(goal: GoalState): boolean {
   return goal.status === "active" && goal.turns < goal.maxTurns;
 }
 
+export function buildEvaluatorInstructions(goal: GoalState): string {
+  const commands = goal.verification.commands.length
+    ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
+    : "- No explicit verification commands configured.";
+  const evidence = goal.evidence.length
+    ? goal.evidence
+        .slice(-5)
+        .map((entry) => {
+          const command = entry.command ? ` [${entry.command}]` : "";
+          const outcome = entry.outcome ? ` (${entry.outcome})` : "";
+          return `- ${entry.kind}${command}${outcome}: ${entry.summary}`;
+        })
+        .join("\n")
+    : "- No evidence recorded yet.";
+
+  return [
+    "Evaluator subagent protocol:",
+    "- Before claiming complete, blocked, or needs_user, call a foreground read-only evaluator subagent if the Agent tool is available.",
+    "- Also call the evaluator when verification failures repeat or the evidence is ambiguous.",
+    "- Normal continue turns do not need evaluator review.",
+    "- If Agent is unavailable, use the worker GOAL_STATUS/GOAL_REASON markers as the fallback.",
+    "",
+    "Use this shape:",
+    "Agent({",
+    '  subagent_type: "Explore",',
+    '  description: "Evaluate goal status",',
+    "  run_in_background: false,",
+    "  prompt: `Review this goal loop decision.",
+    `Goal: ${goal.objective}`,
+    "Verification commands:",
+    commands,
+    "Recent evidence:",
+    evidence,
+    "Return only:",
+    "GOAL_EVAL_STATUS: complete | continue | blocked | needs_user",
+    "GOAL_EVAL_REASON: one short sentence",
+    "GOAL_EVAL_CONFIDENCE: low | medium | high`",
+    "})",
+    "",
+    "Evaluator markers win over worker markers when both are present.",
+  ].join("\n");
+}
+
 export function buildContinuationPrompt(goal: GoalState): string {
   const commands = goal.verification.commands.length
     ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
@@ -258,6 +301,8 @@ export function buildContinuationPrompt(goal: GoalState): string {
     "- get_goal: inspect the current goal, verification commands, and evidence",
     "- update_goal: record evidence, add verification commands, or mark complete/blocked/needs_user",
     "",
+    buildEvaluatorInstructions(goal),
+    "",
     "Operate as a goal loop:",
     "- inspect the current state",
     "- update or create todos if available",
@@ -274,7 +319,7 @@ export function buildContinuationPrompt(goal: GoalState): string {
   ].join("\n");
 }
 
-function buildGoalSystemPrompt(goal: GoalState): string {
+export function buildGoalSystemPrompt(goal: GoalState): string {
   return [
     "Active Pi goal loop:",
     `Goal: ${goal.objective}`,
@@ -283,13 +328,32 @@ function buildGoalSystemPrompt(goal: GoalState): string {
     "",
     "Before stopping, evaluate whether the goal is complete against the objective and any verification command output.",
     "Use get_goal to inspect persisted goal state and update_goal to record evidence or terminal status.",
+    "Use the evaluator subagent protocol before terminal status claims when Agent is available; fallback to worker markers if subagents are unavailable.",
+    "Evaluator markers use GOAL_EVAL_STATUS, GOAL_EVAL_REASON, and GOAL_EVAL_CONFIDENCE.",
     "End every response while this goal is active with:",
     "GOAL_STATUS: complete | continue | blocked | needs_user",
     "GOAL_REASON: one short sentence",
   ].join("\n");
 }
 
-function parseEvaluationFromText(text: string): GoalEvaluation {
+function normalizeConfidence(value: string | undefined): GoalEvaluation["confidence"] {
+  const normalized = value?.toLowerCase();
+  return normalized === "low" || normalized === "medium" || normalized === "high" ? normalized : "medium";
+}
+
+export function parseEvaluationFromText(text: string): GoalEvaluation {
+  const evaluatorStatusMatch = text.match(/GOAL_EVAL_STATUS:\s*(complete|continue|blocked|needs_user)/i);
+  if (evaluatorStatusMatch) {
+    const evaluatorReasonMatch = text.match(/GOAL_EVAL_REASON:\s*(.+)/i);
+    const evaluatorConfidenceMatch = text.match(/GOAL_EVAL_CONFIDENCE:\s*(low|medium|high)/i);
+
+    return {
+      decision: evaluatorStatusMatch[1].toLowerCase() as GoalDecision,
+      reason: evaluatorReasonMatch?.[1]?.trim() || "No explicit evaluator reason found.",
+      confidence: normalizeConfidence(evaluatorConfidenceMatch?.[1]),
+    };
+  }
+
   const statusMatch = text.match(/GOAL_STATUS:\s*(complete|continue|blocked|needs_user)/i);
   const reasonMatch = text.match(/GOAL_REASON:\s*(.+)/i);
   const decision = (statusMatch?.[1]?.toLowerCase() as GoalDecision | undefined) ?? "continue";

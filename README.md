@@ -156,7 +156,9 @@ How the loop works:
 - `before_agent_start` injects the active goal into the turn instructions.
 - The extension registers model-callable `get_goal`, `create_goal`, and `update_goal` tools so the agent can inspect persisted state and record evidence while it works.
 - The goal state keeps the last 10 evidence entries from verification, notes, or tool observations.
+- When `@tintinweb/pi-subagents` exposes the `Agent` tool, the prompt asks the worker to call a foreground read-only evaluator subagent before terminal decisions.
 - The agent must end each loop turn with `GOAL_STATUS` and `GOAL_REASON` markers.
+- If an evaluator subagent returns `GOAL_EVAL_STATUS`, `GOAL_EVAL_REASON`, and `GOAL_EVAL_CONFIDENCE`, those evaluator markers take precedence.
 - `agent_end` reads the marker and auto-continues when the status is `continue`; idle continuations are sent without `deliverAs: "followUp"` so Pi starts the next turn reliably.
 - The loop stops on `complete`, `blocked`, `needs_user`, or after the turn budget.
 
@@ -165,6 +167,14 @@ Status markers:
 ```text
 GOAL_STATUS: complete | continue | blocked | needs_user
 GOAL_REASON: one short sentence
+```
+
+Evaluator markers:
+
+```text
+GOAL_EVAL_STATUS: complete | continue | blocked | needs_user
+GOAL_EVAL_REASON: one short sentence
+GOAL_EVAL_CONFIDENCE: low | medium | high
 ```
 
 Agent tools:
@@ -179,7 +189,7 @@ Keep `@gotgenes/pi-permission-system` enabled. The goal loop does not bypass you
 
 Current limitations:
 
-- The evaluator is marker-based; it does not yet spawn a separate evaluator subagent.
+- Evaluator spawning is prompt-mediated through the `Agent` tool; the extension does not yet call `subagents:rpc:spawn` directly.
 - Goals do not run after Pi exits.
 - Verification commands are instructions to the agent, not commands the extension runs directly.
 

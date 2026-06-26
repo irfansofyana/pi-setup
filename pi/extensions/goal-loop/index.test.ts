@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 
 import {
   buildContinuationPrompt,
+  buildGoalSystemPrompt,
   continuationDeliveryOptions,
   createGoal,
   goalKey,
   normalizeGoalState,
   parseGoalArgs,
+  parseEvaluationFromText,
   recordEvidence,
   recordEvaluation,
   shouldAutoContinue,
@@ -101,6 +103,22 @@ test("recordEvaluation completes, blocks, or increments turns", () => {
   assert.equal(blocked.status, "blocked");
 });
 
+test("parseEvaluationFromText prefers evaluator markers over worker markers", () => {
+  const evaluation = parseEvaluationFromText([
+    "GOAL_STATUS: complete",
+    "GOAL_REASON: Worker thinks done.",
+    "GOAL_EVAL_STATUS: continue",
+    "GOAL_EVAL_REASON: Verification output is missing.",
+    "GOAL_EVAL_CONFIDENCE: high",
+  ].join("\n"));
+
+  assert.deepEqual(evaluation, {
+    decision: "continue",
+    reason: "Verification output is missing.",
+    confidence: "high",
+  });
+});
+
 test("shouldAutoContinue honors status and turn budget", () => {
   const goal = createGoal("/repo/app", "Make tests pass", new Date("2026-06-26T00:00:00.000Z"));
   assert.equal(shouldAutoContinue(goal), true);
@@ -167,5 +185,18 @@ test("buildContinuationPrompt includes objective and verification commands", () 
   assert.match(prompt, /npm test failed on one assertion/);
   assert.match(prompt, /get_goal/);
   assert.match(prompt, /update_goal/);
+  assert.match(prompt, /Agent\(\{/);
+  assert.match(prompt, /Evaluate goal status/);
+  assert.match(prompt, /GOAL_EVAL_STATUS/);
   assert.match(prompt, /Stop and ask the user/);
+});
+
+test("buildGoalSystemPrompt includes evaluator fallback rules", () => {
+  const goal = createGoal("/repo/app", "Make tests pass", new Date("2026-06-26T00:00:00.000Z"));
+  const prompt = buildGoalSystemPrompt(goal);
+
+  assert.match(prompt, /evaluator subagent/);
+  assert.match(prompt, /terminal status/);
+  assert.match(prompt, /fallback/);
+  assert.match(prompt, /GOAL_EVAL_STATUS/);
 });

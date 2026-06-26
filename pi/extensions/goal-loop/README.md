@@ -41,6 +41,29 @@ update_goal    # record evidence, add verification commands, or stop the goal
 
 Use `/goal` for human commands. The agent uses the tools while it is working inside a loop.
 
+## Evaluator subagent
+
+When `@tintinweb/pi-subagents` is installed, the goal prompt asks the worker to call a foreground read-only evaluator before terminal decisions:
+
+```text
+Agent({
+  subagent_type: "Explore",
+  description: "Evaluate goal status",
+  run_in_background: false,
+  prompt: "Review the goal, evidence, and proposed status. Return GOAL_EVAL_* markers."
+})
+```
+
+Evaluator markers take precedence over worker markers:
+
+```text
+GOAL_EVAL_STATUS: complete | continue | blocked | needs_user
+GOAL_EVAL_REASON: one short sentence
+GOAL_EVAL_CONFIDENCE: low | medium | high
+```
+
+If the `Agent` tool is unavailable or the worker does not call it, the loop falls back to `GOAL_STATUS` and `GOAL_REASON`.
+
 ## How it works
 
 - Stores one active goal per project.
@@ -48,6 +71,7 @@ Use `/goal` for human commands. The agent uses the tools while it is working ins
 - Keeps the last 10 evidence entries from verification, notes, or tool observations.
 - Injects goal instructions into each agent turn.
 - Tells the agent to call `get_goal` and `update_goal` when it needs persisted goal state.
+- Tells the agent to request evaluator subagent review before `complete`, `blocked`, or `needs_user` decisions.
 - Requires the agent to end responses with:
 
 ```text
@@ -56,6 +80,7 @@ GOAL_REASON: one short sentence
 ```
 
 - Reads that marker after `agent_end`.
+- Reads `GOAL_EVAL_*` markers first when an evaluator subagent produced them.
 - Calls `sendUserMessage` to continue automatically when status is `continue`.
 - Omits `deliverAs: "followUp"` while Pi is idle so continuation starts a new turn reliably.
 - Stops when the goal is complete, blocked, needs user input, or reaches the turn budget.
@@ -73,8 +98,7 @@ The extension does not bypass Pi permissions. Keep `pi-permission-system` enable
 
 ## Limitations
 
-- The evaluator is still marker-based. The same working agent reports the status marker, and the extension enforces the loop from that marker.
-- It does not yet spawn a separate evaluator subagent.
+- Evaluator spawning is prompt-mediated. The extension does not yet call `subagents:rpc:spawn` directly.
 - It does not schedule goals after Pi exits.
 - It does not run verification commands by itself; it tells the agent which commands to run.
 
