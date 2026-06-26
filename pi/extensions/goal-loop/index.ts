@@ -14,6 +14,24 @@ export interface GoalEvaluation {
   confidence: "low" | "medium" | "high";
 }
 
+export type GoalEvidenceKind = "note" | "verification" | "tool";
+export type GoalEvidenceOutcome = "passed" | "failed" | "unknown";
+
+export interface GoalEvidence {
+  at: string;
+  kind: GoalEvidenceKind;
+  summary: string;
+  command?: string;
+  outcome?: GoalEvidenceOutcome;
+}
+
+export interface GoalEvidenceInput {
+  kind: GoalEvidenceKind;
+  summary: string;
+  command?: string;
+  outcome?: GoalEvidenceOutcome;
+}
+
 export interface GoalState {
   projectRoot: string;
   objective: string;
@@ -29,11 +47,15 @@ export interface GoalState {
     commands: string[];
     lastResult?: string;
   };
+  evidence: GoalEvidence[];
 }
 
 interface GoalStore {
   goals: Record<string, GoalState>;
 }
+
+const OPTIONAL_SCHEMA = Symbol("optional-schema");
+type JsonSchema = Record<string, unknown> & { [OPTIONAL_SCHEMA]?: true };
 
 export interface ParsedGoalArgs {
   command: GoalCommand;
@@ -42,9 +64,46 @@ export interface ParsedGoalArgs {
 
 const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS = 3;
+const MAX_EVIDENCE_ENTRIES = 10;
 const STATE_PATH = join(homedir(), ".pi", "agent", "goal-loop", "state.json");
 
 const COMMANDS = new Set<GoalCommand>(["status", "pause", "resume", "clear", "edit", "verify"]);
+const Schema = {
+  Object(properties: Record<string, JsonSchema>): JsonSchema {
+    const required = Object.entries(properties)
+      .filter(([, schema]) => !schema[OPTIONAL_SCHEMA])
+      .map(([name]) => name);
+    const cleanProperties = Object.fromEntries(
+      Object.entries(properties).map(([name, schema]) => {
+        const { [OPTIONAL_SCHEMA]: _optional, ...cleanSchema } = schema;
+        return [name, cleanSchema];
+      }),
+    );
+    return {
+      type: "object",
+      ...(required.length ? { required } : {}),
+      properties: cleanProperties,
+    };
+  },
+  String(options: Record<string, unknown> = {}): JsonSchema {
+    return { type: "string", ...options };
+  },
+  Number(options: Record<string, unknown> = {}): JsonSchema {
+    return { type: "number", ...options };
+  },
+  Array(items: JsonSchema): JsonSchema {
+    return { type: "array", items };
+  },
+  Literal(value: string): JsonSchema {
+    return { type: "string", const: value };
+  },
+  Optional(schema: JsonSchema): JsonSchema {
+    return { ...schema, [OPTIONAL_SCHEMA]: true };
+  },
+  Union(anyOf: JsonSchema[]): JsonSchema {
+    return { anyOf };
+  },
+};
 
 export function parseGoalArgs(args: string): ParsedGoalArgs {
   const trimmed = args.trim();
@@ -78,6 +137,57 @@ export function createGoal(projectRoot: string, objective: string, now = new Dat
     verification: {
       commands: [],
     },
+    evidence: [],
+  };
+}
+
+export function normalizeGoalState(goal: GoalState | Record<string, unknown>): GoalState {
+  const raw = goal as Partial<GoalState>;
+  return {
+    projectRoot: raw.projectRoot ?? "",
+    objective: raw.objective ?? "",
+    status: raw.status ?? "active",
+    createdAt: raw.createdAt ?? new Date(0).toISOString(),
+    updatedAt: raw.updatedAt ?? raw.createdAt ?? new Date(0).toISOString(),
+    turns: raw.turns ?? 0,
+    maxTurns: raw.maxTurns ?? DEFAULT_MAX_TURNS,
+    maxFailedVerificationAttempts: raw.maxFailedVerificationAttempts ?? DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS,
+    consecutiveFailedVerificationAttempts: raw.consecutiveFailedVerificationAttempts ?? 0,
+    lastEvaluation: raw.lastEvaluation,
+    verification: {
+      commands: Array.isArray(raw.verification?.commands) ? raw.verification.commands : [],
+      lastResult: raw.verification?.lastResult,
+    },
+    evidence: Array.isArray(raw.evidence) ? raw.evidence : [],
+  };
+}
+
+export function continuationDeliveryOptions(isIdle: boolean): { deliverAs: "followUp" } | undefined {
+  return isIdle ? undefined : { deliverAs: "followUp" };
+}
+
+export function recordEvidence(goal: GoalState, evidence: GoalEvidenceInput, now = new Date()): GoalState {
+  const entry: GoalEvidence = {
+    at: now.toISOString(),
+    kind: evidence.kind,
+    summary: evidence.summary,
+    command: evidence.command,
+    outcome: evidence.outcome,
+  };
+
+  const verification =
+    entry.kind === "verification"
+      ? {
+          ...goal.verification,
+          lastResult: `${entry.outcome ?? "unknown"}: ${entry.summary}`,
+        }
+      : goal.verification;
+
+  return {
+    ...goal,
+    verification,
+    evidence: [...goal.evidence, entry].slice(-MAX_EVIDENCE_ENTRIES),
+    updatedAt: now.toISOString(),
   };
 }
 
@@ -121,6 +231,16 @@ export function buildContinuationPrompt(goal: GoalState): string {
   const commands = goal.verification.commands.length
     ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
     : "- No explicit verification commands configured. Use the best project-specific checks you can infer.";
+  const evidence = goal.evidence.length
+    ? goal.evidence
+        .slice(-5)
+        .map((entry) => {
+          const command = entry.command ? ` [${entry.command}]` : "";
+          const outcome = entry.outcome ? ` (${entry.outcome})` : "";
+          return `- ${entry.kind}${command}${outcome}: ${entry.summary}`;
+        })
+        .join("\n")
+    : "- No evidence recorded yet.";
 
   return [
     "Continue working toward this active goal.",
@@ -131,9 +251,18 @@ export function buildContinuationPrompt(goal: GoalState): string {
     "Verification commands:",
     commands,
     "",
+    "Recent evidence:",
+    evidence,
+    "",
+    "Goal tools:",
+    "- get_goal: inspect the current goal, verification commands, and evidence",
+    "- update_goal: record evidence, add verification commands, or mark complete/blocked/needs_user",
+    "",
     "Operate as a goal loop:",
     "- inspect the current state",
     "- update or create todos if available",
+    "- call get_goal when goal state is unclear",
+    "- call update_goal after meaningful verification or when stopping",
     "- use subagents only for independent research or review lanes",
     "- make focused changes",
     "- run the smallest useful verification, then broader checks when near completion",
@@ -153,6 +282,7 @@ function buildGoalSystemPrompt(goal: GoalState): string {
     `Turn budget: ${goal.turns}/${goal.maxTurns}`,
     "",
     "Before stopping, evaluate whether the goal is complete against the objective and any verification command output.",
+    "Use get_goal to inspect persisted goal state and update_goal to record evidence or terminal status.",
     "End every response while this goal is active with:",
     "GOAL_STATUS: complete | continue | blocked | needs_user",
     "GOAL_REASON: one short sentence",
@@ -213,7 +343,8 @@ function writeStore(store: GoalStore) {
 }
 
 function getProjectGoal(projectRoot: string): GoalState | undefined {
-  return readStore().goals[goalKey(projectRoot)];
+  const goal = readStore().goals[goalKey(projectRoot)];
+  return goal ? normalizeGoalState(goal) : undefined;
 }
 
 function setProjectGoal(goal: GoalState) {
@@ -230,11 +361,13 @@ function clearProjectGoal(projectRoot: string) {
 
 function formatStatus(goal: GoalState | undefined): string {
   if (!goal) return "No active goal for this project.";
+  const latestEvidence = goal.evidence.at(-1);
   return [
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
     `Turns: ${goal.turns}/${goal.maxTurns}`,
     `Verification: ${goal.verification.commands.length ? goal.verification.commands.join(", ") : "none"}`,
+    latestEvidence ? `Latest evidence: ${latestEvidence.kind} - ${latestEvidence.summary}` : "Latest evidence: none",
     goal.lastEvaluation ? `Last check: ${goal.lastEvaluation.decision} - ${goal.lastEvaluation.reason}` : "Last check: none",
   ].join("\n");
 }
@@ -243,7 +376,137 @@ function notify(ctx: { ui: { notify: (message: string, type?: "info" | "warning"
   ctx.ui.notify(message, type);
 }
 
+function sendContinuation(pi: ExtensionAPI, ctx: { isIdle: () => boolean }, goal: GoalState) {
+  const options = continuationDeliveryOptions(ctx.isIdle());
+  if (options) {
+    pi.sendUserMessage(buildContinuationPrompt(goal), options);
+    return;
+  }
+  pi.sendUserMessage(buildContinuationPrompt(goal));
+}
+
 export default function goalLoopExtension(pi: ExtensionAPI) {
+  pi.registerTool({
+    name: "get_goal",
+    label: "Get Goal",
+    description: "Inspect the current project goal, status, verification commands, and evidence.",
+    promptSnippet: "Inspect the current project goal loop state.",
+    parameters: Schema.Object({}) as any,
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const goal = getProjectGoal(ctx.cwd || process.cwd());
+      return {
+        content: [{ type: "text", text: formatStatus(goal) }],
+        details: { goal },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "create_goal",
+    label: "Create Goal",
+    description: "Create or replace the current project goal loop objective.",
+    promptSnippet: "Create or replace the current project goal loop objective.",
+    parameters: Schema.Object({
+      objective: Schema.String({ description: "Goal objective to pursue." }),
+      maxTurns: Schema.Optional(Schema.Number({ description: "Optional turn budget. Default is 10." })),
+      verificationCommands: Schema.Optional(Schema.Array(Schema.String({ description: "Verification command." }))),
+    }) as any,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const projectRoot = ctx.cwd || process.cwd();
+      const goal = {
+        ...createGoal(projectRoot, params.objective),
+        maxTurns: typeof params.maxTurns === "number" && params.maxTurns > 0 ? Math.floor(params.maxTurns) : DEFAULT_MAX_TURNS,
+        verification: {
+          commands: Array.isArray(params.verificationCommands) ? [...new Set(params.verificationCommands)] : [],
+        },
+      };
+      setProjectGoal(goal);
+      return {
+        content: [{ type: "text", text: `Goal created.\n\n${formatStatus(goal)}` }],
+        details: { goal },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "update_goal",
+    label: "Update Goal",
+    description: "Record goal evidence, add verification commands, or mark the current project goal complete, blocked, or needing user input.",
+    promptSnippet: "Update the current project goal loop state.",
+    promptGuidelines: [
+      "Use update_goal to record verification evidence before marking a goal complete.",
+      "Use update_goal with status=blocked or status=needs_user when progress requires user input.",
+    ],
+    parameters: Schema.Object({
+      status: Schema.Optional(
+        Schema.Union([
+          Schema.Literal("active"),
+          Schema.Literal("paused"),
+          Schema.Literal("complete"),
+          Schema.Literal("blocked"),
+          Schema.Literal("needs_user"),
+        ]),
+      ),
+      reason: Schema.Optional(Schema.String({ description: "Short reason for a status update." })),
+      evidence: Schema.Optional(Schema.String({ description: "Evidence summary to append to the goal ledger." })),
+      evidenceKind: Schema.Optional(Schema.Union([Schema.Literal("note"), Schema.Literal("verification"), Schema.Literal("tool")])),
+      command: Schema.Optional(Schema.String({ description: "Verification command related to the evidence." })),
+      outcome: Schema.Optional(Schema.Union([Schema.Literal("passed"), Schema.Literal("failed"), Schema.Literal("unknown")])),
+      verificationCommand: Schema.Optional(Schema.String({ description: "Verification command to remember for future loop turns." })),
+      maxTurns: Schema.Optional(Schema.Number({ description: "Replace the remaining turn budget ceiling." })),
+    }) as any,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const projectRoot = ctx.cwd || process.cwd();
+      let goal = getProjectGoal(projectRoot);
+      if (!goal) {
+        return {
+          content: [{ type: "text", text: "No active goal for this project. Use create_goal or /goal <objective> first." }],
+          details: { error: "missing_goal" },
+        };
+      }
+
+      if (typeof params.maxTurns === "number" && params.maxTurns > 0) {
+        goal = { ...goal, maxTurns: Math.floor(params.maxTurns), updatedAt: new Date().toISOString() };
+      }
+
+      if (params.verificationCommand) {
+        goal = {
+          ...goal,
+          verification: {
+            ...goal.verification,
+            commands: [...new Set([...goal.verification.commands, params.verificationCommand])],
+          },
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      if (params.evidence || params.command || params.outcome) {
+        goal = recordEvidence(goal, {
+          kind: (params.evidenceKind as GoalEvidenceKind | undefined) ?? (params.command ? "verification" : "note"),
+          summary: params.evidence ?? params.reason ?? "Goal evidence recorded.",
+          command: params.command,
+          outcome: params.outcome as GoalEvidenceOutcome | undefined,
+        });
+      }
+
+      if (params.status === "active" || params.status === "paused") {
+        goal = { ...goal, status: params.status, updatedAt: new Date().toISOString() };
+      } else if (params.status) {
+        goal = recordEvaluation(goal, {
+          decision: params.status as GoalDecision,
+          reason: params.reason ?? params.evidence ?? "Goal status updated.",
+          confidence: "medium",
+        });
+      }
+
+      setProjectGoal(goal);
+      return {
+        content: [{ type: "text", text: `Goal updated.\n\n${formatStatus(goal)}` }],
+        details: { goal },
+      };
+    },
+  });
+
   pi.registerCommand("goal", {
     description: "Set or manage an auto-continuing project goal loop",
     async handler(args, ctx) {
@@ -259,7 +522,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
         const goal = createGoal(projectRoot, parsed.value);
         setProjectGoal(goal);
         notify(ctx, `Goal started: ${goal.objective}`);
-        pi.sendUserMessage(buildContinuationPrompt(goal), { deliverAs: "followUp" });
+        sendContinuation(pi, ctx, goal);
         return;
       }
 
@@ -283,7 +546,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
         const goal = { ...existing, status: "active" as const, updatedAt: new Date().toISOString() };
         setProjectGoal(goal);
         notify(ctx, "Goal resumed.");
-        pi.sendUserMessage(buildContinuationPrompt(goal), { deliverAs: "followUp" });
+        sendContinuation(pi, ctx, goal);
         return;
       }
 
@@ -360,6 +623,6 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
       return;
     }
 
-    pi.sendUserMessage(buildContinuationPrompt(updated), { deliverAs: "followUp" });
+    sendContinuation(pi, ctx, updated);
   });
 }

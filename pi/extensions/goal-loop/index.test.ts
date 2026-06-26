@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   buildContinuationPrompt,
+  continuationDeliveryOptions,
   createGoal,
   goalKey,
+  normalizeGoalState,
   parseGoalArgs,
+  recordEvidence,
   recordEvaluation,
   shouldAutoContinue,
 } from "./index.ts";
@@ -43,6 +46,32 @@ test("createGoal stores one active project goal with defaults", () => {
   assert.equal(goal.maxTurns, 10);
   assert.equal(goal.maxFailedVerificationAttempts, 3);
   assert.deepEqual(goal.verification.commands, []);
+  assert.deepEqual(goal.evidence, []);
+});
+
+test("normalizeGoalState fills fields missing from older state files", () => {
+  const goal = normalizeGoalState({
+    projectRoot: "/repo/app",
+    objective: "Make tests pass",
+    status: "active",
+    createdAt: "2026-06-26T00:00:00.000Z",
+    updatedAt: "2026-06-26T00:00:00.000Z",
+    turns: 2,
+    maxTurns: 10,
+    maxFailedVerificationAttempts: 3,
+    consecutiveFailedVerificationAttempts: 0,
+    verification: {
+      commands: ["npm test"],
+    },
+  });
+
+  assert.deepEqual(goal.evidence, []);
+  assert.deepEqual(goal.verification.commands, ["npm test"]);
+});
+
+test("continuationDeliveryOptions omits followUp when Pi is idle", () => {
+  assert.equal(continuationDeliveryOptions(true), undefined);
+  assert.deepEqual(continuationDeliveryOptions(false), { deliverAs: "followUp" });
 });
 
 test("recordEvaluation completes, blocks, or increments turns", () => {
@@ -96,10 +125,37 @@ test("recordEvaluation blocks after repeated verification failures", () => {
   assert.equal(updated.consecutiveFailedVerificationAttempts, 3);
 });
 
+test("recordEvidence appends bounded evidence entries", () => {
+  let goal = createGoal("/repo/app", "Make tests pass", new Date("2026-06-26T00:00:00.000Z"));
+
+  for (let index = 1; index <= 12; index += 1) {
+    goal = recordEvidence(goal, {
+      kind: "verification",
+      summary: `npm test attempt ${index}`,
+      command: "npm test",
+      outcome: index === 12 ? "passed" : "failed",
+    }, new Date(`2026-06-26T00:${String(index).padStart(2, "0")}:00.000Z`));
+  }
+
+  assert.equal(goal.evidence.length, 10);
+  assert.equal(goal.evidence[0].summary, "npm test attempt 3");
+  assert.equal(goal.evidence[9].outcome, "passed");
+  assert.equal(goal.verification.lastResult, "passed: npm test attempt 12");
+});
+
 test("buildContinuationPrompt includes objective and verification commands", () => {
   const goal = {
     ...createGoal("/repo/app", "Make tests pass", new Date("2026-06-26T00:00:00.000Z")),
     verification: { commands: ["npm test"], lastResult: "failed" },
+    evidence: [
+      {
+        at: "2026-06-26T00:01:00.000Z",
+        kind: "verification" as const,
+        summary: "npm test failed on one assertion",
+        command: "npm test",
+        outcome: "failed" as const,
+      },
+    ],
   };
 
   const prompt = buildContinuationPrompt(goal);
@@ -107,5 +163,9 @@ test("buildContinuationPrompt includes objective and verification commands", () 
   assert.match(prompt, /Continue working toward this active goal/);
   assert.match(prompt, /Make tests pass/);
   assert.match(prompt, /npm test/);
+  assert.match(prompt, /Recent evidence/);
+  assert.match(prompt, /npm test failed on one assertion/);
+  assert.match(prompt, /get_goal/);
+  assert.match(prompt, /update_goal/);
   assert.match(prompt, /Stop and ask the user/);
 });

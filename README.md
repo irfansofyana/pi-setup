@@ -154,8 +154,10 @@ How the loop works:
 
 - `/goal <objective>` stores the goal and immediately asks Pi to continue toward it.
 - `before_agent_start` injects the active goal into the turn instructions.
+- The extension registers model-callable `get_goal`, `create_goal`, and `update_goal` tools so the agent can inspect persisted state and record evidence while it works.
+- The goal state keeps the last 10 evidence entries from verification, notes, or tool observations.
 - The agent must end each loop turn with `GOAL_STATUS` and `GOAL_REASON` markers.
-- `agent_end` reads the marker and auto-continues when the status is `continue`.
+- `agent_end` reads the marker and auto-continues when the status is `continue`; idle continuations are sent without `deliverAs: "followUp"` so Pi starts the next turn reliably.
 - The loop stops on `complete`, `blocked`, `needs_user`, or after the turn budget.
 
 Status markers:
@@ -165,9 +167,17 @@ GOAL_STATUS: complete | continue | blocked | needs_user
 GOAL_REASON: one short sentence
 ```
 
+Agent tools:
+
+```text
+get_goal       # inspect objective, status, verification commands, and evidence
+create_goal    # create or replace the current project goal
+update_goal    # record evidence, add verification commands, or stop the goal
+```
+
 Keep `@gotgenes/pi-permission-system` enabled. The goal loop does not bypass your policy; writes, shell commands, unknown MCP tools, subagents, and external directories should still follow the permission gates in this README.
 
-Current v1 limitations:
+Current limitations:
 
 - The evaluator is marker-based; it does not yet spawn a separate evaluator subagent.
 - Goals do not run after Pi exits.
