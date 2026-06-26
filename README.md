@@ -12,6 +12,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Context-mode workflows and context tooling with `context-mode`
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
+- Local `/goal` command template for Codex/Claude-style goal loops in Pi
 - A curated set of agent skills for research, reviews, diagrams, frontend work, decision sparring, and Notion workflows
 - Notion CLI (`ntn`) plus Notion agent skills from `makenotion/skills`
 - Optional Understand-Anything plugin/skills for Pi codebase graphs
@@ -29,6 +30,9 @@ The `pi/` directory in this repository contains **example/template files** for y
 >
 > # Example: copy just the signature UI extension
 > cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
+>
+> # Example: copy just the local goal-loop extension template
+> cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
 >
 > # Example: copy just the agentmemory extension backup
 > cp -r pi/extensions/agentmemory ~/.pi/agent/extensions/
@@ -110,6 +114,64 @@ Useful extension commands inside Pi:
 /agentmemory-status     # Check agentmemory health
 /reload                 # Reload extensions, skills, prompts, and config
 ```
+
+### Local goal loop command
+
+This repo includes a local Pi extension template at `pi/extensions/goal-loop/` that adds a project-scoped `/goal` command inspired by Codex Goal mode and Claude Code `/goal`.
+
+Install the template globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
+```
+
+Commands:
+
+```text
+/goal <objective>          # create a project goal and start auto-continuing
+/goal status               # show objective, status, turn count, verification
+/goal pause                # stop auto-continuing but keep state
+/goal resume               # resume a paused or stopped goal
+/goal clear                # remove this project's goal
+/goal edit <objective>     # replace the goal text
+/goal verify <command>     # add an explicit verification command
+```
+
+The extension stores one active goal per project in:
+
+```text
+~/.pi/agent/goal-loop/state.json
+```
+
+How the loop works:
+
+- `/goal <objective>` stores the goal and immediately asks Pi to continue toward it.
+- `before_agent_start` injects the active goal into the turn instructions.
+- The agent must end each loop turn with `GOAL_STATUS` and `GOAL_REASON` markers.
+- `agent_end` reads the marker and auto-continues when the status is `continue`.
+- The loop stops on `complete`, `blocked`, `needs_user`, or after the turn budget.
+
+Status markers:
+
+```text
+GOAL_STATUS: complete | continue | blocked | needs_user
+GOAL_REASON: one short sentence
+```
+
+Keep `@gotgenes/pi-permission-system` enabled. The goal loop does not bypass your policy; writes, shell commands, unknown MCP tools, subagents, and external directories should still follow the permission gates in this README.
+
+Current v1 limitations:
+
+- The evaluator is marker-based; it does not yet spawn a separate evaluator subagent.
+- Goals do not run after Pi exits.
+- Verification commands are instructions to the agent, not commands the extension runs directly.
 
 ### Permission policy
 
