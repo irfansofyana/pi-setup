@@ -104,8 +104,8 @@ pi install npm:pi-stats-ext
 # Ponytail: ponytail extension
 pi install git:github.com/DietrichGebert/ponytail
 
-# Caveman: manual install (git clone to ~/.pi/agent/git/github.com/jonjonrankin/pi-caveman)
-# pi install git:github.com/jonjonrankin/pi-caveman
+# Caveman: caveman extension
+pi install git:github.com/jonjonrankin/pi-caveman
 ```
 
 Restart Pi after installing extensions.
@@ -253,7 +253,7 @@ Current policy:
     "subagent": "ask",
     "bash": {
       "*": "ask",
-      "git*": "allow"
+      "git*": "allow",
     },
     "mcp": {
       "*": "ask",
@@ -266,13 +266,13 @@ Current policy:
       "brave-search": "allow",
       "brave-search:*": "allow",
       "brave-search_*": "allow",
-      "brave_search_*": "allow"
+      "brave_search_*": "allow",
     },
     "skill": {
-      "*": "allow"
+      "*": "allow",
     },
-    "external_directory": "ask"
-  }
+    "external_directory": "ask",
+  },
 }
 ```
 
