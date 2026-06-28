@@ -95,6 +95,9 @@ pi install npm:@juicesharp/rpiv-todo
 # 9router: model routing extension
 pi install npm:pi-9router-ext
 
+# Stats: Pi usage statistics extension
+pi install npm:pi-stats-ext
+
 # Ponytail: ponytail extension
 pi install git:github.com/DietrichGebert/ponytail
 
