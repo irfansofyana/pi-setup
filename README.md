@@ -101,8 +101,8 @@ pi install npm:pi-stats-ext
 # Ponytail: ponytail extension
 pi install git:github.com/DietrichGebert/ponytail
 
-# Caveman: ultra-compressed communication mode (manual install)
-# pi install git:github.com/jonjonrankin/pi-caveman
+# Caveman: ultra-compressed communication mode
+pi install git:github.com/jonjonrankin/pi-caveman
 ```
 
 Restart Pi after installing extensions.
@@ -250,7 +250,7 @@ Current policy:
     "subagent": "ask",
     "bash": {
       "*": "ask",
-      "git*": "allow"
+      "git*": "allow",
     },
     "mcp": {
       "*": "ask",
@@ -263,13 +263,13 @@ Current policy:
       "brave-search": "allow",
       "brave-search:*": "allow",
       "brave-search_*": "allow",
-      "brave_search_*": "allow"
+      "brave_search_*": "allow",
     },
     "skill": {
-      "*": "allow"
+      "*": "allow",
     },
-    "external_directory": "ask"
-  }
+    "external_directory": "ask",
+  },
 }
 ```
 
@@ -360,12 +360,12 @@ Switch models later with:
 
 Pi MCP adapter reads standard MCP config files automatically. Preferred locations:
 
-| File | Scope | Notes |
-| --- | --- | --- |
-| `~/.config/mcp/mcp.json` | Global shared MCP config | Works across MCP-compatible tools |
-| `.mcp.json` | Project-local shared MCP config | Preferred for project-specific servers |
-| `~/.pi/agent/mcp.json` | Pi global override | Pi-specific settings/imports |
-| `pi/mcp.json` | Pi project-local example | Copy what you need to `~/.pi/agent/mcp.json` |
+| File                     | Scope                           | Notes                                        |
+| ------------------------ | ------------------------------- | -------------------------------------------- |
+| `~/.config/mcp/mcp.json` | Global shared MCP config        | Works across MCP-compatible tools            |
+| `.mcp.json`              | Project-local shared MCP config | Preferred for project-specific servers       |
+| `~/.pi/agent/mcp.json`   | Pi global override              | Pi-specific settings/imports                 |
+| `pi/mcp.json`            | Pi project-local example        | Copy what you need to `~/.pi/agent/mcp.json` |
 
 Recommended global config path:
 
@@ -632,6 +632,7 @@ Persistent cross-session memory via [agentmemory](https://github.com/rohitg00/ag
 > **Pinned version:** agentmemory currently pins `iii-engine` to **v0.11.2** (v0.11.6+ introduces a sandbox model that agentmemory hasn't refactored for yet). Override with `AGENTMEMORY_III_VERSION=<version>` if needed.
 >
 > **macOS manual install:**
+>
 > ```bash
 > mkdir -p ~/.local/bin
 > curl -fsSL https://github.com/iii-hq/iii/releases/download/iii/v0.11.2/iii-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin
@@ -639,10 +640,12 @@ Persistent cross-session memory via [agentmemory](https://github.com/rohitg00/ag
 > ```
 >
 > **Data directory:** The server stores its SQLite database (`data/state_store.db`) relative to its working directory. Start it from a dedicated location (e.g., `~/.agentmemory`) so it doesn't pollute random project directories:
+>
 > ```bash
 > mkdir -p ~/.agentmemory && cd ~/.agentmemory
 > npx @agentmemory/agentmemory
 > ```
+>
 > If a `data/` directory keeps appearing in an unwanted location, a zombie `iii` process is probably still running from there. Find it with `lsof -i :3111`, kill it, and restart from the correct directory.
 
 ### Start the memory server
@@ -669,14 +672,14 @@ Run `/reload` or restart Pi after copying the files.
 
 ### Environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `AGENTMEMORY_URL` | `http://localhost:3111` | agentmemory server URL |
-| `AGENTMEMORY_SECRET` | (none) | Bearer token for protected instances |
-| `AGENTMEMORY_REQUIRE_HTTPS` | (off) | Set to `1` to refuse sending bearer tokens over plaintext HTTP to non-loopback hosts |
-| `AGENTMEMORY_DEBUG` | (off) | Set to `1` to trace MCP shim probe and standalone fallback decisions to stderr |
-| `AGENTMEMORY_VIEWER_URL` | (derived) | Override the viewer URL printed by `agentmemory status` |
-| `AGENTMEMORY_EXPORT_ROOT` | `~/agentmemory-backup` | Default destination for `agentmemory export` |
+| Variable                    | Default                 | Description                                                                          |
+| --------------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| `AGENTMEMORY_URL`           | `http://localhost:3111` | agentmemory server URL                                                               |
+| `AGENTMEMORY_SECRET`        | (none)                  | Bearer token for protected instances                                                 |
+| `AGENTMEMORY_REQUIRE_HTTPS` | (off)                   | Set to `1` to refuse sending bearer tokens over plaintext HTTP to non-loopback hosts |
+| `AGENTMEMORY_DEBUG`         | (off)                   | Set to `1` to trace MCP shim probe and standalone fallback decisions to stderr       |
+| `AGENTMEMORY_VIEWER_URL`    | (derived)               | Override the viewer URL printed by `agentmemory status`                              |
+| `AGENTMEMORY_EXPORT_ROOT`   | `~/agentmemory-backup`  | Default destination for `agentmemory export`                                         |
 
 Add any needed variables to your shell profile.
 
@@ -739,18 +742,18 @@ memory_search query="Express TypeScript"
 
 ## Troubleshooting
 
-| Problem | Fix |
-| --- | --- |
-| Pi cannot find a command installed by npm | Check `npm bin -g` / global npm path and restart the shell |
-| MCP server does not start | Run `/mcp`, inspect the server error, and verify API keys are exported |
-| OAuth server is unauthorized | Run `/mcp-auth <server-name>` again |
-| Direct MCP tools do not appear | Run `/mcp reconnect <server-name>` then `/reload` |
-| Too many MCP tools in context | Remove `directTools: true` or set `directTools` to a small list of tool names |
-| Skills do not trigger | Restart Pi or run `/reload`, then confirm the skill appears in the startup header |
-| agentmemory not responding | Ensure `npx @agentmemory/agentmemory` is running and `AGENTMEMORY_URL` is correct |
-| `/agentmemory-status` shows unhealthy | Check the server terminal for errors; verify port 3111 is free |
-| `data/` directory keeps reappearing in a repo | A zombie `iii` process is running from that directory. `lsof -i :3111` to find it, `kill <pid>`, then restart from `~/.agentmemory` |
-| agentmemory won't start on Windows | The Node.js package isn't enough — you need the `iii-engine` native binary. Download `iii-x86_64-pc-windows-msvc.zip` from the [iii-hq/iii releases v0.11.2](https://github.com/iii-hq/iii/releases/tag/iii%2Fv0.11.2) page, extract `iii.exe` to a directory on your PATH, then retry |
+| Problem                                       | Fix                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pi cannot find a command installed by npm     | Check `npm bin -g` / global npm path and restart the shell                                                                                                                                                                                                                             |
+| MCP server does not start                     | Run `/mcp`, inspect the server error, and verify API keys are exported                                                                                                                                                                                                                 |
+| OAuth server is unauthorized                  | Run `/mcp-auth <server-name>` again                                                                                                                                                                                                                                                    |
+| Direct MCP tools do not appear                | Run `/mcp reconnect <server-name>` then `/reload`                                                                                                                                                                                                                                      |
+| Too many MCP tools in context                 | Remove `directTools: true` or set `directTools` to a small list of tool names                                                                                                                                                                                                          |
+| Skills do not trigger                         | Restart Pi or run `/reload`, then confirm the skill appears in the startup header                                                                                                                                                                                                      |
+| agentmemory not responding                    | Ensure `npx @agentmemory/agentmemory` is running and `AGENTMEMORY_URL` is correct                                                                                                                                                                                                      |
+| `/agentmemory-status` shows unhealthy         | Check the server terminal for errors; verify port 3111 is free                                                                                                                                                                                                                         |
+| `data/` directory keeps reappearing in a repo | A zombie `iii` process is running from that directory. `lsof -i :3111` to find it, `kill <pid>`, then restart from `~/.agentmemory`                                                                                                                                                    |
+| agentmemory won't start on Windows            | The Node.js package isn't enough — you need the `iii-engine` native binary. Download `iii-x86_64-pc-windows-msvc.zip` from the [iii-hq/iii releases v0.11.2](https://github.com/iii-hq/iii/releases/tag/iii%2Fv0.11.2) page, extract `iii.exe` to a directory on your PATH, then retry |
 
 ## Maintenance
 
