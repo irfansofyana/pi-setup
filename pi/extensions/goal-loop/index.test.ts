@@ -7,11 +7,15 @@ import goalLoopExtension, {
   continuationDeliveryOptions,
   createGoal,
   goalKey,
+  getGoalEvaluation,
+  getGoalEvaluationText,
+  goalStatusText,
   normalizeGoalState,
   parseGoalArgs,
   parseEvaluationFromText,
   recordEvidence,
   recordEvaluation,
+  resumeGoal,
   shouldAutoContinue,
 } from "./index.ts";
 
@@ -119,12 +123,71 @@ test("parseEvaluationFromText prefers evaluator markers over worker markers", ()
   });
 });
 
+test("getGoalEvaluationText prefers Agent toolResult evaluator markers", () => {
+  const evaluationText = getGoalEvaluationText([
+    {
+      role: "toolResult",
+      toolName: "Agent",
+      content: [
+        {
+          type: "text",
+          text: [
+            "GOAL_EVAL_STATUS: continue",
+            "GOAL_EVAL_REASON: Verification output is missing.",
+            "GOAL_EVAL_CONFIDENCE: high",
+          ].join("\n"),
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "GOAL_STATUS: complete\nGOAL_REASON: Worker thinks done." }],
+    },
+  ]);
+
+  assert.deepEqual(parseEvaluationFromText(evaluationText), {
+    decision: "continue",
+    reason: "Verification output is missing.",
+    confidence: "high",
+  });
+});
+
+test("getGoalEvaluation blocks aborted or errored assistant turns", () => {
+  assert.deepEqual(getGoalEvaluation([{ role: "assistant", stopReason: "aborted", content: [] }]), {
+    decision: "blocked",
+    reason: "Assistant turn ended with aborted.",
+    confidence: "low",
+  });
+
+  assert.deepEqual(getGoalEvaluation([{ role: "assistant", stopReason: "error", content: [] }]), {
+    decision: "blocked",
+    reason: "Assistant turn ended with error.",
+    confidence: "low",
+  });
+});
+
 test("shouldAutoContinue honors status and turn budget", () => {
   const goal = createGoal("/repo/app", "Make tests pass", new Date("2026-06-26T00:00:00.000Z"));
   assert.equal(shouldAutoContinue(goal), true);
 
   assert.equal(shouldAutoContinue({ ...goal, status: "paused" }), false);
   assert.equal(shouldAutoContinue({ ...goal, turns: 10 }), false);
+});
+
+test("resumeGoal extends spent turn budgets", () => {
+  const goal = {
+    ...createGoal("/repo/app", "Make tests pass", new Date("2026-06-26T00:00:00.000Z")),
+    status: "blocked" as const,
+    turns: 10,
+    maxTurns: 10,
+  };
+
+  const resumed = resumeGoal(goal, new Date("2026-06-26T00:01:00.000Z"));
+
+  assert.equal(resumed.status, "active");
+  assert.equal(resumed.turns, 10);
+  assert.equal(resumed.maxTurns, 20);
+  assert.equal(goalStatusText(resumed), "goal 10/20");
 });
 
 test("recordEvaluation blocks after repeated verification failures", () => {
@@ -187,6 +250,8 @@ test("buildContinuationPrompt includes objective and verification commands", () 
   assert.match(prompt, /update_goal/);
   assert.match(prompt, /Agent\(\{/);
   assert.match(prompt, /Evaluate goal status/);
+  assert.match(prompt, /Proposed status/);
+  assert.match(prompt, /Latest verification\/output/);
   assert.match(prompt, /GOAL_EVAL_STATUS/);
   assert.match(prompt, /Stop and ask the user/);
 });
@@ -196,8 +261,9 @@ test("buildGoalSystemPrompt includes evaluator fallback rules", () => {
   const prompt = buildGoalSystemPrompt(goal);
 
   assert.match(prompt, /evaluator subagent/);
-  assert.match(prompt, /terminal status/);
-  assert.match(prompt, /fallback/);
+  assert.match(prompt, /Agent\(\{/);
+  assert.match(prompt, /Proposed status/);
+  assert.match(prompt, /Latest verification\/output/);
   assert.match(prompt, /GOAL_EVAL_STATUS/);
 });
 
@@ -212,8 +278,12 @@ test("update_goal uses Google-compatible string enums", () => {
     on() {},
   } as any);
 
+  const createGoalTool = tools.find((tool) => tool.name === "create_goal");
   const updateGoal = tools.find((tool) => tool.name === "update_goal");
+  assert.ok(createGoalTool);
   assert.ok(updateGoal);
+  assert.equal(createGoalTool.executionMode, "sequential");
+  assert.equal(updateGoal.executionMode, "sequential");
   assert.deepEqual(updateGoal.parameters.properties.status.enum, ["active", "paused", "complete", "blocked", "needs_user"]);
   assert.deepEqual(updateGoal.parameters.properties.evidenceKind.enum, ["note", "verification", "tool"]);
   assert.deepEqual(updateGoal.parameters.properties.outcome.enum, ["passed", "failed", "unknown"]);
