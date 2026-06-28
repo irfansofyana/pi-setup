@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
+import goalLoopExtension, {
   buildContinuationPrompt,
   buildGoalSystemPrompt,
   continuationDeliveryOptions,
@@ -199,4 +199,24 @@ test("buildGoalSystemPrompt includes evaluator fallback rules", () => {
   assert.match(prompt, /terminal status/);
   assert.match(prompt, /fallback/);
   assert.match(prompt, /GOAL_EVAL_STATUS/);
+});
+
+test("update_goal uses Google-compatible string enums", () => {
+  const tools: any[] = [];
+
+  goalLoopExtension({
+    registerTool(tool: any) {
+      tools.push(tool);
+    },
+    registerCommand() {},
+    on() {},
+  } as any);
+
+  const updateGoal = tools.find((tool) => tool.name === "update_goal");
+  assert.ok(updateGoal);
+  assert.deepEqual(updateGoal.parameters.properties.status.enum, ["active", "paused", "complete", "blocked", "needs_user"]);
+  assert.deepEqual(updateGoal.parameters.properties.evidenceKind.enum, ["note", "verification", "tool"]);
+  assert.deepEqual(updateGoal.parameters.properties.outcome.enum, ["passed", "failed", "unknown"]);
+  assert.equal(updateGoal.parameters.properties.status.anyOf, undefined);
+  assert.equal(updateGoal.parameters.properties.status.const, undefined);
 });

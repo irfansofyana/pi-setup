@@ -94,14 +94,11 @@ const Schema = {
   Array(items: JsonSchema): JsonSchema {
     return { type: "array", items };
   },
-  Literal(value: string): JsonSchema {
-    return { type: "string", const: value };
+  Enum(values: readonly string[]): JsonSchema {
+    return { type: "string", enum: [...values] };
   },
   Optional(schema: JsonSchema): JsonSchema {
     return { ...schema, [OPTIONAL_SCHEMA]: true };
-  },
-  Union(anyOf: JsonSchema[]): JsonSchema {
-    return { anyOf };
   },
 };
 
@@ -502,20 +499,12 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
       "Use update_goal with status=blocked or status=needs_user when progress requires user input.",
     ],
     parameters: Schema.Object({
-      status: Schema.Optional(
-        Schema.Union([
-          Schema.Literal("active"),
-          Schema.Literal("paused"),
-          Schema.Literal("complete"),
-          Schema.Literal("blocked"),
-          Schema.Literal("needs_user"),
-        ]),
-      ),
+      status: Schema.Optional(Schema.Enum(["active", "paused", "complete", "blocked", "needs_user"] as const)),
       reason: Schema.Optional(Schema.String({ description: "Short reason for a status update." })),
       evidence: Schema.Optional(Schema.String({ description: "Evidence summary to append to the goal ledger." })),
-      evidenceKind: Schema.Optional(Schema.Union([Schema.Literal("note"), Schema.Literal("verification"), Schema.Literal("tool")])),
+      evidenceKind: Schema.Optional(Schema.Enum(["note", "verification", "tool"] as const)),
       command: Schema.Optional(Schema.String({ description: "Verification command related to the evidence." })),
-      outcome: Schema.Optional(Schema.Union([Schema.Literal("passed"), Schema.Literal("failed"), Schema.Literal("unknown")])),
+      outcome: Schema.Optional(Schema.Enum(["passed", "failed", "unknown"] as const)),
       verificationCommand: Schema.Optional(Schema.String({ description: "Verification command to remember for future loop turns." })),
       maxTurns: Schema.Optional(Schema.Number({ description: "Replace the remaining turn budget ceiling." })),
     }) as any,
