@@ -54,6 +54,10 @@ interface GoalStore {
   goals: Record<string, GoalState>;
 }
 
+export interface GoalLoopConfig {
+  allowModelCreateGoal: boolean;
+}
+
 const OPTIONAL_SCHEMA = Symbol("optional-schema");
 type JsonSchema = Record<string, unknown> & { [OPTIONAL_SCHEMA]?: true };
 
@@ -65,7 +69,10 @@ export interface ParsedGoalArgs {
 const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS = 3;
 const MAX_EVIDENCE_ENTRIES = 10;
+const GOAL_STATUS_FRAMES = ["◐", "◓", "◑", "◒"] as const;
 const STATE_PATH = join(homedir(), ".pi", "agent", "goal-loop", "state.json");
+const CONFIG_PATH = join(homedir(), ".pi", "agent", "goal-loop", "config.json");
+const DEFAULT_CONFIG: GoalLoopConfig = { allowModelCreateGoal: false };
 
 const COMMANDS = new Set<GoalCommand>(["status", "pause", "resume", "clear", "edit", "verify"]);
 const Schema = {
@@ -101,6 +108,22 @@ const Schema = {
     return { ...schema, [OPTIONAL_SCHEMA]: true };
   },
 };
+
+export function normalizeGoalLoopConfig(raw: unknown): GoalLoopConfig {
+  if (!raw || typeof raw !== "object") return DEFAULT_CONFIG;
+  return {
+    allowModelCreateGoal: (raw as { allowModelCreateGoal?: unknown }).allowModelCreateGoal === true,
+  };
+}
+
+function readGoalLoopConfig(): GoalLoopConfig {
+  if (!existsSync(CONFIG_PATH)) return DEFAULT_CONFIG;
+  try {
+    return normalizeGoalLoopConfig(JSON.parse(readFileSync(CONFIG_PATH, "utf8")));
+  } catch {
+    return DEFAULT_CONFIG;
+  }
+}
 
 export function parseGoalArgs(args: string): ParsedGoalArgs {
   const trimmed = args.trim();
@@ -233,8 +256,9 @@ export function resumeGoal(goal: GoalState, now = new Date()): GoalState {
   };
 }
 
-export function goalStatusText(goal: GoalState | undefined): string | undefined {
-  return goal && goal.status === "active" ? `goal ${goal.turns}/${goal.maxTurns}` : undefined;
+export function goalStatusText(goal: GoalState | undefined, frame = 0): string | undefined {
+  if (!goal || goal.status !== "active") return undefined;
+  return `goal ${GOAL_STATUS_FRAMES[frame % GOAL_STATUS_FRAMES.length]} loops ${goal.turns}/${goal.maxTurns}`;
 }
 
 export function buildEvaluatorInstructions(goal: GoalState): string {
@@ -256,7 +280,7 @@ export function buildEvaluatorInstructions(goal: GoalState): string {
     "Evaluator subagent protocol:",
     "- Before claiming complete, blocked, or needs_user, call a foreground read-only evaluator subagent if the Agent tool is available.",
     "- Also call the evaluator when verification failures repeat or the evidence is ambiguous.",
-    "- Normal continue turns do not need evaluator review.",
+    "- Normal continue loop turns do not need evaluator review.",
     "- If Agent is unavailable, use the worker GOAL_STATUS/GOAL_REASON markers as the fallback.",
     "",
     "Use this shape:",
@@ -337,7 +361,7 @@ export function buildGoalSystemPrompt(goal: GoalState): string {
     "Active Pi goal loop:",
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
-    `Turn budget: ${goal.turns}/${goal.maxTurns}`,
+    `Loop budget: ${goal.turns}/${goal.maxTurns}`,
     "",
     "Before stopping, evaluate whether the goal is complete against the objective and any verification command output.",
     "Use get_goal to inspect persisted goal state and update_goal to record evidence or terminal status.",
@@ -478,7 +502,7 @@ function formatStatus(goal: GoalState | undefined): string {
   return [
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
-    `Turns: ${goal.turns}/${goal.maxTurns}`,
+    `Loops used: ${goal.turns}/${goal.maxTurns}`,
     `Verification: ${goal.verification.commands.length ? goal.verification.commands.join(", ") : "none"}`,
     latestEvidence ? `Latest evidence: ${latestEvidence.kind} - ${latestEvidence.summary}` : "Latest evidence: none",
     goal.lastEvaluation ? `Last check: ${goal.lastEvaluation.decision} - ${goal.lastEvaluation.reason}` : "Last check: none",
@@ -487,6 +511,51 @@ function formatStatus(goal: GoalState | undefined): string {
 
 function notify(ctx: { ui: { notify: (message: string, type?: "info" | "warning" | "error") => void } }, message: string, type: "info" | "warning" | "error" = "info") {
   ctx.ui.notify(message, type);
+}
+
+type GoalStatusContext = {
+  cwd?: string;
+  ui: { setStatus: (name: string, value: string | undefined) => void };
+};
+
+function createGoalStatusAnimator() {
+  let frame = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let latestCtx: GoalStatusContext | undefined;
+
+  const paint = (ctx: GoalStatusContext): boolean => {
+    const goal = getProjectGoal(ctx.cwd || process.cwd());
+    const active = goal?.status === "active";
+    ctx.ui.setStatus("goal-loop", goalStatusText(goal, frame));
+    return active;
+  };
+
+  const stopTimer = () => {
+    if (timer) clearInterval(timer);
+    timer = undefined;
+  };
+
+  return {
+    sync(ctx: GoalStatusContext) {
+      latestCtx = ctx;
+      if (!paint(ctx)) {
+        stopTimer();
+        return;
+      }
+      if (!timer) {
+        timer = setInterval(() => {
+          if (!latestCtx) return;
+          frame = (frame + 1) % GOAL_STATUS_FRAMES.length;
+          if (!paint(latestCtx)) stopTimer();
+        }, 500);
+      }
+    },
+    clear(ctx?: GoalStatusContext) {
+      stopTimer();
+      latestCtx = undefined;
+      ctx?.ui.setStatus("goal-loop", undefined);
+    },
+  };
 }
 
 function sendContinuation(pi: ExtensionAPI, ctx: { isIdle: () => boolean }, goal: GoalState) {
@@ -499,6 +568,9 @@ function sendContinuation(pi: ExtensionAPI, ctx: { isIdle: () => boolean }, goal
 }
 
 export default function goalLoopExtension(pi: ExtensionAPI) {
+  const config = readGoalLoopConfig();
+  const status = createGoalStatusAnimator();
+
   pi.registerTool({
     name: "get_goal",
     label: "Get Goal",
@@ -514,34 +586,36 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
-    name: "create_goal",
-    label: "Create Goal",
-    description: "Create or replace the current project goal loop objective.",
-    promptSnippet: "Create or replace the current project goal loop objective.",
-    parameters: Schema.Object({
-      objective: Schema.String({ description: "Goal objective to pursue." }),
-      maxTurns: Schema.Optional(Schema.Number({ description: "Optional turn budget. Default is 10." })),
-      verificationCommands: Schema.Optional(Schema.Array(Schema.String({ description: "Verification command." }))),
-    }) as any,
-    executionMode: "sequential",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const projectRoot = ctx.cwd || process.cwd();
-      const goal = {
-        ...createGoal(projectRoot, params.objective),
-        maxTurns: typeof params.maxTurns === "number" && params.maxTurns > 0 ? Math.floor(params.maxTurns) : DEFAULT_MAX_TURNS,
-        verification: {
-          commands: Array.isArray(params.verificationCommands) ? [...new Set(params.verificationCommands)] : [],
-        },
-      };
-      setProjectGoal(goal);
-      ctx.ui.setStatus("goal-loop", goalStatusText(goal));
-      return {
-        content: [{ type: "text", text: `Goal created.\n\n${formatStatus(goal)}` }],
-        details: { goal },
-      };
-    },
-  });
+  if (config.allowModelCreateGoal) {
+    pi.registerTool({
+      name: "create_goal",
+      label: "Create Goal",
+      description: "Create or replace the current project goal loop objective.",
+      promptSnippet: "Create or replace the current project goal loop objective.",
+      parameters: Schema.Object({
+        objective: Schema.String({ description: "Goal objective to pursue." }),
+        maxTurns: Schema.Optional(Schema.Number({ description: "Optional turn budget. Default is 10." })),
+        verificationCommands: Schema.Optional(Schema.Array(Schema.String({ description: "Verification command." }))),
+      }) as any,
+      executionMode: "sequential",
+      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        const projectRoot = ctx.cwd || process.cwd();
+        const goal = {
+          ...createGoal(projectRoot, params.objective),
+          maxTurns: typeof params.maxTurns === "number" && params.maxTurns > 0 ? Math.floor(params.maxTurns) : DEFAULT_MAX_TURNS,
+          verification: {
+            commands: Array.isArray(params.verificationCommands) ? [...new Set(params.verificationCommands)] : [],
+          },
+        };
+        setProjectGoal(goal);
+        status.sync(ctx);
+        return {
+          content: [{ type: "text", text: `Goal created.\n\n${formatStatus(goal)}` }],
+          details: { goal },
+        };
+      },
+    });
+  }
 
   pi.registerTool({
     name: "update_goal",
@@ -568,7 +642,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
       let goal = getProjectGoal(projectRoot);
       if (!goal) {
         return {
-          content: [{ type: "text", text: "No active goal for this project. Use create_goal or /goal <objective> first." }],
+          content: [{ type: "text", text: "No active goal for this project. Use /goal <objective> first." }],
           details: { error: "missing_goal" },
         };
       }
@@ -608,7 +682,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
       }
 
       setProjectGoal(goal);
-      ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+      status.sync(ctx);
       return {
         content: [{ type: "text", text: `Goal updated.\n\n${formatStatus(goal)}` }],
         details: { goal },
@@ -630,7 +704,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
         }
         const goal = createGoal(projectRoot, parsed.value);
         setProjectGoal(goal);
-        ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+        status.sync(ctx);
         notify(ctx, `Goal started: ${goal.objective}`);
         sendContinuation(pi, ctx, goal);
         return;
@@ -649,7 +723,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
       if (parsed.command === "pause") {
         const goal = { ...existing, status: "paused" as const, updatedAt: new Date().toISOString() };
         setProjectGoal(goal);
-        ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+        status.sync(ctx);
         notify(ctx, "Goal paused.");
         return;
       }
@@ -657,7 +731,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
       if (parsed.command === "resume") {
         const goal = resumeGoal(existing);
         setProjectGoal(goal);
-        ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+        status.sync(ctx);
         notify(ctx, "Goal resumed.");
         sendContinuation(pi, ctx, goal);
         return;
@@ -665,7 +739,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
 
       if (parsed.command === "clear") {
         clearProjectGoal(projectRoot);
-        ctx.ui.setStatus("goal-loop", undefined);
+        status.clear(ctx);
         notify(ctx, "Goal cleared.");
         return;
       }
@@ -677,7 +751,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
         }
         const goal = { ...existing, objective: parsed.value, status: "active" as const, updatedAt: new Date().toISOString() };
         setProjectGoal(goal);
-        ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+        status.sync(ctx);
         notify(ctx, `Goal updated: ${goal.objective}`);
         return;
       }
@@ -694,15 +768,18 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
           updatedAt: new Date().toISOString(),
         };
         setProjectGoal(goal);
-        ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+        status.sync(ctx);
         notify(ctx, `Verification command added: ${parsed.value}`);
       }
     },
   });
 
   pi.on("session_start", (_event, ctx) => {
-    const goal = getProjectGoal(ctx.cwd || process.cwd());
-    ctx.ui.setStatus("goal-loop", goalStatusText(goal));
+    status.sync(ctx);
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    status.clear(ctx);
   });
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -721,7 +798,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
     const evaluation = getGoalEvaluation(event.messages as unknown[]);
     const updated = recordEvaluation(goal, evaluation);
     setProjectGoal(updated);
-    ctx.ui.setStatus("goal-loop", goalStatusText(updated));
+    status.sync(ctx);
 
     if (updated.status === "complete") {
       notify(ctx, `Goal complete: ${evaluation.reason}`);
@@ -736,7 +813,7 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
     if (!shouldAutoContinue(updated)) {
       const blocked = { ...updated, status: "blocked" as const, updatedAt: new Date().toISOString() };
       setProjectGoal(blocked);
-      ctx.ui.setStatus("goal-loop", goalStatusText(blocked));
+      status.sync(ctx);
       notify(ctx, `Goal stopped after ${updated.turns}/${updated.maxTurns} turns. Run /goal resume to continue.`, "warning");
       return;
     }

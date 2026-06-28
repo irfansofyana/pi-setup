@@ -10,6 +10,7 @@ import goalLoopExtension, {
   getGoalEvaluation,
   getGoalEvaluationText,
   goalStatusText,
+  normalizeGoalLoopConfig,
   normalizeGoalState,
   parseGoalArgs,
   parseEvaluationFromText,
@@ -187,7 +188,8 @@ test("resumeGoal extends spent turn budgets", () => {
   assert.equal(resumed.status, "active");
   assert.equal(resumed.turns, 10);
   assert.equal(resumed.maxTurns, 20);
-  assert.equal(goalStatusText(resumed), "goal 10/20");
+  assert.equal(goalStatusText(resumed), "goal ◐ loops 10/20");
+  assert.equal(goalStatusText(resumed, 2), "goal ◑ loops 10/20");
 });
 
 test("recordEvaluation blocks after repeated verification failures", () => {
@@ -267,7 +269,13 @@ test("buildGoalSystemPrompt includes evaluator fallback rules", () => {
   assert.match(prompt, /GOAL_EVAL_STATUS/);
 });
 
-test("update_goal uses Google-compatible string enums", () => {
+test("goal-loop config disables model goal creation by default", () => {
+  assert.deepEqual(normalizeGoalLoopConfig(undefined), { allowModelCreateGoal: false });
+  assert.deepEqual(normalizeGoalLoopConfig({ allowModelCreateGoal: true }), { allowModelCreateGoal: true });
+  assert.deepEqual(normalizeGoalLoopConfig({ allowModelCreateGoal: "true" }), { allowModelCreateGoal: false });
+});
+
+test("goal tools use Google-compatible string enums", () => {
   const tools: any[] = [];
 
   goalLoopExtension({
@@ -280,9 +288,8 @@ test("update_goal uses Google-compatible string enums", () => {
 
   const createGoalTool = tools.find((tool) => tool.name === "create_goal");
   const updateGoal = tools.find((tool) => tool.name === "update_goal");
-  assert.ok(createGoalTool);
+  assert.equal(createGoalTool, undefined);
   assert.ok(updateGoal);
-  assert.equal(createGoalTool.executionMode, "sequential");
   assert.equal(updateGoal.executionMode, "sequential");
   assert.deepEqual(updateGoal.parameters.properties.status.enum, ["active", "paused", "complete", "blocked", "needs_user"]);
   assert.deepEqual(updateGoal.parameters.properties.evidenceKind.enum, ["note", "verification", "tool"]);
