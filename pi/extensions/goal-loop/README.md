@@ -21,7 +21,7 @@ Reload Pi:
 
 ```text
 /goal <objective>          # create a project goal and start auto-continuing
-/goal status               # show objective, status, turn count, verification
+/goal status               # show objective, status, loop count, verification
 /goal pause                # stop auto-continuing but keep state
 /goal resume               # resume a paused or stopped goal
 /goal clear                # remove this project's goal
@@ -31,15 +31,24 @@ Reload Pi:
 
 ## Agent tools
 
-The extension also registers model-callable tools:
+The extension registers these model-callable tools by default:
 
 ```text
 get_goal       # inspect objective, status, verification commands, and evidence
-create_goal    # create or replace the current project goal
 update_goal    # record evidence, add verification commands, or stop the goal
 ```
 
-Use `/goal` for human commands. The agent uses the tools while it is working inside a loop.
+Use `/goal` for human goal creation. Model-created goals are disabled by default so YOLO mode cannot silently start a goal during brainstorming.
+
+Optional opt-in:
+
+```json
+{
+  "allowModelCreateGoal": true
+}
+```
+
+Store it at `~/.pi/agent/goal-loop/config.json`, then `/reload`. This re-enables the model-callable `create_goal` tool.
 
 ## Evaluator subagent
 
@@ -68,6 +77,7 @@ If the `Agent` tool is unavailable or the worker does not call it, the loop fall
 
 - Stores one active goal per project.
 - Persists state in `~/.pi/agent/goal-loop/state.json`.
+- Shows an animated footer status like `goal ◐ loops 0/8`; the counter is auto-continue loops used, not total assistant turns.
 - Keeps the last 10 evidence entries from verification, notes, or tool observations.
 - Injects goal instructions into each agent turn.
 - Tells the agent to call `get_goal` and `update_goal` when it needs persisted goal state.
@@ -90,7 +100,8 @@ GOAL_REASON: one short sentence
 ```json
 {
   "maxTurns": 10,
-  "maxFailedVerificationAttempts": 3
+  "maxFailedVerificationAttempts": 3,
+  "allowModelCreateGoal": false
 }
 ```
 

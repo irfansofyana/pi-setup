@@ -95,6 +95,9 @@ pi install npm:@juicesharp/rpiv-todo
 # 9router: model routing extension
 pi install npm:pi-9router-ext
 
+# Stats: Pi usage statistics extension
+pi install npm:pi-stats-ext
+
 # Ponytail: ponytail extension
 pi install git:github.com/DietrichGebert/ponytail
 
@@ -136,7 +139,7 @@ Commands:
 
 ```text
 /goal <objective>          # create a project goal and start auto-continuing
-/goal status               # show objective, status, turn count, verification
+/goal status               # show objective, status, loop count, verification
 /goal pause                # stop auto-continuing but keep state
 /goal resume               # resume a paused or stopped goal
 /goal clear                # remove this project's goal
@@ -150,11 +153,29 @@ The extension stores one active goal per project in:
 ~/.pi/agent/goal-loop/state.json
 ```
 
+Optional config lives at:
+
+```text
+~/.pi/agent/goal-loop/config.json
+```
+
+Default config:
+
+```json
+{
+  "allowModelCreateGoal": false
+}
+```
+
+Keep this false so YOLO mode cannot silently start goals while you brainstorm. Set it to `true` and `/reload` only if you want the model-callable `create_goal` tool back.
+
 How the loop works:
 
 - `/goal <objective>` stores the goal and immediately asks Pi to continue toward it.
 - `before_agent_start` injects the active goal into the turn instructions.
-- The extension registers model-callable `get_goal`, `create_goal`, and `update_goal` tools so the agent can inspect persisted state and record evidence while it works.
+- The extension registers model-callable `get_goal` and `update_goal` tools so the agent can inspect persisted state and record evidence while it works.
+- Human goal creation stays on `/goal <objective>` by default; optional config can re-enable model-created goals.
+- The footer shows animated status like `goal ◐ loops 0/8`; this counts auto-continue loops used, not total assistant turns.
 - The goal state keeps the last 10 evidence entries from verification, notes, or tool observations.
 - When `@tintinweb/pi-subagents` exposes the `Agent` tool, the prompt asks the worker to call a foreground read-only evaluator subagent before terminal decisions.
 - The agent must end each loop turn with `GOAL_STATUS` and `GOAL_REASON` markers.
@@ -177,12 +198,17 @@ GOAL_EVAL_REASON: one short sentence
 GOAL_EVAL_CONFIDENCE: low | medium | high
 ```
 
-Agent tools:
+Agent tools by default:
 
 ```text
 get_goal       # inspect objective, status, verification commands, and evidence
-create_goal    # create or replace the current project goal
 update_goal    # record evidence, add verification commands, or stop the goal
+```
+
+Optional `allowModelCreateGoal: true` also registers:
+
+```text
+create_goal    # create or replace the current project goal
 ```
 
 Keep `@gotgenes/pi-permission-system` enabled. The goal loop does not bypass your policy; writes, shell commands, unknown MCP tools, subagents, and external directories should still follow the permission gates in this README.
