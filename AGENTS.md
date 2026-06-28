@@ -37,6 +37,7 @@ pi install npm:context-mode
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
+pi install npm:@ryan_nookpi/pi-extension-headroom
 pi install npm:pi-9router-ext
 pi install npm:pi-stats-ext
 pi install git:github.com/DietrichGebert/ponytail
