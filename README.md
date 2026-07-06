@@ -190,11 +190,14 @@ Default config highlights:
   "enabled": true,
   "startup": "manual",
   "proxyUrl": "http://127.0.0.1:8787",
+  "allowRemote": false,
   "minChars": 500,
   "storeTtlHours": 24,
   "notifyFailures": "once"
 }
 ```
+
+Remote Headroom proxies are blocked unless `allowRemote` is set to `true`; only enable that for a proxy you trust with tool output content.
 
 Run `/reload` after changing config.
 

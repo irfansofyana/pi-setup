@@ -28,6 +28,7 @@ export interface HeadroomConfig {
   compressionTimeoutMs: number;
   fallbackToOriginal: boolean;
   notifyFailures: NotifyFailures;
+  allowRemote: boolean;
   storeTtlHours: number;
   storeMaxEntries: number;
   storeMaxBytes: number;
@@ -90,6 +91,7 @@ export const DEFAULT_CONFIG: HeadroomConfig = {
   compressionTimeoutMs: 10_000,
   fallbackToOriginal: true,
   notifyFailures: "once",
+  allowRemote: false,
   storeTtlHours: 24,
   storeMaxEntries: 500,
   storeMaxBytes: 100 * 1024 * 1024,
@@ -164,6 +166,7 @@ export function normalizeHeadroomConfig(raw: unknown): HeadroomConfig {
     compressionTimeoutMs: clampNumber(input.compressionTimeoutMs, DEFAULT_CONFIG.compressionTimeoutMs, 500, 120_000),
     fallbackToOriginal: input.fallbackToOriginal !== false,
     notifyFailures: notifyFailuresFrom(input.notifyFailures, DEFAULT_CONFIG.notifyFailures),
+    allowRemote: input.allowRemote === true,
     storeTtlHours: clampNumber(input.storeTtlHours, DEFAULT_CONFIG.storeTtlHours, 1, 24 * 30),
     storeMaxEntries: clampNumber(input.storeMaxEntries, DEFAULT_CONFIG.storeMaxEntries, 1, 100_000),
     storeMaxBytes: clampNumber(input.storeMaxBytes, DEFAULT_CONFIG.storeMaxBytes, 1024, 10 * 1024 * 1024 * 1024),
@@ -232,10 +235,14 @@ export function textFromContent(content: Array<{ type: string; text?: string }>)
     .join("\n");
 }
 
-function contentWithText(content: Array<{ type: string; text?: string; [key: string]: unknown }>, text: string) {
+export function contentWithText(content: Array<{ type: string; text?: string; [key: string]: unknown }>, text: string) {
   const firstTextIndex = content.findIndex((item) => item.type === "text");
   if (firstTextIndex === -1) return [{ type: "text", text }];
-  return content.map((item, index) => (index === firstTextIndex ? { ...item, text } : item));
+  return content.flatMap((item, index) => {
+    if (index === firstTextIndex) return [{ ...item, text }];
+    if (item.type === "text") return [];
+    return [item];
+  });
 }
 
 export function hasExcludedTool(toolName: string, config: HeadroomConfig): boolean {
@@ -282,7 +289,21 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
   }
 }
 
+export function isLocalProxyUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function isRemoteBlocked(config: Pick<HeadroomConfig, "proxyUrl" | "allowRemote">): boolean {
+  return !config.allowRemote && !isLocalProxyUrl(config.proxyUrl);
+}
+
 async function health(config: HeadroomConfig): Promise<boolean> {
+  if (isRemoteBlocked(config)) return false;
   try {
     await fetchJson(`${config.proxyUrl}/health`, { method: "GET" }, 2_000);
     return true;
@@ -295,13 +316,19 @@ function modelId(ctx: ExtensionContext): string {
   return ctx.model?.id ?? "gpt-4o";
 }
 
-async function compressViaProxy(text: string, toolName: string, ctx: ExtensionContext, config: HeadroomConfig): Promise<CompressResult> {
-  const body = {
-    model: modelId(ctx),
+export function buildCompressRequest(text: string, toolName: string, model: string) {
+  const prefix = `Tool output from ${toolName}:\n\n`;
+  return {
+    model,
     messages: [
-      { role: "user", content: `Tool output from ${toolName}:\n\n${text}` },
+      { role: "tool", tool_call_id: "call_headroom_tool_output", content: `${prefix}${text}` },
     ],
   };
+}
+
+async function compressViaProxy(text: string, toolName: string, ctx: ExtensionContext, config: HeadroomConfig): Promise<CompressResult> {
+  if (isRemoteBlocked(config)) throw new Error("Headroom remote proxy blocked by allowRemote=false.");
+  const body = buildCompressRequest(text, toolName, modelId(ctx));
   const json = (await fetchJson(
     `${config.proxyUrl}/v1/compress`,
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
@@ -309,11 +336,14 @@ async function compressViaProxy(text: string, toolName: string, ctx: ExtensionCo
   )) as Record<string, unknown>;
 
   const messages = Array.isArray(json.messages) ? (json.messages as Array<Record<string, unknown>>) : [];
+  if (messages.length !== 1) throw new Error("Headroom changed message count; refusing compressed output.");
   const first = messages[0] ?? {};
+  if (first.role !== "tool" || first.tool_call_id !== "call_headroom_tool_output") {
+    throw new Error("Headroom changed tool message identity; refusing compressed output.");
+  }
   const content = typeof first.content === "string" ? first.content : text;
-  const compressedText = content.startsWith(`Tool output from ${toolName}:\n\n`)
-    ? content.slice(`Tool output from ${toolName}:\n\n`.length)
-    : content;
+  const prefix = `Tool output from ${toolName}:\n\n`;
+  const compressedText = content.startsWith(prefix) ? content.slice(prefix.length) : content;
 
   return {
     compressedText,
@@ -487,6 +517,13 @@ export default function headroom(pi: ExtensionAPI) {
 
   const startManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
     ensureDirs();
+    if (isRemoteBlocked(config)) {
+      owner = "none";
+      runtimeEnabled = false;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy blocked: ${config.proxyUrl}. Set allowRemote=true only for a trusted proxy.`, "warning");
+      return;
+    }
     if (await health(config)) {
       owner = managedProcess ? "managed" : "external";
       runtimeEnabled = config.enabled;
@@ -547,6 +584,8 @@ export default function headroom(pi: ExtensionAPI) {
     `enabled: ${runtimeEnabled}`,
     `proxyOwner: ${owner}`,
     `proxyUrl: ${config.proxyUrl}`,
+    `allowRemote: ${config.allowRemote}`,
+    `remoteBlocked: ${isRemoteBlocked(config)}`,
     `compressions: ${stats.compressions}`,
     `bypasses: ${stats.bypasses}`,
     `failures: ${stats.failures}`,
@@ -723,6 +762,7 @@ export default function headroom(pi: ExtensionAPI) {
           `headroomCli: ${version ?? "missing"}`,
           `proxyHealthy: ${healthy}`,
           `proxyUrl: ${config.proxyUrl}`,
+          `remoteBlocked: ${isRemoteBlocked(config)}`,
           "",
           "Install commands if missing:",
           'pipx install "headroom-ai[proxy]"',

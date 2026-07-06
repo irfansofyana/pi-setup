@@ -89,6 +89,7 @@ Defaults:
   "compressionTimeoutMs": 10000,
   "fallbackToOriginal": true,
   "notifyFailures": "once",
+  "allowRemote": false,
   "storeTtlHours": 24,
   "storeMaxEntries": 500,
   "storeMaxBytes": 104857600,
@@ -119,6 +120,7 @@ Defaults:
 ## Lifecycle policy
 
 - Default startup is manual. Nothing starts until `/headroom start`.
+- Remote proxy URLs are blocked unless `allowRemote` is explicitly set to `true`.
 - If a proxy is already healthy at `proxyUrl`, extension adopts it as external.
 - `/headroom stop` never kills an external proxy.
 - `/headroom stop` disables compression for current session.

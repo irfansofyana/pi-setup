@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   DEFAULT_CONFIG,
+  buildCompressRequest,
   buildMarker,
+  contentWithText,
   formatCount,
   initialStats,
+  isRemoteBlocked,
   normalizeHeadroomConfig,
   outputLooksSensitive,
   retrieveWithQuery,
@@ -51,6 +54,31 @@ test("truncateText caps retrieval bytes", () => {
   const result = truncateText("a".repeat(2000), 1000);
   assert.ok(result.length < 1200);
   assert.match(result, /retrieval truncated/);
+});
+
+test("contentWithText replaces joined text without leaking later text blocks", () => {
+  const content = [
+    { type: "text", text: "first" },
+    { type: "image", url: "data:image/png;base64,abc" },
+    { type: "text", text: "second raw output" },
+  ];
+  assert.deepEqual(contentWithText(content, "compressed"), [
+    { type: "text", text: "compressed" },
+    { type: "image", url: "data:image/png;base64,abc" },
+  ]);
+});
+
+test("buildCompressRequest sends tool-role content so Headroom can compress it", () => {
+  const payload = buildCompressRequest("large output", "mcp", "gpt-4o");
+  assert.equal(payload.messages[0].role, "tool");
+  assert.equal(payload.messages[0].tool_call_id, "call_headroom_tool_output");
+  assert.match(payload.messages[0].content, /^Tool output from mcp:/);
+});
+
+test("remote proxy is blocked unless explicitly allowed", () => {
+  assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com" }), true);
+  assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com", allowRemote: true }), false);
+  assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "http://127.0.0.1:8787" }), false);
 });
 
 test("buildMarker advertises native retrieve tool", () => {
