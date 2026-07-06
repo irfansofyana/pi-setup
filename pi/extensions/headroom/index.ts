@@ -504,6 +504,7 @@ export default function headroom(pi: ExtensionAPI) {
   let runtimeEnabled = config.enabled && config.startup !== "off";
   let owner: ProxyOwner = "none";
   let managedProcess: ChildProcess | undefined;
+  let logStream: ReturnType<typeof createWriteStream> | undefined;
   let failureNotified = false;
   const stats = initialStats();
 
@@ -537,7 +538,7 @@ export default function headroom(pi: ExtensionAPI) {
       return;
     }
 
-    const log = createWriteStream(LOG_PATH, { flags: "a" });
+    const log = logStream = createWriteStream(LOG_PATH, { flags: "a" });
     managedProcess = spawn("headroom", ["proxy", "--host", config.host, "--port", String(config.port)], {
       env: { ...process.env, HEADROOM_TELEMETRY: "off" },
       stdio: ["ignore", "pipe", "pipe"],
@@ -545,6 +546,9 @@ export default function headroom(pi: ExtensionAPI) {
     managedProcess.stdout.pipe(log, { end: false });
     managedProcess.stderr.pipe(log, { end: false });
     managedProcess.on("exit", () => {
+      if (owner === "managed") {
+        try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+      }
       managedProcess = undefined;
       owner = owner === "managed" ? "none" : owner;
     });
@@ -571,6 +575,7 @@ export default function headroom(pi: ExtensionAPI) {
       managedProcess = undefined;
       owner = "none";
       try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+      if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
       if (ctx.hasUI) ctx.ui.notify("Headroom managed proxy stopped. Compression disabled.", "info");
     } else {
       const wasExternal = owner === "external";
@@ -605,19 +610,21 @@ export default function headroom(pi: ExtensionAPI) {
       managedProcess.kill("SIGTERM");
       managedProcess = undefined;
     }
+    if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
   });
 
   pi.on("tool_result", async (event, ctx) => {
     updateStatus(ctx, runtimeEnabled, owner, stats);
+    const runConfig = config;
     if (!runtimeEnabled) return;
 
     const text = textFromContent(event.content as Array<{ type: string; text?: string }>);
-    if (!shouldCompressToolResult(event.toolName, event.input, text, config)) {
+    if (!shouldCompressToolResult(event.toolName, event.input, text, runConfig)) {
       stats.bypasses++;
       return;
     }
 
-    if (!(await health(config))) {
+    if (!(await health(runConfig))) {
       notifyFailure(ctx, "Headroom proxy unavailable; bypassing compression.");
       return;
     }
@@ -625,7 +632,7 @@ export default function headroom(pi: ExtensionAPI) {
 
     let result: CompressResult;
     try {
-      result = await compressViaProxy(text, event.toolName, ctx, config);
+      result = await compressViaProxy(text, event.toolName, ctx, runConfig);
     } catch (error) {
       notifyFailure(ctx, `Headroom compression failed; bypassing original output. ${error instanceof Error ? error.message : ""}`.trim());
       return;
@@ -636,47 +643,54 @@ export default function headroom(pi: ExtensionAPI) {
       return;
     }
 
-    const hash = makeHash();
-    const now = new Date();
-    const expires = new Date(now.getTime() + config.storeTtlHours * 60 * 60 * 1000);
-    saveOriginal({
-      hash,
-      toolName: event.toolName,
-      createdAt: now.toISOString(),
-      expiresAt: expires.toISOString(),
-      originalContent: text,
-      compressedContent: result.compressedText,
-      tokensBefore: result.tokensBefore,
-      tokensAfter: result.tokensAfter,
-      tokensSaved: result.tokensSaved,
-      transforms: result.transforms,
-      proxyCcrHashes: result.proxyCcrHashes,
-    });
-    cleanupStore(config);
+    try {
+      // ponytail: store failure bypasses compression, original output returned unchanged
+      const hash = makeHash();
+      const now = new Date();
+      const expires = new Date(now.getTime() + runConfig.storeTtlHours * 60 * 60 * 1000);
+      saveOriginal({
+        hash,
+        toolName: event.toolName,
+        createdAt: now.toISOString(),
+        expiresAt: expires.toISOString(),
+        originalContent: text,
+        compressedContent: result.compressedText,
+        tokensBefore: result.tokensBefore,
+        tokensAfter: result.tokensAfter,
+        tokensSaved: result.tokensSaved,
+        transforms: result.transforms,
+        proxyCcrHashes: result.proxyCcrHashes,
+      });
+      cleanupStore(runConfig);
 
-    stats.compressions++;
-    stats.tokensBefore += result.tokensBefore;
-    stats.tokensAfter += result.tokensAfter;
-    stats.tokensSaved += result.tokensSaved;
-    stats.charsBefore += text.length;
-    stats.charsAfter += result.compressedText.length;
-    updateStatus(ctx, runtimeEnabled, owner, stats);
+      stats.compressions++;
+      stats.tokensBefore += result.tokensBefore;
+      stats.tokensAfter += result.tokensAfter;
+      stats.tokensSaved += result.tokensSaved;
+      stats.charsBefore += text.length;
+      stats.charsAfter += result.compressedText.length;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
 
-    return {
-      content: contentWithText(event.content as Array<{ type: string; text?: string; [key: string]: unknown }>, appendMarker(result.compressedText, buildMarker(hash, result))),
-      details: {
-        ...(event.details && typeof event.details === "object" ? event.details : {}),
-        headroom: {
-          hash,
-          tokensBefore: result.tokensBefore,
-          tokensAfter: result.tokensAfter,
-          tokensSaved: result.tokensSaved,
-          compressionRatio: result.compressionRatio,
-          transforms: result.transforms,
-          proxyCcrHashes: result.proxyCcrHashes,
+      return {
+        content: contentWithText(event.content as Array<{ type: string; text?: string; [key: string]: unknown }>, appendMarker(result.compressedText, buildMarker(hash, result))),
+        details: {
+          ...(event.details && typeof event.details === "object" ? event.details : {}),
+          headroom: {
+            hash,
+            tokensBefore: result.tokensBefore,
+            tokensAfter: result.tokensAfter,
+            tokensSaved: result.tokensSaved,
+            compressionRatio: result.compressionRatio,
+            transforms: result.transforms,
+            proxyCcrHashes: result.proxyCcrHashes,
+          },
         },
-      },
-    };
+      };
+    } catch (error) {
+      notifyFailure(ctx, `Headroom post-compress store failed; bypassing original output. ${error instanceof Error ? error.message : ""}`.trim());
+      stats.bypasses++;
+      return;
+    }
   });
 
   pi.registerTool({
@@ -736,6 +750,13 @@ export default function headroom(pi: ExtensionAPI) {
         return;
       }
       if (command === "enable") {
+        // ponytail: sync in-memory runtime config so shouldCompressToolResult's persisted-state guard
+        // passes for this session. enable is session-scoped; persist via /headroom config save.
+        config = {
+          ...config,
+          enabled: true,
+          startup: config.startup === "off" ? "manual" : config.startup,
+        };
         runtimeEnabled = true;
         if (await health(config)) owner = owner === "none" ? "external" : owner;
         updateStatus(ctx, runtimeEnabled, owner, stats);
