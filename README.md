@@ -11,6 +11,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Permission approval gates for tools, bash, MCP, skills, and external paths
 - Context-mode workflows and context tooling with `context-mode`
 - Local Headroom Labs adapter for managed context compression and token-savings visibility
+- Local OMP-style Hindsight Memory adapter/template
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - Local `/goal` command template for Codex/Claude-style goal loops in Pi
@@ -36,6 +37,9 @@ The `pi/` directory in this repository contains **example/template files** for y
 >
 > # Example: copy just the local headroom extension template
 > cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+>
+> # Example: copy just the local hindsight memory extension template
+> cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
 > ```
 
 ## Prerequisites
@@ -110,6 +114,13 @@ pipx install "headroom-ai[proxy]"
 
 mkdir -p ~/.pi/agent/extensions
 cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+```
+
+Install local Hindsight Memory adapter template:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
 ```
 
 Reload or restart Pi after installing extensions.
@@ -200,6 +211,29 @@ Default config highlights:
 Remote Headroom proxies are blocked unless `allowRemote` is set to `true`; only enable that for a proxy you trust with tool output content.
 
 Run `/reload` after changing config.
+
+### Local Hindsight Memory adapter
+
+This repo includes a local Pi extension template at `pi/extensions/hindsight/`.
+
+- OMP-inspired local retain/recall, rulebook/TTSR portable subset, and autonomous `MEMORY.md` backend.
+- Commands: `/hindsight view|stats|diagnose|clear|rebuild|enqueue|recall <query>|memory enable|disable`; `/rules list|reload|show <name>`.
+- Tools: `hindsight_retain`, `hindsight_recall`, `hindsight_memory`, `hindsight_rule`.
+- Storage: `~/.pi/agent/hindsight/<project-key>/...`, `~/.pi/agent/rules/*.{md,mdc}`.
+- Limits: true OMP mid-token TTSR abort/rewind is fork-only; stock Pi approximates via `tool_result`, `tool_call`, and `input` hooks.
+
+Install globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
+```
 
 ### Local goal loop command
 
