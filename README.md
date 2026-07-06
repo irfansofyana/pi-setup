@@ -10,6 +10,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Intercom coordination between parent and child agents
 - Permission approval gates for tools, bash, MCP, skills, and external paths
 - Context-mode workflows and context tooling with `context-mode`
+- Local Headroom Labs adapter for managed context compression and token-savings visibility
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - Local `/goal` command template for Codex/Claude-style goal loops in Pi
@@ -32,6 +33,9 @@ The `pi/` directory in this repository contains **example/template files** for y
 >
 > # Example: copy just the local goal-loop extension template
 > cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
+>
+> # Example: copy just the local headroom extension template
+> cp -r pi/extensions/headroom ~/.pi/agent/extensions/
 > ```
 
 ## Prerequisites
@@ -88,9 +92,6 @@ pi install npm:pi-markdown-preview
 # Todo: task tracking and todo management
 pi install npm:@juicesharp/rpiv-todo
 
-# Headroom: context/headroom visibility extension
-pi install npm:@ryan_nookpi/pi-extension-headroom
-
 # 9router: model routing extension
 pi install npm:pi-9router-ext
 
@@ -101,7 +102,17 @@ pi install npm:pi-stats-ext
 pi install git:github.com/jonjonrankin/pi-caveman
 ```
 
-Restart Pi after installing extensions.
+Install Headroom CLI and the local Headroom adapter template:
+
+```bash
+# Headroom CLI comes from the Python package; npm headroom-ai is SDK-only.
+pipx install "headroom-ai[proxy]"
+
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+```
+
+Reload or restart Pi after installing extensions.
 
 Useful extension commands inside Pi:
 
@@ -112,6 +123,80 @@ Useful extension commands inside Pi:
 /permission-system   # Open pi-permission-system settings
 /reload                 # Reload extensions, skills, prompts, and config
 ```
+
+### Local Headroom adapter
+
+This repo includes a local Pi extension template at `pi/extensions/headroom/` that integrates [Headroom Labs Headroom](https://github.com/headroomlabs-ai/headroom) without using a third-party Pi extension package.
+
+It starts/stops a managed local `headroom proxy`, compresses large final Pi tool results through `POST /v1/compress`, stores originals in a local Pi CCR store, and exposes native Pi tools for retrieval/stats. It does **not** expose Headroom MCP.
+
+Install Headroom CLI:
+
+```bash
+pipx install "headroom-ai[proxy]"
+# or
+uv tool install "headroom-ai[proxy]"
+```
+
+Install the Pi adapter globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
+```
+
+Commands:
+
+```text
+/headroom start                 # start managed proxy or adopt existing external proxy
+/headroom stop                  # stop managed proxy only; disable compression
+/headroom restart               # stop managed proxy, then start again
+/headroom enable                # enable compression for current Pi session
+/headroom disable               # disable compression for current Pi session
+/headroom status                # show current status
+/headroom stats                 # show Pi-session compression stats
+/headroom doctor                # check CLI/proxy and print install commands
+/headroom logs                  # show proxy log tail
+/headroom logs clear            # clear proxy log
+/headroom cleanup               # clean expired local CCR store entries
+/headroom config show           # print effective runtime config
+/headroom config save           # persist current runtime config
+/headroom config reset          # reset runtime config to defaults
+```
+
+Native tools exposed by the extension:
+
+```text
+headroom_retrieve  # retrieve original compressed output by local hr_... hash, optional query
+headroom_stats     # inspect Pi-session savings and adapter state
+```
+
+Optional config lives at:
+
+```text
+~/.pi/agent/headroom/config.json
+```
+
+Default config highlights:
+
+```json
+{
+  "enabled": true,
+  "startup": "manual",
+  "proxyUrl": "http://127.0.0.1:8787",
+  "minChars": 500,
+  "storeTtlHours": 24,
+  "notifyFailures": "once"
+}
+```
+
+Run `/reload` after changing config.
 
 ### Local goal loop command
 
