@@ -64,9 +64,17 @@ export function loadMemories(cwd: string, rootDir: string = HINDSIGHT_DIR): Memo
   return entries;
 }
 
+function redactMemoryEntry(entry: MemoryEntry): MemoryEntry {
+  return {
+    ...entry,
+    text: redactSecrets(entry.text),
+    category: redactSecrets(entry.category),
+  };
+}
+
 export function appendMemory(cwd: string, entry: MemoryEntry, rootDir: string = HINDSIGHT_DIR): void {
   ensureDirs(cwd, rootDir);
-  appendFileSync(memoriesPath(cwd, rootDir), `${JSON.stringify(entry)}\n`, "utf8");
+  appendFileSync(memoriesPath(cwd, rootDir), `${JSON.stringify(redactMemoryEntry(entry))}\n`, "utf8");
 }
 
 export function readTextFile(path: string): string | undefined {
@@ -135,6 +143,7 @@ export function jaccard(a: string, b: string): number {
 }
 
 const SECRET_PATTERNS = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
   /\b[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\b\s*[:=]\s*["']?[^"'\s]{4,}/gi,
   /\b(sk-[A-Za-z0-9_-]{20,})\b/g,
   /\b(ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xoxb-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g,

@@ -65,6 +65,25 @@ test("appendMemory + loadMemories roundtrip writes and reads back an entry", () 
   assert.equal(projectDir(cwd, root), join(root, projectKey(cwd)));
 });
 
+test("appendMemory redacts PEM private keys before writing jsonl", () => {
+  const root = tempRoot();
+  const cwd = "/x/private-key-proj";
+  const privateKey = [
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAA=",
+    "-----END OPENSSH PRIVATE KEY-----",
+  ].join("\n");
+
+  appendMemory(cwd, makeMemoryEntry(cwd, `never store this\n${privateKey}`, "general", "retain"), root);
+
+  const raw = readFileSync(memoriesPath(cwd, root), "utf8");
+  assert.ok(raw.includes("[REDACTED]"));
+  assert.ok(!raw.includes("OPENSSH PRIVATE KEY"));
+  assert.ok(!raw.includes("b3BlbnNzaC1rZXktdjE"));
+  assert.equal(loadMemories(cwd, root)[0].text, "never store this\n[REDACTED]");
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("loadMemories skips malformed lines and returns [] when absent", () => {
   const root = tempRoot();
   const cwd = "/x/missing-proj";
@@ -412,11 +431,19 @@ test("memoryGuidanceBlock includes OMP heuristic/stale instructions + project di
 test("writeMemoryArtifacts redacts files and creates skills dir", () => {
   const root = tempRoot();
   const cwd = "/x/memory-artifacts";
-  writeMemoryArtifacts(cwd, "# MEMORY\napi_key=supersecret123", "Bearer abcdefghijk", root);
+  const privateKey = [
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "MIIEpAIBAAKCAQEAsecretkeymaterial",
+    "-----END RSA PRIVATE KEY-----",
+  ].join("\n");
+  writeMemoryArtifacts(cwd, `# MEMORY\napi_key=supersecret123\n${privateKey}`, "Bearer abcdefghijk", root);
   assert.equal(existsSync(memoryDocPath(cwd, root)), true);
   assert.equal(existsSync(memorySummaryPath(cwd, root)), true);
   assert.equal(existsSync(skillsDir(cwd, root)), true);
-  assert.ok(readFileSync(memoryDocPath(cwd, root), "utf8").includes("[REDACTED]"));
+  const memoryDoc = readFileSync(memoryDocPath(cwd, root), "utf8");
+  assert.ok(memoryDoc.includes("[REDACTED]"));
+  assert.ok(!memoryDoc.includes("RSA PRIVATE KEY"));
+  assert.ok(!memoryDoc.includes("MIIEpAIBAAKCAQEA"));
   assert.ok(readFileSync(memorySummaryPath(cwd, root), "utf8").includes("[REDACTED]"));
   rmSync(root, { recursive: true, force: true });
 });
