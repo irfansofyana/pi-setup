@@ -95,16 +95,16 @@ export function promptBlocks(projectRoot: string, rules: Rule[], memoryBackend: 
   return [memoryBlock, rulebookPromptBlock(rules)].filter(Boolean).join("\n\n");
 }
 
-export function ruleAllows(rule: Rule, source: "prose" | "tool" | "text"): boolean {
+export function ruleAllows(rule: Rule, source: "prose" | "tool" | "text", toolName?: string): boolean {
   if (!rule.scope?.length) return true;
   if (rule.scope.includes("text")) return true;
-  if (source === "tool") return rule.scope.some((scope) => scope === "tool" || scope.startsWith("tool:"));
+  if (source === "tool") return rule.scope.some((scope) => scope === "tool" || scope === `tool:${toolName}`);
   if (source === "prose") return rule.scope.includes("prose");
   return false;
 }
 
 export function matchesRule(rule: Rule, text: string): boolean {
-  const conditions = rule.condition ?? [];
+  const conditions = [...(rule.condition ?? []), ...(rule.astCondition ?? [])];
   for (const condition of conditions) {
     try {
       if (new RegExp(condition, "m").test(text)) return true;
@@ -491,12 +491,12 @@ export default function hindsight(pi: ExtensionAPI) {
     return splitBuckets(ruleCacheRef).ttsr;
   }
 
-  function firstTtsrMatch(cwd: string, text: string, source: "prose" | "tool" | "text", modes: Rule["interruptMode"][]): Rule | undefined {
+  function firstTtsrMatch(cwd: string, text: string, source: "prose" | "tool" | "text", modes: Rule["interruptMode"][], toolName?: string): Rule | undefined {
     const currentAttempt = ++ruleAttemptCounter;
     for (const rule of ttsrRules(cwd)) {
       const mode = rule.interruptMode ?? "always";
       const key = ruleStateKey(cwd, rule);
-      if (!modes.includes(mode) || !ruleAllows(rule, source) || !matchesRule(rule, text) || !shouldInjectRule(rule, injectedRules.get(key), currentAttempt)) continue;
+      if (!modes.includes(mode) || !ruleAllows(rule, source, toolName) || !matchesRule(rule, text) || !shouldInjectRule(rule, injectedRules.get(key), currentAttempt)) continue;
       markRuleInjected(injectedRules, key, currentAttempt);
       return rule;
     }
@@ -646,7 +646,7 @@ export default function hindsight(pi: ExtensionAPI) {
       const projectRoot = ctx?.cwd || process.cwd();
       const text = textFrom(event?.content ?? event?.result ?? event);
       if (!text) return;
-      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always", undefined]);
+      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always", undefined], event?.toolName ?? event?.tool?.name ?? event?.name);
       if (!rule) return;
       const reminder = reminderForRule(rule);
       const content = prependReminder(event?.content, reminder);
@@ -661,7 +661,7 @@ export default function hindsight(pi: ExtensionAPI) {
     try {
       const projectRoot = ctx?.cwd || process.cwd();
       const text = JSON.stringify(event?.input ?? event?.params ?? event ?? {});
-      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always"]);
+      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always"], event?.toolName ?? event?.tool?.name ?? event?.name);
       if (!rule) return;
       return { block: true, reason: reminderForRule(rule) };
     } catch {

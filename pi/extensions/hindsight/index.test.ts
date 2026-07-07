@@ -174,6 +174,7 @@ test("rulebookPromptBlock includes alwaysApply and rulebook, excludes TTSR conte
 test("matchesRule catches bad regex and matches valid condition", () => {
   assert.equal(matchesRule({ name: "bad", path: "/r", content: "", condition: ["["], provider: "native", priority: 100 }, "x"), false);
   assert.equal(matchesRule({ name: "ok", path: "/r", content: "", condition: ["hello\\s+world"], provider: "native", priority: 100 }, "hello world"), true);
+  assert.equal(matchesRule({ name: "ast", path: "/r", content: "", astCondition: ["CallExpression"], provider: "native", priority: 100 }, "CallExpression"), true);
 });
 
 test("repeat helpers handle once gap always by attempt number", () => {
@@ -206,8 +207,12 @@ test("projectRootFrom prefers event systemPromptOptions cwd", () => {
 
 test("ruleAllows and reminderForRule are defensive small helpers", () => {
   const rule: Rule = { name: "tool-rule", path: "/r", content: "x".repeat(2000), scope: ["tool"], provider: "native", priority: 100 };
+  const bashRule: Rule = { ...rule, scope: ["tool:bash"] };
   assert.equal(ruleAllows(rule, "tool"), true);
   assert.equal(ruleAllows(rule, "prose"), false);
+  assert.equal(ruleAllows(bashRule, "tool", "read"), false);
+  assert.equal(ruleAllows(bashRule, "tool", "mcp"), false);
+  assert.equal(ruleAllows(bashRule, "tool", "bash"), true);
   assert.ok(reminderForRule(rule).startsWith("Hindsight rule matched: tool-rule"));
   assert.ok(reminderForRule(rule).length <= 1201);
 });
@@ -500,6 +505,25 @@ test("portable TTSR tool_result prepends first matching rule reminder", async ()
   assert.equal(result.details.hindsightRule, "tool-hit");
   assert.ok(result.content[0].text.includes("Hindsight rule matched: tool-hit"));
   assert.ok(result.content[0].text.includes("danger output"));
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("portable TTSR tool_result honors tool-specific scope", async () => {
+  const cwd = tempRoot();
+  mkdirSync(join(cwd, ".cursor", "rules"), { recursive: true });
+  writeFileSync(join(cwd, ".cursor", "rules", "bash-hit.mdc"), "---\ncondition: danger\ninterruptMode: tool-only\nscope: tool:bash\n---\nStop and reconsider.");
+  const handlers: Record<string, Function> = {};
+  hindsight({
+    registerTool() {},
+    registerCommand() {},
+    on(name: string, handler: Function) { handlers[name] = handler; },
+  } as any);
+
+  const readResult = await handlers.tool_result({ toolName: "read", content: [{ type: "text", text: "danger output" }] }, { cwd });
+  assert.equal(readResult, undefined);
+  const bashResult = await handlers.tool_result({ toolName: "bash", content: [{ type: "text", text: "danger output" }] }, { cwd });
+  assert.equal(bashResult.details.hindsightRule, "bash-hit");
+  assert.ok(bashResult.content[0].text.includes("Hindsight rule matched: bash-hit"));
   rmSync(cwd, { recursive: true, force: true });
 });
 
