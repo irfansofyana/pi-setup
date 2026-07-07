@@ -236,6 +236,27 @@ test("health falls back to /health readiness payload when /readyz is missing", a
   }
 });
 
+test("health forwards caller abort signal to fetch", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    receivedSignal = init?.signal ?? undefined;
+    assert.ok(receivedSignal);
+    assert.equal(receivedSignal.aborted, false);
+    controller.abort(new Error("cancelled"));
+    assert.equal(receivedSignal.aborted, true);
+    throw receivedSignal.reason ?? new Error("aborted");
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await health(DEFAULT_CONFIG, controller.signal), false);
+    assert.equal(receivedSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("buildMarker advertises native retrieve tool", () => {
   const marker = buildMarker("hr_123", {
     compressedText: "short",

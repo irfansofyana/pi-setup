@@ -320,15 +320,31 @@ class HttpStatusError extends Error {
   }
 }
 
-async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
+function getContextSignal(ctx: ExtensionContext): AbortSignal | undefined {
+  return (ctx as { signal?: AbortSignal }).signal;
+}
+
+async function fetchJson(url: string, init: RequestInit, timeoutMs: number, externalSignal?: AbortSignal): Promise<unknown> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const signals = [init.signal, externalSignal].filter((signal): signal is AbortSignal => signal instanceof AbortSignal);
+  const listeners = signals.map((signal) => {
+    const abort = () => {
+      if (!controller.signal.aborted) controller.abort(signal.reason);
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    return { signal, abort };
+  });
+  const timeout = setTimeout(() => {
+    if (!controller.signal.aborted) controller.abort(new Error(`Headroom request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (!response.ok) throw new HttpStatusError(response.status);
     return await response.json();
   } finally {
     clearTimeout(timeout);
+    for (const { signal, abort } of listeners) signal.removeEventListener("abort", abort);
   }
 }
 
@@ -359,8 +375,8 @@ export function headroomReadyFromPayload(payload: unknown): boolean | undefined 
   return undefined;
 }
 
-async function endpointReady(url: string, timeoutMs: number): Promise<boolean> {
-  const payload = await fetchJson(url, { method: "GET" }, timeoutMs);
+async function endpointReady(url: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+  const payload = await fetchJson(url, { method: "GET" }, timeoutMs, signal);
   return headroomReadyFromPayload(payload) ?? true;
 }
 
@@ -391,16 +407,16 @@ export function canStartRuntime(config: Pick<HeadroomConfig, "startup">): boolea
   return config.startup !== "off";
 }
 
-export async function health(config: HeadroomConfig): Promise<boolean> {
+export async function health(config: HeadroomConfig, signal?: AbortSignal): Promise<boolean> {
   if (!hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
   try {
-    return await endpointReady(`${config.proxyUrl}/readyz`, 2_000);
+    return await endpointReady(`${config.proxyUrl}/readyz`, 2_000, signal);
   } catch (error) {
     if (!(error instanceof HttpStatusError) || (error.status !== 404 && error.status !== 405)) return false;
   }
 
   try {
-    return await endpointReady(`${config.proxyUrl}/health`, 2_000);
+    return await endpointReady(`${config.proxyUrl}/health`, 2_000, signal);
   } catch {
     return false;
   }
@@ -429,6 +445,7 @@ async function compressViaProxy(text: string, toolName: string, ctx: ExtensionCo
     `${config.proxyUrl}/v1/compress`,
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
     config.compressionTimeoutMs,
+    getContextSignal(ctx),
   )) as Record<string, unknown>;
 
   const messages = Array.isArray(json.messages) ? (json.messages as Array<Record<string, unknown>>) : [];
@@ -663,7 +680,7 @@ export default function headroom(pi: ExtensionAPI) {
       if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy blocked: ${config.proxyUrl}. Set allowRemote=true only for a trusted proxy.`, "warning");
       return;
     }
-    if (await health(config)) {
+    if (await health(config, getContextSignal(ctx))) {
       owner = managedProcess ? "managed" : "external";
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -702,7 +719,7 @@ export default function headroom(pi: ExtensionAPI) {
     if (managedProcess.pid) writeFileSync(PID_PATH, `${managedProcess.pid}\n`, "utf8");
 
     for (let i = 0; i < 30; i++) {
-      if (await health(config)) {
+      if (await health(config, getContextSignal(ctx))) {
         owner = "managed";
         runtimeEnabled = config.enabled;
         updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -780,7 +797,7 @@ export default function headroom(pi: ExtensionAPI) {
       return;
     }
 
-    if (!(await health(runConfig))) {
+    if (!(await health(runConfig, getContextSignal(ctx)))) {
       notifyFailure(ctx, "Headroom proxy unavailable; bypassing compression.");
       return headroomFailureResult(event as any, runConfig, "proxy unavailable.");
     }
@@ -910,7 +927,7 @@ export default function headroom(pi: ExtensionAPI) {
       }
       if (command === "enable") {
         const proxyUrlSupported = hasSupportedProxyProtocol(config.proxyUrl);
-        const decision = enableRuntimeDecision(config, config.startup !== "off" && proxyUrlSupported && await health(config), owner, managedProcess !== undefined);
+        const decision = enableRuntimeDecision(config, config.startup !== "off" && proxyUrlSupported && await health(config, getContextSignal(ctx)), owner, managedProcess !== undefined);
         runtimeEnabled = decision.runtimeEnabled;
         owner = decision.owner;
         updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -938,7 +955,7 @@ export default function headroom(pi: ExtensionAPI) {
         return;
       }
       if (command === "stats" || command === "status") {
-        const healthy = await health(config);
+        const healthy = await health(config, getContextSignal(ctx));
         if (healthy && owner === "none") owner = "external";
         updateStatus(ctx, runtimeEnabled, owner, stats);
         ctx.ui.notify(`${statsSummary()}\nproxyHealthy: ${healthy}`, healthy ? "info" : "warning");
@@ -946,7 +963,7 @@ export default function headroom(pi: ExtensionAPI) {
       }
       if (command === "doctor") {
         const version = commandVersion();
-        const healthy = await health(config);
+        const healthy = await health(config, getContextSignal(ctx));
         const text = [
           `headroomCli: ${version ?? "missing"}`,
           `proxyHealthy: ${healthy}`,
