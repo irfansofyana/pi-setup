@@ -39,6 +39,7 @@ import hindsight, {
   reminderForRule,
   ruleAllows,
   rulebookPromptBlock,
+  ruleMatchesGlobs,
   ruleStateKey,
   shouldInjectRule,
 } from "./index.ts";
@@ -170,6 +171,20 @@ test("rulebookPromptBlock includes alwaysApply and rulebook, excludes TTSR conte
   assert.ok(block.includes("rule://book"));
   assert.ok(!block.includes("secret full body"));
   assert.ok(!block.includes("ttsr body"));
+});
+
+test("rulebookPromptBlock honors globs before injection", () => {
+  const scoped: Rule = { name: "python", path: "/a", content: "python body", alwaysApply: true, globs: ["*.py"], provider: "native", priority: 100 };
+  const recursive: Rule = { name: "recursive", path: "/b", content: "recursive body", alwaysApply: true, globs: ["**/*.py"], provider: "native", priority: 100 };
+  const brace: Rule = { name: "brace", path: "/c", content: "brace body", alwaysApply: true, globs: ["src/*.{ts,tsx}", "test?.md"], provider: "native", priority: 100 };
+  assert.equal(ruleMatchesGlobs(scoped, ["src/app.py"]), true);
+  assert.equal(ruleMatchesGlobs(scoped, ["README.md"]), false);
+  assert.equal(ruleMatchesGlobs(recursive, ["app.py"]), true);
+  assert.equal(ruleMatchesGlobs(recursive, ["src/app.py"]), true);
+  assert.equal(ruleMatchesGlobs(brace, ["src/app.tsx"]), true);
+  assert.equal(ruleMatchesGlobs(brace, ["test1.md"]), true);
+  assert.equal(rulebookPromptBlock([scoped]), "");
+  assert.ok(rulebookPromptBlock([scoped], ["src/app.py"]).includes("python body"));
 });
 
 test("matchesRule catches bad regex and matches valid condition", () => {
@@ -508,6 +523,57 @@ test("hindsight clear suppresses in-flight memory rebuild artifact writes", asyn
   rmSync(cwd, { recursive: true, force: true });
 });
 
+test("auto-recall requires memory backend opt-in", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-auto-recall-"));
+  const commands: Record<string, any> = {};
+  const handlers: Record<string, Function> = {};
+  appendMemory(cwd, makeMemoryEntry(cwd, "remember this hidden fact", "general", "retain"));
+  hindsight({
+    registerTool() {},
+    registerCommand(name: string, command: any) { commands[name] = command; },
+    on(name: string, handler: Function) { handlers[name] = handler; },
+  } as any);
+
+  await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
+  assert.equal(await handlers.context({ messages: [{ role: "user", content: "hidden fact" }] }, { cwd }), undefined);
+  await commands.hindsight.handler("memory enable", { cwd, ui: { notify() {} } });
+  const result = await handlers.context({ messages: [{ role: "user", content: "hidden fact" }] }, { cwd });
+  assert.ok(result.messages[0].content.includes("hidden fact"));
+  await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
+
+  rmSync(projectDir(cwd), { recursive: true, force: true });
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("session shutdown auto-retain requires memory backend opt-in", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-auto-retain-"));
+  const commands: Record<string, any> = {};
+  const handlers: Record<string, Function> = {};
+  hindsight({
+    registerTool() {},
+    registerCommand(name: string, command: any) { commands[name] = command; },
+    on(name: string, handler: Function) { handlers[name] = handler; },
+  } as any);
+
+  await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
+  await handlers.session_shutdown({}, {
+    cwd,
+    sessionManager: { getEntries: () => [{ role: "user", content: "do not retain without opt-in" }] },
+  });
+  assert.equal(existsSync(memoriesPath(cwd)), false);
+
+  await commands.hindsight.handler("memory enable", { cwd, ui: { notify() {} } });
+  await handlers.session_shutdown({}, {
+    cwd,
+    sessionManager: { getEntries: () => [{ role: "user", content: "retain after opt-in" }] },
+  });
+  assert.equal(loadMemories(cwd).some((entry) => entry.text.includes("retain after opt-in")), true);
+  await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
+
+  rmSync(projectDir(cwd), { recursive: true, force: true });
+  rmSync(cwd, { recursive: true, force: true });
+});
+
 test("hindsight clear drops queued retain entries and skips shutdown auto-retain", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-clear-"));
   const tools: Record<string, any> = {};
@@ -565,6 +631,24 @@ test("portable TTSR tool_result honors tool-specific scope", async () => {
   const bashResult = await handlers.tool_result({ toolName: "bash", content: [{ type: "text", text: "danger output" }] }, { cwd });
   assert.equal(bashResult.details.hindsightRule, "bash-hit");
   assert.ok(bashResult.content[0].text.includes("Hindsight rule matched: bash-hit"));
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("portable TTSR tool_result honors globs", async () => {
+  const cwd = tempRoot();
+  mkdirSync(join(cwd, ".cursor", "rules"), { recursive: true });
+  writeFileSync(join(cwd, ".cursor", "rules", "python-hit.mdc"), "---\ncondition: danger\ninterruptMode: tool-only\nscope: tool\nglobs:\n  - \"*.py\"\n---\nStop and reconsider.");
+  const handlers: Record<string, Function> = {};
+  hindsight({
+    registerTool() {},
+    registerCommand() {},
+    on(name: string, handler: Function) { handlers[name] = handler; },
+  } as any);
+
+  const readmeResult = await handlers.tool_result({ toolName: "read", input: { path: "README.md" }, content: [{ type: "text", text: "danger output" }] }, { cwd });
+  assert.equal(readmeResult, undefined);
+  const pyResult = await handlers.tool_result({ toolName: "read", input: { path: "src/app.py" }, content: [{ type: "text", text: "danger output" }] }, { cwd });
+  assert.equal(pyResult.details.hindsightRule, "python-hit");
   rmSync(cwd, { recursive: true, force: true });
 });
 

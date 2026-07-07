@@ -79,8 +79,56 @@ function cap(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-export function rulebookPromptBlock(rules: Rule[]): string {
-  const buckets = splitBuckets(rules);
+function expandBraces(glob: string): string[] {
+  const match = /\{([^{}]+)\}/.exec(glob);
+  if (!match) return [glob];
+  return match[1].split(",").flatMap((part) => expandBraces(`${glob.slice(0, match.index)}${part}${glob.slice(match.index + match[0].length)}`));
+}
+
+function globToRegExp(glob: string): RegExp {
+  let pattern = "";
+  for (let i = 0; i < glob.length; i++) {
+    const char = glob[i];
+    const next = glob[i + 1];
+    const after = glob[i + 2];
+    if (char === "*" && next === "*" && after === "/") {
+      pattern += "(?:.*/)?";
+      i += 2;
+    } else if (char === "*" && next === "*") {
+      pattern += ".*";
+      i += 1;
+    } else if (char === "*") {
+      pattern += "[^/]*";
+    } else if (char === "?") {
+      pattern += "[^/]";
+    } else {
+      pattern += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${pattern}$`);
+}
+
+export function ruleMatchesGlobs(rule: Pick<Rule, "globs">, paths: string[] = []): boolean {
+  if (!rule.globs?.length) return true;
+  return paths.some((path) => rule.globs!.some((glob) => expandBraces(glob).some((expandedGlob) => {
+    const cleanPath = path.replace(/\\/g, "/");
+    const cleanGlob = expandedGlob.replace(/\\/g, "/");
+    const matcher = globToRegExp(cleanGlob);
+    const basename = cleanPath.split("/").pop() ?? cleanPath;
+    return matcher.test(cleanPath) || (!cleanGlob.includes("/") && matcher.test(basename));
+  })));
+}
+
+function pathsFrom(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(pathsFrom);
+  if (!value || typeof value !== "object") return [];
+  const obj = value as Record<string, unknown>;
+  return ["path", "file", "filename", "cwd", "target", "uri"].flatMap((key) => pathsFrom(obj[key]));
+}
+
+export function rulebookPromptBlock(rules: Rule[], paths: string[] = []): string {
+  const buckets = splitBuckets(rules.filter((rule) => ruleMatchesGlobs(rule, paths)));
   const lines: string[] = [];
   if (buckets.alwaysApply.length) {
     lines.push("Hindsight always-apply rules:");
@@ -93,10 +141,10 @@ export function rulebookPromptBlock(rules: Rule[]): string {
   return cap(lines.join("\n").trim(), MAX_RULEBOOK_CHARS);
 }
 
-export function promptBlocks(projectRoot: string, rules: Rule[], memoryBackend: boolean, rootDir?: string): string {
+export function promptBlocks(projectRoot: string, rules: Rule[], memoryBackend: boolean, rootDir?: string, paths: string[] = []): string {
   const summaryBlock = memoryBackend ? memorySummaryBlock(projectRoot, rootDir) : "";
   const memoryBlock = memoryBackend ? (summaryBlock || memoryGuidanceBlock(projectRoot)) : "";
-  return [memoryBlock, rulebookPromptBlock(rules)].filter(Boolean).join("\n\n");
+  return [memoryBlock, rulebookPromptBlock(rules, paths)].filter(Boolean).join("\n\n");
 }
 
 export function ruleAllows(rule: Rule, source: "prose" | "tool" | "text", toolName?: string): boolean {
@@ -514,12 +562,12 @@ export default function hindsight(pi: ExtensionAPI) {
     return splitBuckets(ruleCacheRef).ttsr;
   }
 
-  function firstTtsrMatch(cwd: string, text: string, source: "prose" | "tool" | "text", modes: Rule["interruptMode"][], toolName?: string): Rule | undefined {
+  function firstTtsrMatch(cwd: string, text: string, source: "prose" | "tool" | "text", modes: Rule["interruptMode"][], toolName?: string, paths: string[] = []): Rule | undefined {
     const currentAttempt = ++ruleAttemptCounter;
     for (const rule of ttsrRules(cwd)) {
       const mode = rule.interruptMode ?? "always";
       const key = ruleStateKey(cwd, rule);
-      if (!modes.includes(mode) || !ruleAllows(rule, source, toolName) || !matchesRule(rule, text) || !shouldInjectRule(rule, injectedRules.get(key), currentAttempt)) continue;
+      if (!modes.includes(mode) || !ruleMatchesGlobs(rule, paths) || !ruleAllows(rule, source, toolName) || !matchesRule(rule, text) || !shouldInjectRule(rule, injectedRules.get(key), currentAttempt)) continue;
       markRuleInjected(injectedRules, key, currentAttempt);
       return rule;
     }
@@ -656,7 +704,7 @@ export default function hindsight(pi: ExtensionAPI) {
   });
 
   (pi as any).on?.("context", async (event: any, ctx: any) => {
-    if (!configRef.autoRecall || autoRecallInjected) return;
+    if (!configRef.memoryBackend || !configRef.autoRecall || autoRecallInjected) return;
     const messages = Array.isArray(event?.messages) ? event.messages : [];
     const query = queryFromMessages(messages);
     flushRetainQueue();
@@ -671,7 +719,7 @@ export default function hindsight(pi: ExtensionAPI) {
       const projectRoot = ctx?.cwd || process.cwd();
       const text = textFrom(event?.content ?? event?.result ?? event);
       if (!text) return;
-      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always", undefined], event?.toolName ?? event?.tool?.name ?? event?.name);
+      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always", undefined], event?.toolName ?? event?.tool?.name ?? event?.name, pathsFrom(event?.input ?? event?.params ?? event));
       if (!rule) return;
       const reminder = reminderForRule(rule);
       const content = prependReminder(event?.content, reminder);
@@ -686,7 +734,7 @@ export default function hindsight(pi: ExtensionAPI) {
     try {
       const projectRoot = ctx?.cwd || process.cwd();
       const text = JSON.stringify(event?.input ?? event?.params ?? event ?? {});
-      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always"], event?.toolName ?? event?.tool?.name ?? event?.name);
+      const rule = firstTtsrMatch(projectRoot, text, "tool", ["tool-only", "always"], event?.toolName ?? event?.tool?.name ?? event?.name, pathsFrom(event?.input ?? event?.params ?? event));
       if (!rule) return;
       return { block: true, reason: reminderForRule(rule) };
     } catch {
@@ -717,7 +765,7 @@ export default function hindsight(pi: ExtensionAPI) {
       const projectRoot = ctx?.cwd || process.cwd();
       flushRetainQueue();
       if (skipAutoRetainAfterClear.delete(projectRoot)) return;
-      if (!configRef.autoRetain) return;
+      if (!configRef.memoryBackend || !configRef.autoRetain) return;
       const text = sessionTranscript(ctx);
       if (text) appendMemory(projectRoot, makeMemoryEntry(projectRoot, text, "session", "auto-retain"));
     } catch {
