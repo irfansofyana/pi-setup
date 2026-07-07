@@ -87,13 +87,22 @@ test("dedupMemories merges near-duplicate text keeping earliest", () => {
   assert.equal(merged[1].id, c.id);
 });
 
-test("clearMemories removes the jsonl file", () => {
+test("clearMemories removes generated memory artifacts", () => {
   const root = tempRoot();
   const cwd = "/x/proj";
   appendMemory(cwd, makeMemoryEntry(cwd, "note", "general", "retain"), root);
+  writeMemoryArtifacts(cwd, "# MEMORY\nStale", "Stale summary", root);
   assert.equal(existsSync(memoriesPath(cwd, root)), true);
+  assert.equal(existsSync(memoryDocPath(cwd, root)), true);
+  assert.equal(existsSync(memorySummaryPath(cwd, root)), true);
+
   clearMemories(cwd, root);
+
   assert.equal(existsSync(memoriesPath(cwd, root)), false);
+  assert.equal(existsSync(memoryDocPath(cwd, root)), false);
+  assert.equal(existsSync(memorySummaryPath(cwd, root)), false);
+  assert.equal(memorySummaryBlock(cwd, root), "");
+  assert.equal(readMemoryUrl(cwd, "memory://root/MEMORY.md", root), "not found: memory://root/MEMORY.md");
 });
 
 test("parseFrontmatter parses mdc with alwaysApply, globs, condition", () => {

@@ -29,7 +29,7 @@ Rules sort by descending priority. Bucket split follows OMP: TTSR first (`condit
 - `/hindsight view` — show config
 - `/hindsight stats` — memory count + rule bucket counts
 - `/hindsight diagnose` — show paths, artifact presence, config, and rule bucket counts
-- `/hindsight clear` — delete current project's `memories.jsonl`
+- `/hindsight clear` — delete current project's `memories.jsonl`, `MEMORY.md`, and `memory_summary.md`
 - `/hindsight rebuild` — rebuild autonomous memory and re-discover rules for `ctx.cwd`
 - `/hindsight enqueue` — queue autonomous memory rebuild in the background
 - `/hindsight recall <query>` — search current project's memories

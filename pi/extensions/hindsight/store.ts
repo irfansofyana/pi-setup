@@ -85,8 +85,9 @@ export function writeMemoryArtifacts(cwd: string, memoryDoc: string, summary: st
 }
 
 export function clearMemories(cwd: string, rootDir: string = HINDSIGHT_DIR): void {
-  const path = memoriesPath(cwd, rootDir);
-  if (existsSync(path)) unlinkSync(path);
+  for (const path of [memoriesPath(cwd, rootDir), memoryDocPath(cwd, rootDir), memorySummaryPath(cwd, rootDir)]) {
+    if (existsSync(path)) unlinkSync(path);
+  }
 }
 
 export function makeMemoryEntry(cwd: string, text: string, category: string, source: "retain" | "auto-retain"): MemoryEntry {
