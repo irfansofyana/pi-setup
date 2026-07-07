@@ -1,0 +1,284 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  DEFAULT_CONFIG,
+  buildCompressRequest,
+  buildMarker,
+  canRetainOriginal,
+  canStartRuntime,
+  contentWithText,
+  enableRuntimeDecision,
+  formatCount,
+  hasSupportedProxyProtocol,
+  headroomFailureText,
+  headroomReadyFromPayload,
+  health,
+  initialRuntimeEnabled,
+  initialStats,
+  isRemoteBlocked,
+  normalizeHeadroomConfig,
+  outputLooksSensitive,
+  retrieveWithQuery,
+  savingsPercent,
+  shouldCompressToolResult,
+  statusText,
+  truncateText,
+  type StoredOriginal,
+} from "./index.ts";
+
+test("normalizeHeadroomConfig uses Headroom-like defaults", () => {
+  assert.deepEqual(normalizeHeadroomConfig({}), DEFAULT_CONFIG);
+  assert.equal(normalizeHeadroomConfig({ minChars: 10 }).minChars, 10);
+  assert.equal(normalizeHeadroomConfig({ minChars: -1 }).minChars, 1);
+  assert.equal(normalizeHeadroomConfig({ startup: "auto" }).startup, "auto");
+  assert.equal(normalizeHeadroomConfig({ notifyFailures: "always" }).notifyFailures, "always");
+});
+
+test("normalizeHeadroomConfig derives managed proxy bind from local proxyUrl", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "http://127.0.0.1:9999" });
+  assert.equal(config.host, "127.0.0.1");
+  assert.equal(config.port, 9999);
+});
+
+test("normalizeHeadroomConfig keeps explicit host and port over proxyUrl-derived bind", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "http://127.0.0.1:9999", host: "0.0.0.0", port: 7777 });
+  assert.equal(config.proxyUrl, "http://127.0.0.1:9999");
+  assert.equal(config.host, "0.0.0.0");
+  assert.equal(config.port, 7777);
+});
+
+test("normalizeHeadroomConfig does not derive managed bind from remote proxyUrl", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "https://example.com:9443" });
+  assert.equal(config.host, DEFAULT_CONFIG.host);
+  assert.equal(config.port, DEFAULT_CONFIG.port);
+  assert.equal(isRemoteBlocked(config), true);
+});
+
+test("normalizeHeadroomConfig does not derive managed bind from non-http local proxyUrl", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "ftp://127.0.0.1:9999" });
+  assert.equal(config.host, DEFAULT_CONFIG.host);
+  assert.equal(config.port, DEFAULT_CONFIG.port);
+  assert.equal(hasSupportedProxyProtocol(config.proxyUrl), false);
+});
+
+test("initialRuntimeEnabled leaves manual startup off until explicit start or enable", () => {
+  assert.equal(initialRuntimeEnabled(DEFAULT_CONFIG), false);
+  assert.equal(initialRuntimeEnabled({ ...DEFAULT_CONFIG, startup: "auto" }), true);
+  assert.equal(initialRuntimeEnabled({ ...DEFAULT_CONFIG, startup: "off" }), false);
+  assert.equal(initialRuntimeEnabled({ ...DEFAULT_CONFIG, enabled: false, startup: "auto" }), false);
+});
+
+test("enableRuntimeDecision only enables after healthy proxy", () => {
+  assert.deepEqual(enableRuntimeDecision(DEFAULT_CONFIG, false, "none"), {
+    runtimeEnabled: false,
+    owner: "none",
+    reason: "proxy-unavailable",
+  });
+  assert.deepEqual(enableRuntimeDecision(DEFAULT_CONFIG, true, "none"), {
+    runtimeEnabled: true,
+    owner: "external",
+  });
+  assert.deepEqual(enableRuntimeDecision(DEFAULT_CONFIG, true, "none", true), {
+    runtimeEnabled: true,
+    owner: "managed",
+  });
+});
+
+test("enableRuntimeDecision keeps startup off disabled", () => {
+  assert.deepEqual(enableRuntimeDecision({ ...DEFAULT_CONFIG, startup: "off" }, true, "none"), {
+    runtimeEnabled: false,
+    owner: "none",
+    reason: "startup-off",
+  });
+});
+
+test("start runtime refuses startup off", () => {
+  assert.equal(canStartRuntime({ ...DEFAULT_CONFIG, startup: "manual" }), true);
+  assert.equal(canStartRuntime({ ...DEFAULT_CONFIG, startup: "off" }), false);
+});
+
+test("shouldCompressToolResult compresses all large non-excluded text", () => {
+  const text = "x".repeat(DEFAULT_CONFIG.minChars);
+  assert.equal(shouldCompressToolResult("bash", {}, text, DEFAULT_CONFIG), true);
+  assert.equal(shouldCompressToolResult("mcp", {}, text, DEFAULT_CONFIG), true);
+  assert.equal(shouldCompressToolResult("some_new_web_fetch_tool", {}, text, DEFAULT_CONFIG), true);
+  assert.equal(shouldCompressToolResult("write", {}, text, DEFAULT_CONFIG), false);
+  assert.equal(shouldCompressToolResult("bash", {}, "small", DEFAULT_CONFIG), false);
+});
+
+test("secret-looking args or output bypass compression", () => {
+  const text = "x".repeat(DEFAULT_CONFIG.minChars);
+  assert.equal(shouldCompressToolResult("read", { path: ".env" }, text, DEFAULT_CONFIG), false);
+  assert.equal(outputLooksSensitive("Authorization: Bearer abc.def.ghi"), true);
+  assert.equal(outputLooksSensitive("normal build log"), false);
+  assert.equal(outputLooksSensitive("sk-proj-abcdefghijklmnopqrstuvwxyz_123456"), true);
+  assert.equal(shouldCompressToolResult("bash", {}, "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz", DEFAULT_CONFIG), false);
+});
+
+test("retrieveWithQuery returns focused matching lines", () => {
+  const content = ["alpha", "before", "fatal auth error", "after", "omega"].join("\n");
+  assert.match(retrieveWithQuery(content, "auth", 1, 10_000), /2: before/);
+  assert.match(retrieveWithQuery(content, "auth", 1, 10_000), /3: fatal auth error/);
+  assert.match(retrieveWithQuery(content, "missing", 1, 10_000), /no matches/);
+});
+
+test("truncateText caps retrieval bytes", () => {
+  const result = truncateText("a".repeat(2000), 1000);
+  assert.ok(result.length < 1200);
+  assert.match(result, /retrieval truncated/);
+});
+
+test("canRetainOriginal rejects entries larger than store byte cap", () => {
+  const entry: StoredOriginal = {
+    hash: "hr_big",
+    toolName: "bash",
+    createdAt: new Date(0).toISOString(),
+    expiresAt: new Date(Date.now() + 1000).toISOString(),
+    originalContent: "x".repeat(2000),
+  };
+  assert.equal(canRetainOriginal(entry, { storeMaxBytes: 1024, storeMaxEntries: 1 }), false);
+  assert.equal(canRetainOriginal(entry, { storeMaxBytes: 10_000, storeMaxEntries: 1 }), true);
+});
+
+test("headroomFailureText suppresses original only when fallback is disabled", () => {
+  assert.equal(headroomFailureText({ fallbackToOriginal: true }, "proxy unavailable."), undefined);
+  assert.equal(
+    headroomFailureText({ fallbackToOriginal: false }, "proxy unavailable."),
+    "[Headroom: proxy unavailable. Original tool output suppressed because fallbackToOriginal=false.]",
+  );
+});
+
+test("contentWithText replaces joined text without leaking later text blocks", () => {
+  const content = [
+    { type: "text", text: "first" },
+    { type: "image", url: "data:image/png;base64,abc" },
+    { type: "text", text: "second raw output" },
+  ];
+  assert.deepEqual(contentWithText(content, "compressed"), [
+    { type: "text", text: "compressed" },
+    { type: "image", url: "data:image/png;base64,abc" },
+  ]);
+});
+
+test("buildCompressRequest sends tool-role content so Headroom can compress it", () => {
+  const payload = buildCompressRequest("large output", "mcp", "gpt-4o");
+  assert.equal(payload.protect_recent, 0);
+  assert.equal(payload.messages[0].role, "tool");
+  assert.equal(payload.messages[0].tool_call_id, "call_headroom_tool_output");
+  assert.match(payload.messages[0].content, /^Tool output from mcp:/);
+});
+
+test("remote proxy is blocked unless explicitly allowed", () => {
+  assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com" }), true);
+  assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com", allowRemote: true }), false);
+  assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "http://127.0.0.1:8787" }), false);
+});
+
+test("headroomReadyFromPayload parses readiness fields", () => {
+  assert.equal(headroomReadyFromPayload({ ready: true, status: "unhealthy" }), true);
+  assert.equal(headroomReadyFromPayload({ ready: false, status: "healthy" }), false);
+  assert.equal(headroomReadyFromPayload({ status: "healthy" }), true);
+  assert.equal(headroomReadyFromPayload({ status: "not-ready" }), false);
+  assert.equal(headroomReadyFromPayload({ checks: { upstream: { ready: true }, backend: { ready: false } } }), false);
+  assert.equal(headroomReadyFromPayload({ service: "headroom-proxy" }), undefined);
+});
+
+test("health does not adopt reachable but unready proxy", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith("/readyz")) {
+      return new Response(JSON.stringify({ service: "headroom-proxy", status: "unhealthy", ready: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await health(DEFAULT_CONFIG), false);
+    assert.deepEqual(calls, [`${DEFAULT_CONFIG.proxyUrl}/readyz`]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("health falls back to /health readiness payload when /readyz is missing", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith("/readyz")) {
+      return new Response(JSON.stringify({ detail: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/health")) {
+      return new Response(JSON.stringify({ service: "headroom-proxy", status: "unhealthy", ready: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await health(DEFAULT_CONFIG), false);
+    assert.deepEqual(calls, [`${DEFAULT_CONFIG.proxyUrl}/readyz`, `${DEFAULT_CONFIG.proxyUrl}/health`]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("health forwards caller abort signal to fetch", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    receivedSignal = init?.signal ?? undefined;
+    assert.ok(receivedSignal);
+    assert.equal(receivedSignal.aborted, false);
+    controller.abort(new Error("cancelled"));
+    assert.equal(receivedSignal.aborted, true);
+    throw receivedSignal.reason ?? new Error("aborted");
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await health(DEFAULT_CONFIG, controller.signal), false);
+    assert.equal(receivedSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("buildMarker advertises native retrieve tool", () => {
+  const marker = buildMarker("hr_123", {
+    compressedText: "short",
+    tokensBefore: 1000,
+    tokensAfter: 250,
+    tokensSaved: 750,
+    compressionRatio: 0.25,
+    transforms: ["router:log:0.25"],
+    proxyCcrHashes: ["abc"],
+  });
+  assert.match(marker, /headroom_retrieve/);
+  assert.match(marker, /hr_123/);
+  assert.match(marker, /750 tokens/);
+  assert.match(marker, /router:log/);
+});
+
+test("status helpers summarize session savings", () => {
+  const stats = initialStats();
+  stats.tokensBefore = 1000;
+  stats.tokensSaved = 600;
+  assert.equal(savingsPercent(stats), 60);
+  assert.equal(formatCount(1500), "1.5k");
+  assert.match(statusText(true, "managed", stats), /headroom managed · saved 600 tok · 60% ↓/);
+  assert.equal(statusText(false, "none", stats), "headroom off");
+});

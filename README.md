@@ -10,13 +10,14 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Intercom coordination between parent and child agents
 - Permission approval gates for tools, bash, MCP, skills, and external paths
 - Context-mode workflows and context tooling with `context-mode`
+- Local Headroom Labs adapter for managed context compression and token-savings visibility
+- Local OMP-style Hindsight Memory adapter/template
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - Local `/goal` command template for Codex/Claude-style goal loops in Pi
 - A curated set of agent skills for research, reviews, diagrams, frontend work, decision sparring, and Notion workflows
 - Notion CLI (`ntn`) plus Notion agent skills from `makenotion/skills`
 - Optional Understand-Anything plugin/skills for Pi codebase graphs
-- Persistent cross-session memory via `agentmemory`
 
 ## How to use this repo
 
@@ -34,8 +35,11 @@ The `pi/` directory in this repository contains **example/template files** for y
 > # Example: copy just the local goal-loop extension template
 > cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
 >
-> # Example: copy just the agentmemory extension backup
-> cp -r pi/extensions/agentmemory ~/.pi/agent/extensions/
+> # Example: copy just the local headroom extension template
+> cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+>
+> # Example: copy just the local hindsight memory extension template
+> cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
 > ```
 
 ## Prerequisites
@@ -92,23 +96,34 @@ pi install npm:pi-markdown-preview
 # Todo: task tracking and todo management
 pi install npm:@juicesharp/rpiv-todo
 
-# Headroom: context/headroom visibility extension
-pi install npm:@ryan_nookpi/pi-extension-headroom
-
 # 9router: model routing extension
 pi install npm:pi-9router-ext
 
 # Stats: Pi usage statistics extension
 pi install npm:pi-stats-ext
 
-# Ponytail: ponytail extension
-pi install git:github.com/DietrichGebert/ponytail
-
 # Caveman: caveman extension
 pi install git:github.com/jonjonrankin/pi-caveman
 ```
 
-Restart Pi after installing extensions.
+Install Headroom CLI and the local Headroom adapter template:
+
+```bash
+# Headroom CLI comes from the Python package; npm headroom-ai is SDK-only.
+pipx install "headroom-ai[proxy]"
+
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+```
+
+Install local Hindsight Memory adapter template:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+```
+
+Reload or restart Pi after installing extensions.
 
 Useful extension commands inside Pi:
 
@@ -117,8 +132,107 @@ Useful extension commands inside Pi:
 /mcp setup           # Guided MCP setup
 /mcp tools           # List available MCP tools
 /permission-system   # Open pi-permission-system settings
-/agentmemory-status     # Check agentmemory health
 /reload                 # Reload extensions, skills, prompts, and config
+```
+
+### Local Headroom adapter
+
+This repo includes a local Pi extension template at `pi/extensions/headroom/` that integrates [Headroom Labs Headroom](https://github.com/headroomlabs-ai/headroom) without using a third-party Pi extension package.
+
+It starts/stops a managed local `headroom proxy`, compresses large final Pi tool results through `POST /v1/compress`, stores originals in a local Pi CCR store, and exposes native Pi tools for retrieval/stats. It does **not** expose Headroom MCP.
+
+Install Headroom CLI:
+
+```bash
+pipx install "headroom-ai[proxy]"
+# or
+uv tool install "headroom-ai[proxy]"
+```
+
+Install the Pi adapter globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/headroom ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
+```
+
+Commands:
+
+```text
+/headroom start                 # start managed proxy or adopt existing external proxy
+/headroom stop                  # stop managed proxy only; disable compression
+/headroom restart               # stop managed proxy, then start again
+/headroom enable                # enable compression for current Pi session
+/headroom disable               # disable compression for current Pi session
+/headroom status                # show current status
+/headroom stats                 # show Pi-session compression stats
+/headroom doctor                # check CLI/proxy and print install commands
+/headroom logs                  # show proxy log tail
+/headroom logs clear            # clear proxy log
+/headroom cleanup               # clean expired local CCR store entries
+/headroom config show           # print effective runtime config
+/headroom config save           # persist current runtime config
+/headroom config reset          # reset runtime config to defaults
+```
+
+Native tools exposed by the extension:
+
+```text
+headroom_retrieve  # retrieve original compressed output by local hr_... hash, optional query
+headroom_stats     # inspect Pi-session savings and adapter state
+```
+
+Optional config lives at:
+
+```text
+~/.pi/agent/headroom/config.json
+```
+
+Default config highlights:
+
+```json
+{
+  "enabled": true,
+  "startup": "manual",
+  "proxyUrl": "http://127.0.0.1:8787",
+  "allowRemote": false,
+  "minChars": 500,
+  "storeTtlHours": 24,
+  "notifyFailures": "once"
+}
+```
+
+Remote Headroom proxies are blocked unless `allowRemote` is set to `true`; only enable that for a proxy you trust with tool output content.
+
+Run `/reload` after changing config.
+
+### Local Hindsight Memory adapter
+
+This repo includes a local Pi extension template at `pi/extensions/hindsight/`.
+
+- OMP-inspired local retain/recall, rulebook/TTSR portable subset, and autonomous `MEMORY.md` backend.
+- Commands: `/hindsight view|stats|diagnose|clear|rebuild|enqueue|recall <query>|memory enable|disable`; `/rules list|reload|show <name>`.
+- Tools: `hindsight_retain`, `hindsight_recall`, `hindsight_memory`, `hindsight_rule`.
+- Storage: `~/.pi/agent/hindsight/<project-key>/...`, `~/.pi/agent/rules/*.{md,mdc}`.
+- Limits: true OMP mid-token TTSR abort/rewind is fork-only; stock Pi approximates via `tool_result`, `tool_call`, and `input` hooks.
+
+Install globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
 ```
 
 ### Local goal loop command
@@ -626,85 +740,7 @@ ntn workers --help
 
 Run `/reload` or restart Pi after installing skills or changing environment variables.
 
-## 10. Agent memory (agentmemory)
-
-Persistent cross-session memory via [agentmemory](https://github.com/rohitg00/agentmemory). It captures what the agent does, compresses it into searchable memory, and injects relevant context when the next session starts. Shared across Pi, Claude Code, Codex CLI, Gemini CLI, Hermes, OpenClaw, and more.
-
-> **Prerequisite:** agentmemory requires the **iii-engine** runtime — a separate native binary (Rust) that runs as a background process. The `npx @agentmemory/agentmemory` wrapper will try to install/manage it automatically, but on some platforms you may need to install it manually.
->
-> **Pinned version:** agentmemory currently pins `iii-engine` to **v0.11.2** (v0.11.6+ introduces a sandbox model that agentmemory hasn't refactored for yet). Override with `AGENTMEMORY_III_VERSION=<version>` if needed.
->
-> **macOS manual install:**
->
-> ```bash
-> mkdir -p ~/.local/bin
-> curl -fsSL https://github.com/iii-hq/iii/releases/download/iii/v0.11.2/iii-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin
-> chmod +x ~/.local/bin/iii
-> ```
->
-> **Data directory:** The server stores its SQLite database (`data/state_store.db`) relative to its working directory. Start it from a dedicated location (e.g., `~/.agentmemory`) so it doesn't pollute random project directories:
->
-> ```bash
-> mkdir -p ~/.agentmemory && cd ~/.agentmemory
-> npx @agentmemory/agentmemory
-> ```
->
-> If a `data/` directory keeps appearing in an unwanted location, a zombie `iii` process is probably still running from there. Find it with `lsof -i :3111`, kill it, and restart from the correct directory.
-
-### Start the memory server
-
-In a separate terminal:
-
-```bash
-# Recommended: run from a dedicated directory
-cd ~/.agentmemory
-npx @agentmemory/agentmemory
-```
-
-The server runs on `http://localhost:3111` by default. Keep this terminal open while using Pi.
-
-### Install the Pi extension
-
-The integration files are copied to `~/.pi/agent/extensions/agentmemory/`. A project-local backup is also kept at `pi/extensions/agentmemory/` in this repo.
-
-Pi auto-discovers extensions placed in `~/.pi/agent/extensions/`. Do **not** also add the extension to the `packages` array in `settings.json` — that causes a double-load and tool name conflicts (`memory_health`, `memory_search`, `memory_save` will all fail to register).
-
-Run `/reload` or restart Pi after copying the files.
-
-> **Note:** Upstream `agentmemory` now ships `agentmemory connect` for automated agent wiring. The pi adapter is currently a stub, so manual copy-and-reload remains the recommended install path for now.
-
-### Environment variables
-
-| Variable                    | Default                 | Description                                                                          |
-| --------------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
-| `AGENTMEMORY_URL`           | `http://localhost:3111` | agentmemory server URL                                                               |
-| `AGENTMEMORY_SECRET`        | (none)                  | Bearer token for protected instances                                                 |
-| `AGENTMEMORY_REQUIRE_HTTPS` | (off)                   | Set to `1` to refuse sending bearer tokens over plaintext HTTP to non-loopback hosts |
-| `AGENTMEMORY_DEBUG`         | (off)                   | Set to `1` to trace MCP shim probe and standalone fallback decisions to stderr       |
-| `AGENTMEMORY_VIEWER_URL`    | (derived)               | Override the viewer URL printed by `agentmemory status`                              |
-| `AGENTMEMORY_EXPORT_ROOT`   | `~/agentmemory-backup`  | Default destination for `agentmemory export`                                         |
-
-Add any needed variables to your shell profile.
-
-### Verify
-
-Inside Pi:
-
-```text
-/reload
-/agentmemory-status
-```
-
-You should see `agentmemory healthy` and a footer status like `🧠 agentmemory`.
-
-Available tools/commands:
-
-- `memory_health` — confirm the memory server is reachable
-- `memory_search` — search prior decisions, bugs, workflows, and preferences
-- `memory_save` — write durable facts back to long-term memory
-- `/agentmemory-status` — quick health check from inside Pi
-
-## 11. Verify the setup
+## 10. Verify the setup
 
 Inside Pi:
 
@@ -735,14 +771,6 @@ Inside Pi, ask:
 Use the notion-cli skill to list Notion API endpoints.
 ```
 
-Test agentmemory:
-
-```text
-/agentmemory-status
-memory_save content="This project uses Express with TypeScript"
-memory_search query="Express TypeScript"
-```
-
 ## Troubleshooting
 
 | Problem                                       | Fix                                                                                                                                                                                                                                                                                    |
@@ -753,10 +781,6 @@ memory_search query="Express TypeScript"
 | Direct MCP tools do not appear                | Run `/mcp reconnect <server-name>` then `/reload`                                                                                                                                                                                                                                      |
 | Too many MCP tools in context                 | Remove `directTools: true` or set `directTools` to a small list of tool names                                                                                                                                                                                                          |
 | Skills do not trigger                         | Restart Pi or run `/reload`, then confirm the skill appears in the startup header                                                                                                                                                                                                      |
-| agentmemory not responding                    | Ensure `npx @agentmemory/agentmemory` is running and `AGENTMEMORY_URL` is correct                                                                                                                                                                                                      |
-| `/agentmemory-status` shows unhealthy         | Check the server terminal for errors; verify port 3111 is free                                                                                                                                                                                                                         |
-| `data/` directory keeps reappearing in a repo | A zombie `iii` process is running from that directory. `lsof -i :3111` to find it, `kill <pid>`, then restart from `~/.agentmemory`                                                                                                                                                    |
-| agentmemory won't start on Windows            | The Node.js package isn't enough — you need the `iii-engine` native binary. Download `iii-x86_64-pc-windows-msvc.zip` from the [iii-hq/iii releases v0.11.2](https://github.com/iii-hq/iii/releases/tag/iii%2Fv0.11.2) page, extract `iii.exe` to a directory on your PATH, then retry |
 
 ## Maintenance
 
