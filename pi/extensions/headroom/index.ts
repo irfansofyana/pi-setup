@@ -151,11 +151,45 @@ function notifyFailuresFrom(value: unknown, fallback: NotifyFailures): NotifyFai
   return value === "once" || value === "always" || value === "never" ? value : fallback;
 }
 
+export function hasSupportedProxyProtocol(rawUrl: string): boolean {
+  try {
+    const protocol = new URL(rawUrl).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function parseLocalProxyUrl(rawUrl: string): URL | undefined {
+  try {
+    const url = new URL(rawUrl);
+    if (hasSupportedProxyProtocol(rawUrl) && ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname)) return url;
+  } catch {}
+  return undefined;
+}
+
+function hostFromProxyUrl(url: URL): string {
+  return url.hostname === "[::1]" ? "::1" : url.hostname;
+}
+
+function portFromProxyUrl(url: URL): number | undefined {
+  if (url.port) return Number(url.port);
+  if (url.protocol === "http:") return 80;
+  if (url.protocol === "https:") return 443;
+  return undefined;
+}
+
 export function normalizeHeadroomConfig(raw: unknown): HeadroomConfig {
   const input = raw && typeof raw === "object" ? (raw as Partial<HeadroomConfig>) : {};
-  const port = clampNumber(input.port, DEFAULT_CONFIG.port, 1, 65_535);
-  const host = stringFrom(input.host, DEFAULT_CONFIG.host);
-  const proxyUrl = stringFrom(input.proxyUrl, `http://${host}:${port}`);
+  const explicitHost = typeof input.host === "string" && input.host.trim() ? input.host.trim() : undefined;
+  const explicitPort = typeof input.port === "number" && Number.isFinite(input.port)
+    ? clampNumber(input.port, DEFAULT_CONFIG.port, 1, 65_535)
+    : undefined;
+  const rawProxyUrl = stringFrom(input.proxyUrl, "");
+  const localProxyUrl = rawProxyUrl ? parseLocalProxyUrl(rawProxyUrl) : undefined;
+  const host = explicitHost ?? (localProxyUrl ? hostFromProxyUrl(localProxyUrl) : DEFAULT_CONFIG.host);
+  const port = explicitPort ?? (localProxyUrl ? portFromProxyUrl(localProxyUrl) ?? DEFAULT_CONFIG.port : DEFAULT_CONFIG.port);
+  const proxyUrl = rawProxyUrl || `http://${host}:${port}`;
   return {
     enabled: input.enabled !== false,
     startup: startupFrom(input.startup, DEFAULT_CONFIG.startup),
@@ -290,20 +324,30 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
 }
 
 export function isLocalProxyUrl(rawUrl: string): boolean {
-  try {
-    const url = new URL(rawUrl);
-    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
-  } catch {
-    return false;
-  }
+  return parseLocalProxyUrl(rawUrl) !== undefined;
+}
+
+export function initialRuntimeEnabled(config: Pick<HeadroomConfig, "enabled" | "startup">): boolean {
+  return config.enabled && config.startup === "auto";
 }
 
 export function isRemoteBlocked(config: Pick<HeadroomConfig, "proxyUrl" | "allowRemote">): boolean {
   return !config.allowRemote && !isLocalProxyUrl(config.proxyUrl);
 }
 
+export function enableRuntimeDecision(
+  config: Pick<HeadroomConfig, "startup">,
+  proxyHealthy: boolean,
+  owner: ProxyOwner,
+  managedProcessRunning = false,
+): { runtimeEnabled: boolean; owner: ProxyOwner; reason?: "startup-off" | "proxy-unavailable" } {
+  if (config.startup === "off") return { runtimeEnabled: false, owner, reason: "startup-off" };
+  if (!proxyHealthy) return { runtimeEnabled: false, owner: managedProcessRunning ? "managed" : "none", reason: "proxy-unavailable" };
+  return { runtimeEnabled: true, owner: owner === "none" ? (managedProcessRunning ? "managed" : "external") : owner };
+}
+
 async function health(config: HeadroomConfig): Promise<boolean> {
-  if (isRemoteBlocked(config)) return false;
+  if (!hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
   try {
     await fetchJson(`${config.proxyUrl}/health`, { method: "GET" }, 2_000);
     return true;
@@ -327,6 +371,7 @@ export function buildCompressRequest(text: string, toolName: string, model: stri
 }
 
 async function compressViaProxy(text: string, toolName: string, ctx: ExtensionContext, config: HeadroomConfig): Promise<CompressResult> {
+  if (!hasSupportedProxyProtocol(config.proxyUrl)) throw new Error("Headroom proxyUrl must use http or https.");
   if (isRemoteBlocked(config)) throw new Error("Headroom remote proxy blocked by allowRemote=false.");
   const body = buildCompressRequest(text, toolName, modelId(ctx));
   const json = (await fetchJson(
@@ -501,7 +546,7 @@ function clearLog(): void {
 export default function headroom(pi: ExtensionAPI) {
   ensureDirs();
   let config = readConfig();
-  let runtimeEnabled = config.enabled && config.startup !== "off";
+  let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
   let managedProcess: ChildProcess | undefined;
   let logStream: ReturnType<typeof createWriteStream> | undefined;
@@ -518,6 +563,13 @@ export default function headroom(pi: ExtensionAPI) {
 
   const startManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
     ensureDirs();
+    if (!hasSupportedProxyProtocol(config.proxyUrl)) {
+      owner = "none";
+      runtimeEnabled = false;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (ctx.hasUI) ctx.ui.notify(`Headroom proxyUrl must use http or https: ${config.proxyUrl}.`, "warning");
+      return;
+    }
     if (isRemoteBlocked(config)) {
       owner = "none";
       runtimeEnabled = false;
@@ -532,8 +584,17 @@ export default function headroom(pi: ExtensionAPI) {
       if (ctx.hasUI) ctx.ui.notify(`Headroom proxy already running (${owner}).`, "info");
       return;
     }
+    if (!isLocalProxyUrl(config.proxyUrl)) {
+      runtimeEnabled = false;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy unavailable: ${config.proxyUrl}.`, "warning");
+      return;
+    }
 
     if (!commandAvailable()) {
+      owner = "none";
+      runtimeEnabled = false;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify('Headroom CLI missing. Run /headroom doctor for install commands.', "error");
       return;
     }
@@ -565,6 +626,8 @@ export default function headroom(pi: ExtensionAPI) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
+    runtimeEnabled = false;
+    updateStatus(ctx, runtimeEnabled, owner, stats);
     notifyFailure(ctx, "Headroom proxy did not become healthy; bypassing compression.");
   };
 
@@ -750,16 +813,25 @@ export default function headroom(pi: ExtensionAPI) {
         return;
       }
       if (command === "enable") {
-        // ponytail: sync in-memory runtime config so shouldCompressToolResult's persisted-state guard
-        // passes for this session. enable is session-scoped; persist via /headroom config save.
-        config = {
-          ...config,
-          enabled: true,
-          startup: config.startup === "off" ? "manual" : config.startup,
-        };
-        runtimeEnabled = true;
-        if (await health(config)) owner = owner === "none" ? "external" : owner;
+        const proxyUrlSupported = hasSupportedProxyProtocol(config.proxyUrl);
+        const decision = enableRuntimeDecision(config, config.startup !== "off" && proxyUrlSupported && await health(config), owner, managedProcess !== undefined);
+        runtimeEnabled = decision.runtimeEnabled;
+        owner = decision.owner;
         updateStatus(ctx, runtimeEnabled, owner, stats);
+        if (decision.reason === "startup-off") {
+          ctx.ui.notify("Headroom startup is off. Change config startup before enabling compression.", "warning");
+          return;
+        }
+        if (decision.reason === "proxy-unavailable") {
+          ctx.ui.notify(
+            proxyUrlSupported
+              ? `Headroom proxy unavailable at ${config.proxyUrl}. Run /headroom start or start proxy before /headroom enable.`
+              : `Headroom proxyUrl must use http or https: ${config.proxyUrl}.`,
+            "warning",
+          );
+          return;
+        }
+        config = { ...config, enabled: true };
         ctx.ui.notify("Headroom compression enabled for this session.", "info");
         return;
       }
@@ -819,7 +891,7 @@ export default function headroom(pi: ExtensionAPI) {
         }
         if (value === "reset") {
           config = DEFAULT_CONFIG;
-          runtimeEnabled = config.enabled;
+          runtimeEnabled = initialRuntimeEnabled(config);
           updateStatus(ctx, runtimeEnabled, owner, stats);
           ctx.ui.notify("Headroom runtime config reset to defaults. Use /headroom config save to persist.", "info");
           return;

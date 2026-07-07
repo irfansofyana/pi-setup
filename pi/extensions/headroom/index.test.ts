@@ -6,7 +6,10 @@ import {
   buildCompressRequest,
   buildMarker,
   contentWithText,
+  enableRuntimeDecision,
   formatCount,
+  hasSupportedProxyProtocol,
+  initialRuntimeEnabled,
   initialStats,
   isRemoteBlocked,
   normalizeHeadroomConfig,
@@ -24,6 +27,64 @@ test("normalizeHeadroomConfig uses Headroom-like defaults", () => {
   assert.equal(normalizeHeadroomConfig({ minChars: -1 }).minChars, 1);
   assert.equal(normalizeHeadroomConfig({ startup: "auto" }).startup, "auto");
   assert.equal(normalizeHeadroomConfig({ notifyFailures: "always" }).notifyFailures, "always");
+});
+
+test("normalizeHeadroomConfig derives managed proxy bind from local proxyUrl", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "http://127.0.0.1:9999" });
+  assert.equal(config.host, "127.0.0.1");
+  assert.equal(config.port, 9999);
+});
+
+test("normalizeHeadroomConfig keeps explicit host and port over proxyUrl-derived bind", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "http://127.0.0.1:9999", host: "0.0.0.0", port: 7777 });
+  assert.equal(config.proxyUrl, "http://127.0.0.1:9999");
+  assert.equal(config.host, "0.0.0.0");
+  assert.equal(config.port, 7777);
+});
+
+test("normalizeHeadroomConfig does not derive managed bind from remote proxyUrl", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "https://example.com:9443" });
+  assert.equal(config.host, DEFAULT_CONFIG.host);
+  assert.equal(config.port, DEFAULT_CONFIG.port);
+  assert.equal(isRemoteBlocked(config), true);
+});
+
+test("normalizeHeadroomConfig does not derive managed bind from non-http local proxyUrl", () => {
+  const config = normalizeHeadroomConfig({ proxyUrl: "ftp://127.0.0.1:9999" });
+  assert.equal(config.host, DEFAULT_CONFIG.host);
+  assert.equal(config.port, DEFAULT_CONFIG.port);
+  assert.equal(hasSupportedProxyProtocol(config.proxyUrl), false);
+});
+
+test("initialRuntimeEnabled leaves manual startup off until explicit start or enable", () => {
+  assert.equal(initialRuntimeEnabled(DEFAULT_CONFIG), false);
+  assert.equal(initialRuntimeEnabled({ ...DEFAULT_CONFIG, startup: "auto" }), true);
+  assert.equal(initialRuntimeEnabled({ ...DEFAULT_CONFIG, startup: "off" }), false);
+  assert.equal(initialRuntimeEnabled({ ...DEFAULT_CONFIG, enabled: false, startup: "auto" }), false);
+});
+
+test("enableRuntimeDecision only enables after healthy proxy", () => {
+  assert.deepEqual(enableRuntimeDecision(DEFAULT_CONFIG, false, "none"), {
+    runtimeEnabled: false,
+    owner: "none",
+    reason: "proxy-unavailable",
+  });
+  assert.deepEqual(enableRuntimeDecision(DEFAULT_CONFIG, true, "none"), {
+    runtimeEnabled: true,
+    owner: "external",
+  });
+  assert.deepEqual(enableRuntimeDecision(DEFAULT_CONFIG, true, "none", true), {
+    runtimeEnabled: true,
+    owner: "managed",
+  });
+});
+
+test("enableRuntimeDecision keeps startup off disabled", () => {
+  assert.deepEqual(enableRuntimeDecision({ ...DEFAULT_CONFIG, startup: "off" }, true, "none"), {
+    runtimeEnabled: false,
+    owner: "none",
+    reason: "startup-off",
+  });
 });
 
 test("shouldCompressToolResult compresses all large non-excluded text", () => {
