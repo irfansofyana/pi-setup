@@ -415,6 +415,7 @@ function bucketsSummary(): string {
 
 export default function hindsight(pi: ExtensionAPI) {
   const retainQueue: Array<{ cwd: string; entry: MemoryEntry }> = [];
+  const skipAutoRetainAfterClear = new Set<string>();
   let retainTimer: ReturnType<typeof setTimeout> | undefined;
   let autoRecallInjected = false;
   const MAX_RETAIN_BATCH = 16;
@@ -442,6 +443,11 @@ export default function hindsight(pi: ExtensionAPI) {
       clearTimeout(retainTimer);
       retainTimer = undefined;
     }
+  }
+
+  function clearRuntimeMemory(cwd: string): void {
+    dropRetainQueue(cwd);
+    skipAutoRetainAfterClear.add(cwd);
   }
 
   function queueRetain(cwd: string, entry: MemoryEntry): void {
@@ -608,7 +614,7 @@ export default function hindsight(pi: ExtensionAPI) {
     description: "Manage hindsight memory + OMP-style rules",
     handler: async (args, ctx) => handleHindsightCommand(args, ctx, {
       beforeRecall: flushRetainQueue,
-      beforeClear: dropRetainQueue,
+      beforeClear: clearRuntimeMemory,
       rebuildMemory: async () => {
         const result = await rebuildAutonomousMemory(ctx);
         return `rebuilt memory: ${result.usedModel ? "model" : "deterministic fallback"}`;
@@ -703,6 +709,7 @@ export default function hindsight(pi: ExtensionAPI) {
     try {
       const projectRoot = ctx?.cwd || process.cwd();
       flushRetainQueue();
+      if (skipAutoRetainAfterClear.delete(projectRoot)) return;
       if (!configRef.autoRetain) return;
       const text = sessionTranscript(ctx);
       if (text) appendMemory(projectRoot, makeMemoryEntry(projectRoot, text, "session", "auto-retain"));

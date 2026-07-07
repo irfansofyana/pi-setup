@@ -490,7 +490,7 @@ test("handleHindsightCommand enqueue invokes callback and no-ops when unavailabl
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("hindsight clear drops queued retain entries before later flush", async () => {
+test("hindsight clear drops queued retain entries and skips shutdown auto-retain", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-clear-"));
   const tools: Record<string, any> = {};
   const commands: Record<string, any> = {};
@@ -503,7 +503,10 @@ test("hindsight clear drops queued retain entries before later flush", async () 
 
   await tools.hindsight_retain.execute("retain", { text: "cleared queued memory", category: "test" }, undefined, undefined, { cwd });
   await commands.hindsight.handler("clear", { cwd, ui: { notify() {} } });
-  await handlers.session_shutdown({}, { cwd });
+  await handlers.session_shutdown({}, {
+    cwd,
+    sessionManager: { getEntries: () => [{ role: "user", content: "do not recreate cleared memory" }] },
+  });
 
   assert.equal(existsSync(memoriesPath(cwd)), false);
   rmSync(projectDir(cwd), { recursive: true, force: true });

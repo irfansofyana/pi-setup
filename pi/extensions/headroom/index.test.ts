@@ -131,6 +131,7 @@ test("contentWithText replaces joined text without leaking later text blocks", (
 
 test("buildCompressRequest sends tool-role content so Headroom can compress it", () => {
   const payload = buildCompressRequest("large output", "mcp", "gpt-4o");
+  assert.equal(payload.protect_recent, 0);
   assert.equal(payload.messages[0].role, "tool");
   assert.equal(payload.messages[0].tool_call_id, "call_headroom_tool_output");
   assert.match(payload.messages[0].content, /^Tool output from mcp:/);

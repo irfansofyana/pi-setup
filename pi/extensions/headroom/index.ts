@@ -364,6 +364,7 @@ export function buildCompressRequest(text: string, toolName: string, model: stri
   const prefix = `Tool output from ${toolName}:\n\n`;
   return {
     model,
+    protect_recent: 0,
     messages: [
       { role: "tool", tool_call_id: "call_headroom_tool_output", content: `${prefix}${text}` },
     ],
