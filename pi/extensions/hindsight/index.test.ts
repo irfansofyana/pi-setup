@@ -31,6 +31,7 @@ import {
 import { buildRuleFromMarkdown, builtinDefaultRules, discoverRules, parseFrontmatter, splitBuckets } from "./rules.ts";
 import hindsight, {
   handleHindsightCommand,
+  rebuildAutonomousMemory,
   markRuleInjected,
   promptBlocks,
   matchesRule,
@@ -337,6 +338,7 @@ test("projectDir avoids basename collisions while preserving readable prefix", (
 test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes", () => {
   const out = redactSecrets([
     "key is sk-abcdefghijklmnopqrstuvwxyz",
+    "project key sk-proj-abcdefghijklmnopqrstuvwxyz_123456789",
     "Authorization: Bearer xyz1234567890",
     "OPENAI_API_KEY=openaisecret12345",
     "GITHUB_TOKEN=githubsecret12345",
@@ -347,7 +349,7 @@ test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes",
     "AKIA1234567890ABCDEF",
   ].join("\n"));
   assert.ok(out.includes("[REDACTED]"));
-  for (const secret of ["sk-abcdefghijklmnopqrstuvwxyz", "xyz1234567890", "openaisecret12345", "githubsecret12345", "dbsecret12345", "ghp_", "github_pat_", "xoxb-", "AKIA1234567890ABCDEF"]) {
+  for (const secret of ["sk-abcdefghijklmnopqrstuvwxyz", "sk-proj-abcdefghijklmnopqrstuvwxyz_123456789", "xyz1234567890", "openaisecret12345", "githubsecret12345", "dbsecret12345", "ghp_", "github_pat_", "xoxb-", "AKIA1234567890ABCDEF"]) {
     assert.ok(!out.includes(secret));
   }
 });
@@ -489,6 +491,20 @@ test("handleHindsightCommand enqueue invokes callback and no-ops when unavailabl
   assert.ok(captured.includes("queued"));
   await assert.doesNotReject(handleHindsightCommand("enqueue", ctx));
   assert.ok(captured.includes("unavailable"));
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("hindsight clear suppresses in-flight memory rebuild artifact writes", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-clear-"));
+  appendMemory(cwd, makeMemoryEntry(cwd, "durable fact", "general", "retain"));
+
+  const pending = rebuildAutonomousMemory({ cwd });
+  await handleHindsightCommand("clear", { cwd, ui: { notify() {} } });
+  await pending;
+
+  assert.equal(existsSync(memoryDocPath(cwd)), false);
+  assert.equal(existsSync(memorySummaryPath(cwd)), false);
+  rmSync(projectDir(cwd), { recursive: true, force: true });
   rmSync(cwd, { recursive: true, force: true });
 });
 

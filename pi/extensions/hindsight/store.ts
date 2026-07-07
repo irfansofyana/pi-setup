@@ -84,7 +84,20 @@ export function writeMemoryArtifacts(cwd: string, memoryDoc: string, summary: st
   writeFileSync(memorySummaryPath(cwd, rootDir), redactSecrets(summary), "utf8");
 }
 
+const clearGenerations = new Map<string, number>();
+
+export function memoryClearGeneration(cwd: string, rootDir: string = HINDSIGHT_DIR): number {
+  return clearGenerations.get(projectDir(cwd, rootDir)) ?? 0;
+}
+
+export function writeMemoryArtifactsIfCurrent(cwd: string, memoryDoc: string, summary: string, generation: number, rootDir: string = HINDSIGHT_DIR): boolean {
+  if (memoryClearGeneration(cwd, rootDir) !== generation) return false;
+  writeMemoryArtifacts(cwd, memoryDoc, summary, rootDir);
+  return true;
+}
+
 export function clearMemories(cwd: string, rootDir: string = HINDSIGHT_DIR): void {
+  clearGenerations.set(projectDir(cwd, rootDir), memoryClearGeneration(cwd, rootDir) + 1);
   for (const path of [memoriesPath(cwd, rootDir), memoryDocPath(cwd, rootDir), memorySummaryPath(cwd, rootDir)]) {
     if (existsSync(path)) unlinkSync(path);
   }
@@ -123,7 +136,7 @@ export function jaccard(a: string, b: string): number {
 
 const SECRET_PATTERNS = [
   /\b[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\b\s*[:=]\s*["']?[^"'\s]{4,}/gi,
-  /\b(sk-[A-Za-z0-9]{20,})\b/g,
+  /\b(sk-[A-Za-z0-9_-]{20,})\b/g,
   /\b(ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xoxb-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/g,
   /\b(api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*["']?[^"'\s]{8,}/gi,
   /\bBearer\s+[A-Za-z0-9._-]{8,}\b/gi,

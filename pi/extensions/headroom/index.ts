@@ -346,6 +346,10 @@ export function enableRuntimeDecision(
   return { runtimeEnabled: true, owner: owner === "none" ? (managedProcessRunning ? "managed" : "external") : owner };
 }
 
+export function canStartRuntime(config: Pick<HeadroomConfig, "startup">): boolean {
+  return config.startup !== "off";
+}
+
 async function health(config: HeadroomConfig): Promise<boolean> {
   if (!hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
   try {
@@ -516,6 +520,27 @@ function appendMarker(text: string, marker: string): string {
   return `${text.trimEnd()}\n\n${marker}`;
 }
 
+export function headroomFailureText(config: Pick<HeadroomConfig, "fallbackToOriginal">, reason: string): string | undefined {
+  if (config.fallbackToOriginal) return undefined;
+  return `[Headroom: ${reason} Original tool output suppressed because fallbackToOriginal=false.]`;
+}
+
+function headroomFailureResult(
+  event: { content: Array<{ type: string; text?: string; [key: string]: unknown }>; details?: unknown },
+  config: Pick<HeadroomConfig, "fallbackToOriginal">,
+  reason: string,
+) {
+  const text = headroomFailureText(config, reason);
+  if (!text) return undefined;
+  return {
+    content: contentWithText(event.content, text),
+    details: {
+      ...(event.details && typeof event.details === "object" ? event.details : {}),
+      headroom: { failed: true, reason, originalSuppressed: true },
+    },
+  };
+}
+
 function commandAvailable(): boolean {
   try {
     execFileSync("headroom", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
@@ -564,6 +589,12 @@ export default function headroom(pi: ExtensionAPI) {
 
   const startManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
     ensureDirs();
+    if (!canStartRuntime(config)) {
+      runtimeEnabled = false;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (ctx.hasUI) ctx.ui.notify("Headroom startup is off. Change config startup before starting compression.", "warning");
+      return;
+    }
     if (!hasSupportedProxyProtocol(config.proxyUrl)) {
       owner = "none";
       runtimeEnabled = false;
@@ -697,7 +728,7 @@ export default function headroom(pi: ExtensionAPI) {
 
     if (!(await health(runConfig))) {
       notifyFailure(ctx, "Headroom proxy unavailable; bypassing compression.");
-      return;
+      return headroomFailureResult(event as any, runConfig, "proxy unavailable.");
     }
     if (owner === "none") owner = "external";
 
@@ -705,8 +736,8 @@ export default function headroom(pi: ExtensionAPI) {
     try {
       result = await compressViaProxy(text, event.toolName, ctx, runConfig);
     } catch (error) {
-      notifyFailure(ctx, `Headroom compression failed; bypassing original output. ${error instanceof Error ? error.message : ""}`.trim());
-      return;
+      notifyFailure(ctx, `Headroom compression failed; bypassing compression. ${error instanceof Error ? error.message : ""}`.trim());
+      return headroomFailureResult(event as any, runConfig, "compression failed.");
     }
 
     if (!result.compressedText || result.compressedText.trim() === text.trim() || (result.tokensSaved <= 0 && result.compressedText.length >= text.length)) {
@@ -715,7 +746,7 @@ export default function headroom(pi: ExtensionAPI) {
     }
 
     try {
-      // ponytail: store failure bypasses compression, original output returned unchanged
+      // ponytail: store failure returns original unless fallbackToOriginal=false suppresses it
       const hash = makeHash();
       const now = new Date();
       const expires = new Date(now.getTime() + runConfig.storeTtlHours * 60 * 60 * 1000);
@@ -758,9 +789,9 @@ export default function headroom(pi: ExtensionAPI) {
         },
       };
     } catch (error) {
-      notifyFailure(ctx, `Headroom post-compress store failed; bypassing original output. ${error instanceof Error ? error.message : ""}`.trim());
+      notifyFailure(ctx, `Headroom post-compress store failed; bypassing compression. ${error instanceof Error ? error.message : ""}`.trim());
       stats.bypasses++;
-      return;
+      return headroomFailureResult(event as any, runConfig, "local store failed.");
     }
   });
 

@@ -5,10 +5,12 @@ import {
   DEFAULT_CONFIG,
   buildCompressRequest,
   buildMarker,
+  canStartRuntime,
   contentWithText,
   enableRuntimeDecision,
   formatCount,
   hasSupportedProxyProtocol,
+  headroomFailureText,
   initialRuntimeEnabled,
   initialStats,
   isRemoteBlocked,
@@ -87,6 +89,11 @@ test("enableRuntimeDecision keeps startup off disabled", () => {
   });
 });
 
+test("start runtime refuses startup off", () => {
+  assert.equal(canStartRuntime({ ...DEFAULT_CONFIG, startup: "manual" }), true);
+  assert.equal(canStartRuntime({ ...DEFAULT_CONFIG, startup: "off" }), false);
+});
+
 test("shouldCompressToolResult compresses all large non-excluded text", () => {
   const text = "x".repeat(DEFAULT_CONFIG.minChars);
   assert.equal(shouldCompressToolResult("bash", {}, text, DEFAULT_CONFIG), true);
@@ -116,6 +123,14 @@ test("truncateText caps retrieval bytes", () => {
   const result = truncateText("a".repeat(2000), 1000);
   assert.ok(result.length < 1200);
   assert.match(result, /retrieval truncated/);
+});
+
+test("headroomFailureText suppresses original only when fallback is disabled", () => {
+  assert.equal(headroomFailureText({ fallbackToOriginal: true }, "proxy unavailable."), undefined);
+  assert.equal(
+    headroomFailureText({ fallbackToOriginal: false }, "proxy unavailable."),
+    "[Headroom: proxy unavailable. Original tool output suppressed because fallbackToOriginal=false.]",
+  );
 });
 
 test("contentWithText replaces joined text without leaking later text blocks", () => {

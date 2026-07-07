@@ -11,6 +11,7 @@ import {
   makeMemoryEntry,
   memoriesPath,
   memoryDocPath,
+  memoryClearGeneration,
   memoryGuidanceBlock,
   memorySourceText,
   memorySummaryBlock,
@@ -19,6 +20,7 @@ import {
   readTextFile,
   skillsDir,
   writeMemoryArtifacts,
+  writeMemoryArtifactsIfCurrent,
   formatMemoryBlock,
   projectBasename,
   projectDir,
@@ -50,6 +52,7 @@ export {
   makeMemoryEntry,
   memoriesPath,
   memoryDocPath,
+  memoryClearGeneration,
   memoryGuidanceBlock,
   memorySourceText,
   memorySummaryBlock,
@@ -58,6 +61,7 @@ export {
   readTextFile,
   skillsDir,
   writeMemoryArtifacts,
+  writeMemoryArtifactsIfCurrent,
   formatMemoryBlock,
   parseFrontmatter,
   projectBasename,
@@ -190,10 +194,11 @@ function extractMarked(text: string, marker: string): string | undefined {
 
 export async function rebuildAutonomousMemory(ctx: any): Promise<{ usedModel: boolean; memoryDoc: string; summary: string }> {
   const projectRoot = ctx?.cwd || process.cwd();
+  const generation = memoryClearGeneration(projectRoot);
   const source = memorySourceText(projectRoot);
   if (!source) {
     const empty = { usedModel: false, memoryDoc: "# MEMORY\n\nNo retained memories yet.", summary: "No retained memories yet." };
-    writeMemoryArtifacts(projectRoot, empty.memoryDoc, empty.summary);
+    writeMemoryArtifactsIfCurrent(projectRoot, empty.memoryDoc, empty.summary, generation);
     return empty;
   }
 
@@ -208,7 +213,7 @@ export async function rebuildAutonomousMemory(ctx: any): Promise<{ usedModel: bo
     const memoryDoc = await completeWithModel(ctx, ["Write MEMORY.md from this durable knowledge. Use concise markdown.", extracted].join("\n\n"), 4096);
     const summary = await completeWithModel(ctx, ["Write compact memory_summary.md for session-start injection. Include only high-signal bullets.", memoryDoc || extracted].join("\n\n"), 1024);
     if (memoryDoc && summary) {
-      writeMemoryArtifacts(projectRoot, memoryDoc, summary);
+      writeMemoryArtifactsIfCurrent(projectRoot, memoryDoc, summary, generation);
       return { usedModel: true, memoryDoc, summary };
     }
     const combined = await completeWithModel(
@@ -226,13 +231,13 @@ export async function rebuildAutonomousMemory(ctx: any): Promise<{ usedModel: bo
     const markedMemory = combined ? extractMarked(combined, "---MEMORY_MD---") : undefined;
     const markedSummary = combined ? extractMarked(combined, "---SUMMARY_MD---") : undefined;
     if (markedMemory && markedSummary) {
-      writeMemoryArtifacts(projectRoot, markedMemory, markedSummary);
+      writeMemoryArtifactsIfCurrent(projectRoot, markedMemory, markedSummary, generation);
       return { usedModel: true, memoryDoc: markedMemory, summary: markedSummary };
     }
   }
 
   const fallback = deterministicMemory(projectRoot);
-  writeMemoryArtifacts(projectRoot, fallback.memoryDoc, fallback.summary);
+  writeMemoryArtifactsIfCurrent(projectRoot, fallback.memoryDoc, fallback.summary, generation);
   return { usedModel: false, ...fallback };
 }
 
