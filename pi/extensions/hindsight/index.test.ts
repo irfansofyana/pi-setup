@@ -352,13 +352,15 @@ test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes",
   }
 });
 
-test("searchMemories returns relevant memories and newest on blank query", () => {
+test("searchMemories returns relevant memories and keeps newest duplicate", () => {
   const root = tempRoot();
   const cwd = "/x/search-proj";
   const old = { ...makeMemoryEntry(cwd, "use mocha for tests", "testing", "retain"), createdAt: "2024-01-01T00:00:00.000Z" };
-  const relevant = { ...makeMemoryEntry(cwd, "prefer tsx node:test for hindsight", "testing", "retain"), createdAt: "2024-02-01T00:00:00.000Z" };
+  const staleRelevant = { ...makeMemoryEntry(cwd, "prefer tsx node:test for hindsight", "testing", "retain"), createdAt: "2024-02-01T00:00:00.000Z" };
+  const relevant = { ...makeMemoryEntry(cwd, "prefer tsx node:test for hindsight now", "testing", "retain"), createdAt: "2024-02-15T00:00:00.000Z" };
   const newest = { ...makeMemoryEntry(cwd, "deploy notes", "ops", "retain"), createdAt: "2024-03-01T00:00:00.000Z" };
   appendMemory(cwd, old, root);
+  appendMemory(cwd, staleRelevant, root);
   appendMemory(cwd, relevant, root);
   appendMemory(cwd, newest, root);
 
@@ -559,12 +561,17 @@ test("handleHindsightCommand recall flushes before search", () => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("handleHindsightCommand rebuild reports failures without rejecting", async () => {
+test("handleHindsightCommand rebuild flushes before rebuilding and reports failures", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-cmd-"));
   let captured = "";
   let kind = "";
+  let flushed = false;
   const ctx = { cwd, hasUI: true, ui: { notify: (msg: string, notifyKind: string) => { captured = msg; kind = notifyKind; } } };
-  await assert.doesNotReject(handleHindsightCommand("rebuild", ctx, { rebuildMemory: async () => { throw new Error("disk full"); } }));
+  await assert.doesNotReject(handleHindsightCommand("rebuild", ctx, {
+    beforeRebuild: () => { flushed = true; },
+    rebuildMemory: async () => { throw new Error("disk full"); },
+  }));
+  assert.equal(flushed, true);
   assert.equal(kind, "warning");
   assert.ok(captured.includes("memory rebuild failed: disk full"));
   rmSync(cwd, { recursive: true, force: true });

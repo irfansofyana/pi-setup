@@ -101,6 +101,7 @@ test("secret-looking args or output bypass compression", () => {
   assert.equal(shouldCompressToolResult("read", { path: ".env" }, text, DEFAULT_CONFIG), false);
   assert.equal(outputLooksSensitive("Authorization: Bearer abc.def.ghi"), true);
   assert.equal(outputLooksSensitive("normal build log"), false);
+  assert.equal(outputLooksSensitive("sk-proj-abcdefghijklmnopqrstuvwxyz_123456"), true);
   assert.equal(shouldCompressToolResult("bash", {}, "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz", DEFAULT_CONFIG), false);
 });
 

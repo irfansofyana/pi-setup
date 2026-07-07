@@ -266,7 +266,7 @@ const Schema = {
 export async function handleHindsightCommand(
   args: string,
   ctx: { cwd?: string; ui: { notify: (msg: string, kind: string) => void } },
-  options: { beforeRecall?: () => void; beforeClear?: (cwd: string) => void; rebuildMemory?: () => Promise<string>; enqueueMemory?: () => void } = {},
+  options: { beforeRecall?: () => void; beforeClear?: (cwd: string) => void; beforeRebuild?: () => void; rebuildMemory?: () => Promise<string>; enqueueMemory?: () => void } = {},
 ): Promise<void> {
   const projectRoot = ctx.cwd || process.cwd();
   const trimmed = args.trim();
@@ -318,6 +318,7 @@ export async function handleHindsightCommand(
   }
   if (command === "rebuild") {
     try {
+      options.beforeRebuild?.();
       refreshRules(ctx.cwd || process.cwd());
       const memory = options.rebuildMemory ? await options.rebuildMemory() : "memory rebuild unavailable";
       ctx.ui.notify(`rebuilt rules: ${ruleCacheRef.length}\n${memory}`, "info");
@@ -615,6 +616,7 @@ export default function hindsight(pi: ExtensionAPI) {
     handler: async (args, ctx) => handleHindsightCommand(args, ctx, {
       beforeRecall: flushRetainQueue,
       beforeClear: clearRuntimeMemory,
+      beforeRebuild: flushRetainQueue,
       rebuildMemory: async () => {
         const result = await rebuildAutonomousMemory(ctx);
         return `rebuilt memory: ${result.usedModel ? "model" : "deterministic fallback"}`;

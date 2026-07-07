@@ -145,7 +145,7 @@ export function dedupMemories(entries: MemoryEntry[], threshold = 0.8): MemoryEn
 }
 
 export function searchMemories(cwd: string, query: string, limit = 5, rootDir: string = HINDSIGHT_DIR): MemoryEntry[] {
-  const memories = dedupMemories(loadMemories(cwd, rootDir));
+  const memories = dedupMemories(loadMemories(cwd, rootDir).slice().sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)));
   const max = Math.max(0, limit || 5);
   if (max === 0) return [];
   const q = query.trim();

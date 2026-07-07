@@ -296,7 +296,7 @@ export function outputLooksSensitive(text: string): boolean {
     /\bgithub_pat_[A-Za-z0-9_]+\b/,
     /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
     /\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i,
-    /\b(sk-[A-Za-z0-9]{20,})\b/,
+    /\bsk-[A-Za-z0-9_-]{20,}\b/,
     /\b(api[_-]?key|token|secret|password)\b\s*[:=]\s*["']?[^"'\s]{8,}/i,
   ];
   return patterns.some((pattern) => pattern.test(text));
@@ -627,7 +627,14 @@ export default function headroom(pi: ExtensionAPI) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
+    if (managedProcess) {
+      managedProcess.kill("SIGTERM");
+      managedProcess = undefined;
+    }
+    owner = "none";
     runtimeEnabled = false;
+    try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+    if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
     updateStatus(ctx, runtimeEnabled, owner, stats);
     notifyFailure(ctx, "Headroom proxy did not become healthy; bypassing compression.");
   };
