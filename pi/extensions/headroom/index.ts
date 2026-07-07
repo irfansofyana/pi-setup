@@ -311,16 +311,57 @@ export function shouldCompressToolResult(toolName: string, input: unknown, text:
   return true;
 }
 
+class HttpStatusError extends Error {
+  status: number;
+
+  constructor(status: number) {
+    super(`HTTP ${status}`);
+    this.status = status;
+  }
+}
+
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new HttpStatusError(response.status);
     return await response.json();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function statusReady(status: string): boolean | undefined {
+  const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["healthy", "ready", "ok", "up"].includes(normalized)) return true;
+  if (["unhealthy", "not_ready", "starting", "initializing", "down", "error"].includes(normalized)) return false;
+  return undefined;
+}
+
+export function headroomReadyFromPayload(payload: unknown): boolean | undefined {
+  if (!isRecord(payload)) return undefined;
+  if (typeof payload.ready === "boolean") return payload.ready;
+  if (typeof payload.status === "string") {
+    const ready = statusReady(payload.status);
+    if (ready !== undefined) return ready;
+  }
+  if (isRecord(payload.checks)) {
+    const checkReadiness = Object.values(payload.checks)
+      .map((check) => isRecord(check) && typeof check.ready === "boolean" ? check.ready : undefined)
+      .filter((ready): ready is boolean => typeof ready === "boolean");
+    if (checkReadiness.length > 0) return checkReadiness.every(Boolean);
+  }
+  return undefined;
+}
+
+async function endpointReady(url: string, timeoutMs: number): Promise<boolean> {
+  const payload = await fetchJson(url, { method: "GET" }, timeoutMs);
+  return headroomReadyFromPayload(payload) ?? true;
 }
 
 export function isLocalProxyUrl(rawUrl: string): boolean {
@@ -350,11 +391,16 @@ export function canStartRuntime(config: Pick<HeadroomConfig, "startup">): boolea
   return config.startup !== "off";
 }
 
-async function health(config: HeadroomConfig): Promise<boolean> {
+export async function health(config: HeadroomConfig): Promise<boolean> {
   if (!hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
   try {
-    await fetchJson(`${config.proxyUrl}/health`, { method: "GET" }, 2_000);
-    return true;
+    return await endpointReady(`${config.proxyUrl}/readyz`, 2_000);
+  } catch (error) {
+    if (!(error instanceof HttpStatusError) || (error.status !== 404 && error.status !== 405)) return false;
+  }
+
+  try {
+    return await endpointReady(`${config.proxyUrl}/health`, 2_000);
   } catch {
     return false;
   }

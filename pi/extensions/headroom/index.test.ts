@@ -12,6 +12,8 @@ import {
   formatCount,
   hasSupportedProxyProtocol,
   headroomFailureText,
+  headroomReadyFromPayload,
+  health,
   initialRuntimeEnabled,
   initialStats,
   isRemoteBlocked,
@@ -171,6 +173,67 @@ test("remote proxy is blocked unless explicitly allowed", () => {
   assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com" }), true);
   assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com", allowRemote: true }), false);
   assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "http://127.0.0.1:8787" }), false);
+});
+
+test("headroomReadyFromPayload parses readiness fields", () => {
+  assert.equal(headroomReadyFromPayload({ ready: true, status: "unhealthy" }), true);
+  assert.equal(headroomReadyFromPayload({ ready: false, status: "healthy" }), false);
+  assert.equal(headroomReadyFromPayload({ status: "healthy" }), true);
+  assert.equal(headroomReadyFromPayload({ status: "not-ready" }), false);
+  assert.equal(headroomReadyFromPayload({ checks: { upstream: { ready: true }, backend: { ready: false } } }), false);
+  assert.equal(headroomReadyFromPayload({ service: "headroom-proxy" }), undefined);
+});
+
+test("health does not adopt reachable but unready proxy", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith("/readyz")) {
+      return new Response(JSON.stringify({ service: "headroom-proxy", status: "unhealthy", ready: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await health(DEFAULT_CONFIG), false);
+    assert.deepEqual(calls, [`${DEFAULT_CONFIG.proxyUrl}/readyz`]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("health falls back to /health readiness payload when /readyz is missing", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith("/readyz")) {
+      return new Response(JSON.stringify({ detail: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/health")) {
+      return new Response(JSON.stringify({ service: "headroom-proxy", status: "unhealthy", ready: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    assert.equal(await health(DEFAULT_CONFIG), false);
+    assert.deepEqual(calls, [`${DEFAULT_CONFIG.proxyUrl}/readyz`, `${DEFAULT_CONFIG.proxyUrl}/health`]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("buildMarker advertises native retrieve tool", () => {
