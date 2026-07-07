@@ -266,7 +266,7 @@ const Schema = {
 export async function handleHindsightCommand(
   args: string,
   ctx: { cwd?: string; ui: { notify: (msg: string, kind: string) => void } },
-  options: { beforeRecall?: () => void; rebuildMemory?: () => Promise<string>; enqueueMemory?: () => void } = {},
+  options: { beforeRecall?: () => void; beforeClear?: (cwd: string) => void; rebuildMemory?: () => Promise<string>; enqueueMemory?: () => void } = {},
 ): Promise<void> {
   const projectRoot = ctx.cwd || process.cwd();
   const trimmed = args.trim();
@@ -311,6 +311,7 @@ export async function handleHindsightCommand(
     return;
   }
   if (command === "clear") {
+    options.beforeClear?.(projectRoot);
     clearMemories(projectRoot);
     ctx.ui.notify("hindsight memories cleared.", "info");
     return;
@@ -430,6 +431,16 @@ export default function hindsight(pi: ExtensionAPI) {
       } catch {
         // shutdown/hooks must never throw
       }
+    }
+  }
+
+  function dropRetainQueue(cwd: string): void {
+    for (let i = retainQueue.length - 1; i >= 0; i--) {
+      if (retainQueue[i]?.cwd === cwd) retainQueue.splice(i, 1);
+    }
+    if (retainQueue.length === 0 && retainTimer) {
+      clearTimeout(retainTimer);
+      retainTimer = undefined;
     }
   }
 
@@ -597,6 +608,7 @@ export default function hindsight(pi: ExtensionAPI) {
     description: "Manage hindsight memory + OMP-style rules",
     handler: async (args, ctx) => handleHindsightCommand(args, ctx, {
       beforeRecall: flushRetainQueue,
+      beforeClear: dropRetainQueue,
       rebuildMemory: async () => {
         const result = await rebuildAutonomousMemory(ctx);
         return `rebuilt memory: ${result.usedModel ? "model" : "deterministic fallback"}`;

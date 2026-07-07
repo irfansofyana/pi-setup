@@ -490,6 +490,26 @@ test("handleHindsightCommand enqueue invokes callback and no-ops when unavailabl
   rmSync(cwd, { recursive: true, force: true });
 });
 
+test("hindsight clear drops queued retain entries before later flush", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-clear-"));
+  const tools: Record<string, any> = {};
+  const commands: Record<string, any> = {};
+  const handlers: Record<string, Function> = {};
+  hindsight({
+    registerTool(tool: any) { tools[tool.name] = tool; },
+    registerCommand(name: string, command: any) { commands[name] = command; },
+    on(name: string, handler: Function) { handlers[name] = handler; },
+  } as any);
+
+  await tools.hindsight_retain.execute("retain", { text: "cleared queued memory", category: "test" }, undefined, undefined, { cwd });
+  await commands.hindsight.handler("clear", { cwd, ui: { notify() {} } });
+  await handlers.session_shutdown({}, { cwd });
+
+  assert.equal(existsSync(memoriesPath(cwd)), false);
+  rmSync(projectDir(cwd), { recursive: true, force: true });
+  rmSync(cwd, { recursive: true, force: true });
+});
+
 test("portable TTSR tool_result prepends first matching rule reminder", async () => {
   const cwd = tempRoot();
   mkdirSync(join(cwd, ".cursor", "rules"), { recursive: true });
