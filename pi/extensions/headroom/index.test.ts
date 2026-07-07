@@ -5,6 +5,7 @@ import {
   DEFAULT_CONFIG,
   buildCompressRequest,
   buildMarker,
+  canRetainOriginal,
   canStartRuntime,
   contentWithText,
   enableRuntimeDecision,
@@ -21,6 +22,7 @@ import {
   shouldCompressToolResult,
   statusText,
   truncateText,
+  type StoredOriginal,
 } from "./index.ts";
 
 test("normalizeHeadroomConfig uses Headroom-like defaults", () => {
@@ -123,6 +125,18 @@ test("truncateText caps retrieval bytes", () => {
   const result = truncateText("a".repeat(2000), 1000);
   assert.ok(result.length < 1200);
   assert.match(result, /retrieval truncated/);
+});
+
+test("canRetainOriginal rejects entries larger than store byte cap", () => {
+  const entry: StoredOriginal = {
+    hash: "hr_big",
+    toolName: "bash",
+    createdAt: new Date(0).toISOString(),
+    expiresAt: new Date(Date.now() + 1000).toISOString(),
+    originalContent: "x".repeat(2000),
+  };
+  assert.equal(canRetainOriginal(entry, { storeMaxBytes: 1024, storeMaxEntries: 1 }), false);
+  assert.equal(canRetainOriginal(entry, { storeMaxBytes: 10_000, storeMaxEntries: 1 }), true);
 });
 
 test("headroomFailureText suppresses original only when fallback is disabled", () => {

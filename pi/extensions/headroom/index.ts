@@ -50,7 +50,7 @@ export interface SessionStats {
   charsAfter: number;
 }
 
-interface StoredOriginal {
+export interface StoredOriginal {
   hash: string;
   toolName: string;
   createdAt: string;
@@ -414,6 +414,14 @@ function storePath(hash: string): string {
   return join(STORE_DIR, `${basename(hash)}.json`);
 }
 
+export function storedOriginalBytes(entry: StoredOriginal): number {
+  return Buffer.byteLength(`${JSON.stringify(entry)}\n`, "utf8");
+}
+
+export function canRetainOriginal(entry: StoredOriginal, config: Pick<HeadroomConfig, "storeMaxBytes" | "storeMaxEntries">): boolean {
+  return config.storeMaxEntries > 0 && storedOriginalBytes(entry) <= config.storeMaxBytes;
+}
+
 function saveOriginal(entry: StoredOriginal): void {
   ensureDirs();
   writeFileSync(storePath(entry.hash), `${JSON.stringify(entry)}\n`, "utf8");
@@ -750,7 +758,7 @@ export default function headroom(pi: ExtensionAPI) {
       const hash = makeHash();
       const now = new Date();
       const expires = new Date(now.getTime() + runConfig.storeTtlHours * 60 * 60 * 1000);
-      saveOriginal({
+      const entry: StoredOriginal = {
         hash,
         toolName: event.toolName,
         createdAt: now.toISOString(),
@@ -762,8 +770,11 @@ export default function headroom(pi: ExtensionAPI) {
         tokensSaved: result.tokensSaved,
         transforms: result.transforms,
         proxyCcrHashes: result.proxyCcrHashes,
-      });
+      };
+      if (!canRetainOriginal(entry, runConfig)) throw new Error("stored original exceeds retention limits");
+      saveOriginal(entry);
       cleanupStore(runConfig);
+      if (!loadOriginal(hash)) throw new Error("stored original was removed by retention limits");
 
       stats.compressions++;
       stats.tokensBefore += result.tokensBefore;
