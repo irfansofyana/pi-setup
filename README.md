@@ -223,7 +223,26 @@ uvx hindsight-embed@latest configure
 uvx hindsight-embed daemon status
 ```
 
-Defaults: `HINDSIGHT_API_URL=http://127.0.0.1:8888`, `HINDSIGHT_BANK_ID=pi`, `HINDSIGHT_SCOPING=per-project-tagged`.
+For a named profile such as `pi-litellm`, register it and point Pi clients at the profile port through extension config:
+
+```bash
+hindsight-embed profile create pi-litellm --port 9478 --merge
+hindsight-embed profile set-active pi-litellm
+hindsight-embed -p pi-litellm daemon status
+
+mkdir -p ~/.pi/agent/hindsight
+cat > ~/.pi/agent/hindsight/config.json <<'JSON'
+{
+  "apiUrl": "http://127.0.0.1:9478",
+  "bankId": "pi",
+  "scoping": "per-project-tagged"
+}
+JSON
+```
+
+`HINDSIGHT_EMBED_PROFILE` selects the `hindsight-embed` profile; `~/.pi/agent/hindsight/config.json` is what the Pi extension reads when the Pi process does not inherit shell env. Env vars still override config values.
+
+Defaults: `HINDSIGHT_API_URL`/`apiUrl=http://127.0.0.1:8888`, `HINDSIGHT_BANK_ID`/`bankId=pi`, `HINDSIGHT_SCOPING`/`scoping=per-project-tagged`.
 
 - Real Hindsight retain/recall/reflect over the local daemon; local rulebook/TTSR portable subset stays in Pi.
 - Commands: `/hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable`; `/rules list|reload|show <name>`.

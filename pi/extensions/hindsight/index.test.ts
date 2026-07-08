@@ -265,11 +265,44 @@ test("formatRecallResponse formats real Hindsight recall results", () => {
 });
 
 test("defaultHindsightConfig reads local daemon defaults", () => {
-  const config = defaultHindsightConfig({} as NodeJS.ProcessEnv);
+  const cwd = tempRoot();
+  const config = defaultHindsightConfig({ HINDSIGHT_CONFIG_PATH: join(cwd, "missing.json") } as NodeJS.ProcessEnv);
   assert.equal(config.apiUrl, "http://127.0.0.1:8888");
   assert.equal(config.bankId, "pi");
   assert.equal(config.scoping, "per-project-tagged");
   assert.equal(config.autoStartDaemon, false);
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("defaultHindsightConfig reads config file and lets env override", () => {
+  const cwd = tempRoot();
+  const configPath = join(cwd, "config.json");
+  writeFileSync(configPath, JSON.stringify({
+    apiUrl: "http://127.0.0.1:9478",
+    bankId: "configured-bank",
+    scoping: "global",
+    autoStartDaemon: true,
+    memoryBackend: false,
+    retainMode: "last-turn",
+    recallBudget: "high",
+    recallMaxTokens: 2048,
+    requestTimeoutMs: 0,
+  }));
+  const config = defaultHindsightConfig({ HINDSIGHT_CONFIG_PATH: configPath } as NodeJS.ProcessEnv);
+  assert.equal(config.apiUrl, "http://127.0.0.1:9478");
+  assert.equal(config.bankId, "configured-bank");
+  assert.equal(config.scoping, "global");
+  assert.equal(config.autoStartDaemon, true);
+  assert.equal(config.memoryBackend, false);
+  assert.equal(config.retainMode, "last-turn");
+  assert.equal(config.recallBudget, "high");
+  assert.equal(config.recallMaxTokens, 2048);
+  assert.equal(config.requestTimeoutMs, 0);
+
+  const overridden = defaultHindsightConfig({ HINDSIGHT_CONFIG_PATH: configPath, HINDSIGHT_API_URL: "http://env.local", HINDSIGHT_MEMORY_BACKEND: "true" } as NodeJS.ProcessEnv);
+  assert.equal(overridden.apiUrl, "http://env.local");
+  assert.equal(overridden.memoryBackend, true);
+  rmSync(cwd, { recursive: true, force: true });
 });
 
 test("HindsightHttpClient calls real API endpoints with scope and redaction", async () => {

@@ -23,6 +23,7 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 - Use local copy instructions for repo-owned extension templates such as `pi/extensions/headroom` and `pi/extensions/hindsight`.
 - Headroom CLI is installed with `pipx install "headroom-ai[proxy]"` or `uv tool install "headroom-ai[proxy]"`; npm `headroom-ai` is SDK-only.
 - oh-my-pi is the reference shape for the local Hindsight extension; Headroom is separate/unrelated.
+- Local Hindsight extension config lives at `~/.pi/agent/hindsight/config.json`; use it for daemon URLs such as named `hindsight-embed` profile ports when Pi does not inherit shell env. Keep provider credentials in env/profile config, not this repo.
 - Always install skills with `npx skills` / `npx skills@latest`, not by manually copying skill files unless explicitly requested.
 - After extension/config changes, mention `/reload` or restarting Pi.
 - For provider credentials, prefer environment variables or `/login`; do not hardcode secrets.

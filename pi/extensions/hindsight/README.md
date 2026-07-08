@@ -27,20 +27,37 @@ Default API URL: `http://127.0.0.1:8888`.
 
 ## Config
 
-Environment variables:
+Config file:
 
-- `HINDSIGHT_API_URL` — Hindsight API URL, default `http://127.0.0.1:8888`.
-- `HINDSIGHT_API_TOKEN` / `HINDSIGHT_API_KEY` — bearer token, optional for local daemon.
-- `HINDSIGHT_BANK_ID` — base bank, default `pi`.
-- `HINDSIGHT_SCOPING` — `global`, `per-project`, or `per-project-tagged`; default `per-project-tagged`.
-- `HINDSIGHT_AUTO_RECALL` — `false` disables first-turn recall.
-- `HINDSIGHT_AUTO_RETAIN` — `false` disables shutdown transcript retain.
-- `HINDSIGHT_MEMORY_BACKEND` — `false` disables memory hooks.
-- `HINDSIGHT_RETAIN_MODE` — `full-session` or `last-turn`; controls shutdown auto-retain transcript scope.
-- `HINDSIGHT_RECALL_BUDGET` — `low`, `mid`, or `high`; default `mid`.
-- `HINDSIGHT_RECALL_MAX_TOKENS` — default `1024`.
-- `HINDSIGHT_REQUEST_TIMEOUT_MS` — HTTP timeout for daemon calls, default `30000`; set `0` to disable.
-- `HINDSIGHT_AUTO_START_DAEMON` — `true` lets failed local HTTP calls try `uvx hindsight-embed daemon start` once.
+```text
+~/.pi/agent/hindsight/config.json
+```
+
+Example:
+
+```json
+{
+  "apiUrl": "http://127.0.0.1:9478",
+  "bankId": "pi",
+  "scoping": "per-project-tagged"
+}
+```
+
+Environment variables override config file values:
+
+- `HINDSIGHT_CONFIG_PATH` — optional alternate config file path.
+- `HINDSIGHT_API_URL` / `apiUrl` — Hindsight API URL, default `http://127.0.0.1:8888`.
+- `HINDSIGHT_API_TOKEN` / `HINDSIGHT_API_KEY` — bearer token, optional for local daemon; env-only, do not put secrets in config files.
+- `HINDSIGHT_BANK_ID` / `bankId` — base bank, default `pi`.
+- `HINDSIGHT_SCOPING` / `scoping` — `global`, `per-project`, or `per-project-tagged`; default `per-project-tagged`.
+- `HINDSIGHT_AUTO_RECALL` / `autoRecall` — `false` disables first-turn recall.
+- `HINDSIGHT_AUTO_RETAIN` / `autoRetain` — `false` disables shutdown transcript retain.
+- `HINDSIGHT_MEMORY_BACKEND` / `memoryBackend` — `false` disables memory hooks.
+- `HINDSIGHT_RETAIN_MODE` / `retainMode` — `full-session` or `last-turn`; controls shutdown auto-retain transcript scope.
+- `HINDSIGHT_RECALL_BUDGET` / `recallBudget` — `low`, `mid`, or `high`; default `mid`.
+- `HINDSIGHT_RECALL_MAX_TOKENS` / `recallMaxTokens` — default `1024`.
+- `HINDSIGHT_REQUEST_TIMEOUT_MS` / `requestTimeoutMs` — HTTP timeout for daemon calls, default `30000`; set `0` to disable.
+- `HINDSIGHT_AUTO_START_DAEMON` / `autoStartDaemon` — `true` lets failed local HTTP calls try `uvx hindsight-embed daemon start` once.
 
 ## Scoping
 

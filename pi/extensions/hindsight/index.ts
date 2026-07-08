@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Rule } from "./types.ts";
 import {
+  HINDSIGHT_CONFIG_PATH,
   HindsightHttpClient,
   computeBankScope,
   defaultHindsightConfig,
@@ -20,6 +21,7 @@ import {
 } from "./rules.ts";
 
 export {
+  HINDSIGHT_CONFIG_PATH,
   HindsightHttpClient,
   computeBankScope,
   defaultHindsightConfig,
@@ -203,7 +205,7 @@ export async function handleHindsightCommand(
     ensureRules(projectRoot);
     const scope = computeBankScope(configRef, projectRoot);
     const status = options.statusMemory ? await options.statusMemory().catch((error) => `hindsight: ${error instanceof Error ? error.message : String(error)}`) : "hindsight: status unavailable in test harness";
-    ctx.ui.notify([`hindsight api: ${configRef.apiUrl}`, `bank: ${scope.bankId}`, `tags: ${scope.tags?.join(",") || "(none)"}`, status, bucketsSummary()].join("\n"), "info");
+    ctx.ui.notify([`hindsight api: ${configRef.apiUrl}`, `config path: ${process.env.HINDSIGHT_CONFIG_PATH || HINDSIGHT_CONFIG_PATH}`, `bank: ${scope.bankId}`, `tags: ${scope.tags?.join(",") || "(none)"}`, status, bucketsSummary()].join("\n"), "info");
     return;
   }
   if (command === "diagnose") {
@@ -215,6 +217,7 @@ export async function handleHindsightCommand(
       ctx.ui.notify([
         `project dir: ${projectRoot}`,
         `hindsight api: ${configRef.apiUrl}`,
+        `config path: ${process.env.HINDSIGHT_CONFIG_PATH || HINDSIGHT_CONFIG_PATH}`,
         `bank: ${scope.bankId}`,
         `scoping: ${configRef.scoping}`,
         `tags: ${scope.tags?.join(",") || "(none)"}`,

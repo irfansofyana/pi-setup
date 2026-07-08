@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { projectKey, redactSecrets } from "./store.ts";
 
@@ -21,6 +24,13 @@ export interface HindsightConfig {
   recallMaxTokens: number;
   requestTimeoutMs: number;
 }
+
+export type HindsightConfigFile = Partial<Pick<
+  HindsightConfig,
+  "apiUrl" | "bankId" | "scoping" | "autoRecall" | "autoRetain" | "autoStartDaemon" | "memoryBackend" | "retainMode" | "recallBudget" | "recallMaxTokens" | "requestTimeoutMs"
+>>;
+
+export const HINDSIGHT_CONFIG_PATH = join(homedir(), ".pi", "agent", "hindsight", "config.json");
 
 export interface BankScope {
   bankId: string;
@@ -55,20 +65,62 @@ export interface ReflectResponse {
   text?: string;
 }
 
+function readConfigFile(env: NodeJS.ProcessEnv = process.env): HindsightConfigFile {
+  const path = env.HINDSIGHT_CONFIG_PATH || HINDSIGHT_CONFIG_PATH;
+  try {
+    if (!existsSync(path)) return {};
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as HindsightConfigFile : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringValue(envValue: string | undefined, configValue: unknown, fallback: string): string {
+  if (envValue) return envValue;
+  return typeof configValue === "string" && configValue ? configValue : fallback;
+}
+
+function boolValue(envValue: string | undefined, configValue: unknown, fallback: boolean): boolean {
+  if (envValue !== undefined && envValue !== "") return envValue !== "false";
+  if (typeof configValue === "boolean") return configValue;
+  if (typeof configValue === "string" && configValue !== "") return configValue !== "false";
+  return fallback;
+}
+
+function numberValue(envValue: string | undefined, configValue: unknown, fallback: number): number {
+  if (envValue !== undefined && envValue !== "") {
+    const value = Number(envValue);
+    if (!Number.isNaN(value)) return value;
+  }
+  if (typeof configValue === "number" && !Number.isNaN(configValue)) return configValue;
+  if (typeof configValue === "string" && configValue !== "") {
+    const value = Number(configValue);
+    if (!Number.isNaN(value)) return value;
+  }
+  return fallback;
+}
+
+function enumValue<T extends string>(envValue: string | undefined, configValue: unknown, fallback: T, allowed: readonly T[]): T {
+  const value = envValue || (typeof configValue === "string" ? configValue : "");
+  return allowed.includes(value as T) ? value as T : fallback;
+}
+
 export function defaultHindsightConfig(env: NodeJS.ProcessEnv = process.env): HindsightConfig {
+  const fileConfig = readConfigFile(env);
   return {
-    apiUrl: env.HINDSIGHT_API_URL || "http://127.0.0.1:8888",
+    apiUrl: stringValue(env.HINDSIGHT_API_URL, fileConfig.apiUrl, "http://127.0.0.1:8888"),
     apiToken: env.HINDSIGHT_API_TOKEN || env.HINDSIGHT_API_KEY || undefined,
-    bankId: env.HINDSIGHT_BANK_ID || "pi",
-    scoping: (env.HINDSIGHT_SCOPING as HindsightScoping) || "per-project-tagged",
-    autoRecall: env.HINDSIGHT_AUTO_RECALL !== "false",
-    autoRetain: env.HINDSIGHT_AUTO_RETAIN !== "false",
-    autoStartDaemon: env.HINDSIGHT_AUTO_START_DAEMON === "true",
-    memoryBackend: env.HINDSIGHT_MEMORY_BACKEND !== "false",
-    retainMode: env.HINDSIGHT_RETAIN_MODE === "last-turn" ? "last-turn" : "full-session",
-    recallBudget: (env.HINDSIGHT_RECALL_BUDGET as HindsightBudget) || "mid",
-    recallMaxTokens: Number(env.HINDSIGHT_RECALL_MAX_TOKENS) || 1024,
-    requestTimeoutMs: Number(env.HINDSIGHT_REQUEST_TIMEOUT_MS) || 30_000,
+    bankId: stringValue(env.HINDSIGHT_BANK_ID, fileConfig.bankId, "pi"),
+    scoping: enumValue(env.HINDSIGHT_SCOPING, fileConfig.scoping, "per-project-tagged", ["global", "per-project", "per-project-tagged"] as const),
+    autoRecall: boolValue(env.HINDSIGHT_AUTO_RECALL, fileConfig.autoRecall, true),
+    autoRetain: boolValue(env.HINDSIGHT_AUTO_RETAIN, fileConfig.autoRetain, true),
+    autoStartDaemon: boolValue(env.HINDSIGHT_AUTO_START_DAEMON, fileConfig.autoStartDaemon, false),
+    memoryBackend: boolValue(env.HINDSIGHT_MEMORY_BACKEND, fileConfig.memoryBackend, true),
+    retainMode: enumValue(env.HINDSIGHT_RETAIN_MODE, fileConfig.retainMode, "full-session", ["full-session", "last-turn"] as const),
+    recallBudget: enumValue(env.HINDSIGHT_RECALL_BUDGET, fileConfig.recallBudget, "mid", ["low", "mid", "high"] as const),
+    recallMaxTokens: numberValue(env.HINDSIGHT_RECALL_MAX_TOKENS, fileConfig.recallMaxTokens, 1024),
+    requestTimeoutMs: numberValue(env.HINDSIGHT_REQUEST_TIMEOUT_MS, fileConfig.requestTimeoutMs, 30_000),
   };
 }
 
