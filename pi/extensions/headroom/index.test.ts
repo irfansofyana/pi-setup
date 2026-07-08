@@ -11,6 +11,7 @@ import {
   enableRuntimeDecision,
   formatCount,
   hasSupportedProxyProtocol,
+  headroomCompressionReadyFromPayload,
   headroomFailureText,
   headroomReadyFromPayload,
   health,
@@ -31,6 +32,8 @@ test("normalizeHeadroomConfig uses Headroom-like defaults", () => {
   assert.deepEqual(normalizeHeadroomConfig({}), DEFAULT_CONFIG);
   assert.equal(normalizeHeadroomConfig({ minChars: 10 }).minChars, 10);
   assert.equal(normalizeHeadroomConfig({ minChars: -1 }).minChars, 1);
+  assert.equal(normalizeHeadroomConfig({ startupHealthTimeoutMs: 60_000 }).startupHealthTimeoutMs, 60_000);
+  assert.equal(normalizeHeadroomConfig({ startupHealthTimeoutMs: 1 }).startupHealthTimeoutMs, 5_000);
   assert.equal(normalizeHeadroomConfig({ startup: "auto" }).startup, "auto");
   assert.equal(normalizeHeadroomConfig({ notifyFailures: "always" }).notifyFailures, "always");
 });
@@ -182,6 +185,23 @@ test("headroomReadyFromPayload parses readiness fields", () => {
   assert.equal(headroomReadyFromPayload({ status: "not-ready" }), false);
   assert.equal(headroomReadyFromPayload({ checks: { upstream: { ready: true }, backend: { ready: false } } }), false);
   assert.equal(headroomReadyFromPayload({ service: "headroom-proxy" }), undefined);
+});
+
+test("compression readiness tolerates upstream-only failures", () => {
+  const payload = {
+    service: "headroom-proxy",
+    status: "unhealthy",
+    ready: false,
+    checks: {
+      startup: { enabled: true, ready: true, status: "healthy" },
+      http_client: { enabled: true, ready: true, status: "healthy" },
+      cache: { enabled: true, ready: true, status: "healthy" },
+      rate_limiter: { enabled: true, ready: true, status: "healthy" },
+      upstream: { enabled: true, ready: false, status: "unhealthy" },
+    },
+  };
+  assert.equal(headroomReadyFromPayload(payload), false);
+  assert.equal(headroomCompressionReadyFromPayload(payload), true);
 });
 
 test("health does not adopt reachable but unready proxy", async () => {
