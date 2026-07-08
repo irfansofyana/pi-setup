@@ -1,33 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { MemoryEntry, Rule } from "./types.ts";
+import type { Rule } from "./types.ts";
 import {
-  HINDSIGHT_DIR,
-  appendMemory,
-  clearMemories,
-  dedupMemories,
-  ensureDirs,
-  jaccard,
-  loadMemories,
-  makeMemoryEntry,
-  memoriesPath,
-  memoryDocPath,
-  memoryClearGeneration,
-  memoryGuidanceBlock,
-  memorySourceText,
-  memorySummaryBlock,
-  memorySummaryPath,
-  readMemoryUrl,
-  readTextFile,
-  skillsDir,
-  writeMemoryArtifacts,
-  writeMemoryArtifactsIfCurrent,
-  formatMemoryBlock,
-  projectBasename,
-  projectDir,
-  projectKey,
-  redactSecrets,
-  searchMemories,
-} from "./store.ts";
+  HindsightHttpClient,
+  computeBankScope,
+  defaultHindsightConfig,
+  formatRecallResponse,
+  formatReflectResponse,
+  runHindsightEmbed,
+  type RetainItem,
+} from "./client.ts";
+import { redactSecrets } from "./store.ts";
 import {
   RULES_DIR,
   buildRuleFromMarkdown,
@@ -38,37 +20,18 @@ import {
 } from "./rules.ts";
 
 export {
-  HINDSIGHT_DIR,
+  HindsightHttpClient,
+  computeBankScope,
+  defaultHindsightConfig,
+  formatRecallResponse,
+  formatReflectResponse,
+  runHindsightEmbed,
   RULES_DIR,
-  appendMemory,
   buildRuleFromMarkdown,
   builtinDefaultRules,
-  clearMemories,
-  dedupMemories,
   discoverRules,
-  ensureDirs,
-  jaccard,
-  loadMemories,
-  makeMemoryEntry,
-  memoriesPath,
-  memoryDocPath,
-  memoryClearGeneration,
-  memoryGuidanceBlock,
-  memorySourceText,
-  memorySummaryBlock,
-  memorySummaryPath,
-  readMemoryUrl,
-  readTextFile,
-  skillsDir,
-  writeMemoryArtifacts,
-  writeMemoryArtifactsIfCurrent,
-  formatMemoryBlock,
   parseFrontmatter,
-  projectBasename,
-  projectDir,
-  projectKey,
   redactSecrets,
-  searchMemories,
   splitBuckets,
 };
 
@@ -141,9 +104,10 @@ export function rulebookPromptBlock(rules: Rule[], paths: string[] = []): string
   return cap(lines.join("\n").trim(), MAX_RULEBOOK_CHARS);
 }
 
-export function promptBlocks(projectRoot: string, rules: Rule[], memoryBackend: boolean, rootDir?: string, paths: string[] = []): string {
-  const summaryBlock = memoryBackend ? memorySummaryBlock(projectRoot, rootDir) : "";
-  const memoryBlock = memoryBackend ? (summaryBlock || memoryGuidanceBlock(projectRoot)) : "";
+export function promptBlocks(_projectRoot: string, rules: Rule[], memoryBackend: boolean, _rootDir?: string, paths: string[] = []): string {
+  const memoryBlock = memoryBackend
+    ? "Hindsight memory is backed by the local Hindsight daemon. Use hindsight_recall before relying on prior context, hindsight_retain for durable learnings, and hindsight_reflect for deeper memory-grounded answers. Treat recalled memory as heuristic when it conflicts with current repo state or user instruction."
+    : "";
   return [memoryBlock, rulebookPromptBlock(rules, paths)].filter(Boolean).join("\n\n");
 }
 
@@ -186,109 +150,6 @@ export function projectRootFrom(event: any, ctx: any): string {
   return event?.systemPromptOptions?.cwd || ctx?.cwd || process.cwd();
 }
 
-function modelTextFrom(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(modelTextFrom).filter(Boolean).join("\n");
-  if (!value || typeof value !== "object") return "";
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.text === "string") return obj.text;
-  if (typeof obj.content === "string") return obj.content;
-  if (Array.isArray(obj.content)) return obj.content.map(modelTextFrom).filter(Boolean).join("\n");
-  if ("message" in obj) return modelTextFrom(obj.message);
-  if ("choices" in obj) return modelTextFrom(obj.choices);
-  return "";
-}
-
-export async function completeWithModel(ctx: any, prompt: string, maxTokens = 4096): Promise<string | undefined> {
-  try {
-    const model = ctx?.model ?? ctx?.modelRegistry?.find?.("google", "gemini-2.5-flash");
-    if (!model || !ctx?.modelRegistry?.getApiKeyAndHeaders) return undefined;
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    const apiKey = auth?.apiKey;
-    const headers = auth?.headers;
-    const env = auth?.env;
-    if (!apiKey && !headers) return undefined;
-    const { complete } = await import("@earendil-works/pi-ai/compat");
-    const result = await complete(
-      model,
-      { messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
-      { apiKey, headers, env, maxTokens, signal: ctx?.signal },
-    );
-    return modelTextFrom(result).trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function deterministicMemory(cwd: string): { memoryDoc: string; summary: string } {
-  const source = memorySourceText(cwd);
-  if (!source) return { memoryDoc: "# MEMORY\n\nNo retained memories yet.", summary: "No retained memories yet." };
-  const bullets = source
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("## "))
-    .slice(0, 80)
-    .map((line) => `- ${cap(line, 500)}`);
-  return {
-    memoryDoc: ["# MEMORY", "", "## Retained facts", ...bullets].join("\n"),
-    summary: bullets.slice(0, 20).join("\n") || "No retained memories yet.",
-  };
-}
-
-function extractMarked(text: string, marker: string): string | undefined {
-  const match = text.match(new RegExp(`${marker}\\s*([\\s\\S]*?)(?=\\n---[A-Z_]+---|$)`));
-  return match?.[1]?.trim();
-}
-
-export async function rebuildAutonomousMemory(ctx: any): Promise<{ usedModel: boolean; memoryDoc: string; summary: string }> {
-  const projectRoot = ctx?.cwd || process.cwd();
-  const generation = memoryClearGeneration(projectRoot);
-  const source = memorySourceText(projectRoot);
-  if (!source) {
-    const empty = { usedModel: false, memoryDoc: "# MEMORY\n\nNo retained memories yet.", summary: "No retained memories yet." };
-    writeMemoryArtifactsIfCurrent(projectRoot, empty.memoryDoc, empty.summary, generation);
-    return empty;
-  }
-
-  const extractionPrompt = [
-    "Extract durable project memory from retained sessions/facts.",
-    "Keep only technical decisions, constraints, resolved failures, and recurring workflows. Drop chatter and stale guesses.",
-    "Source corpus:",
-    source,
-  ].join("\n\n");
-  const extracted = await completeWithModel(ctx, extractionPrompt, 4096);
-  if (extracted) {
-    const memoryDoc = await completeWithModel(ctx, ["Write MEMORY.md from this durable knowledge. Use concise markdown.", extracted].join("\n\n"), 4096);
-    const summary = await completeWithModel(ctx, ["Write compact memory_summary.md for session-start injection. Include only high-signal bullets.", memoryDoc || extracted].join("\n\n"), 1024);
-    if (memoryDoc && summary) {
-      writeMemoryArtifactsIfCurrent(projectRoot, memoryDoc, summary, generation);
-      return { usedModel: true, memoryDoc, summary };
-    }
-    const combined = await completeWithModel(
-      ctx,
-      [
-        "Consolidate into two artifacts. Return exactly:",
-        "---MEMORY_MD---",
-        "# MEMORY ...",
-        "---SUMMARY_MD---",
-        "compact bullets ...",
-        extracted,
-      ].join("\n\n"),
-      4096,
-    );
-    const markedMemory = combined ? extractMarked(combined, "---MEMORY_MD---") : undefined;
-    const markedSummary = combined ? extractMarked(combined, "---SUMMARY_MD---") : undefined;
-    if (markedMemory && markedSummary) {
-      writeMemoryArtifactsIfCurrent(projectRoot, markedMemory, markedSummary, generation);
-      return { usedModel: true, memoryDoc: markedMemory, summary: markedSummary };
-    }
-  }
-
-  const fallback = deterministicMemory(projectRoot);
-  writeMemoryArtifactsIfCurrent(projectRoot, fallback.memoryDoc, fallback.summary, generation);
-  return { usedModel: false, ...fallback };
-}
-
 export function reminderForRule(rule: Rule): string {
   return cap(`Hindsight rule matched: ${rule.name}\n${rule.content}`, 1200);
 }
@@ -319,7 +180,7 @@ const Schema = {
 export async function handleHindsightCommand(
   args: string,
   ctx: { cwd?: string; ui: { notify: (msg: string, kind: string) => void } },
-  options: { beforeRecall?: () => void; beforeClear?: (cwd: string) => void; beforeRebuild?: () => void; rebuildMemory?: () => Promise<string>; enqueueMemory?: () => void } = {},
+  options: { beforeRecall?: () => void | Promise<void>; beforeClear?: (cwd: string) => void; statusMemory?: () => Promise<string>; clearMemory?: () => Promise<string>; recallMemory?: (query: string) => Promise<string> } = {},
 ): Promise<void> {
   const projectRoot = ctx.cwd || process.cwd();
   const trimmed = args.trim();
@@ -332,23 +193,23 @@ export async function handleHindsightCommand(
   }
   if (command === "stats") {
     ensureRules(projectRoot);
-    const memories = loadMemories(projectRoot);
-    const artifacts = [
-      `MEMORY.md: ${readTextFile(memoryDocPath(projectRoot)) === undefined ? "missing" : "present"}`,
-      `memory_summary.md: ${readTextFile(memorySummaryPath(projectRoot)) === undefined ? "missing" : "present"}`,
-    ].join("\n");
-    ctx.ui.notify(`memories: ${memories.length}\nrules: ${ruleCacheRef.length}\n${artifacts}\n${bucketsSummary()}`, "info");
+    const scope = computeBankScope(configRef, projectRoot);
+    const status = options.statusMemory ? await options.statusMemory().catch((error) => `hindsight: ${error instanceof Error ? error.message : String(error)}`) : "hindsight: status unavailable in test harness";
+    ctx.ui.notify([`hindsight api: ${configRef.apiUrl}`, `bank: ${scope.bankId}`, `tags: ${scope.tags?.join(",") || "(none)"}`, status, bucketsSummary()].join("\n"), "info");
     return;
   }
   if (command === "diagnose") {
     try {
       ensureRules(projectRoot);
       const buckets = splitBuckets(ruleCacheRef);
+      const scope = computeBankScope(configRef, projectRoot);
+      const daemon = options.statusMemory ? await options.statusMemory() : await runHindsightEmbed(["daemon", "status"], 30_000).catch((error) => `daemon status failed: ${error instanceof Error ? error.message : String(error)}\nRun: uvx hindsight-embed@latest configure`);
       ctx.ui.notify([
         `project dir: ${projectRoot}`,
-        `memories path: ${memoriesPath(projectRoot)}`,
-        `MEMORY.md: ${readTextFile(memoryDocPath(projectRoot)) === undefined ? "missing" : "present"}`,
-        `memory_summary.md: ${readTextFile(memorySummaryPath(projectRoot)) === undefined ? "missing" : "present"}`,
+        `hindsight api: ${configRef.apiUrl}`,
+        `bank: ${scope.bankId}`,
+        `scoping: ${configRef.scoping}`,
+        `tags: ${scope.tags?.join(",") || "(none)"}`,
         `rules: ${ruleCacheRef.length}`,
         `ttsr: ${buckets.ttsr.length}`,
         `alwaysApply: ${buckets.alwaysApply.length}`,
@@ -357,6 +218,7 @@ export async function handleHindsightCommand(
         `autoRecall: ${configRef.autoRecall}`,
         `autoRetain: ${configRef.autoRetain}`,
         `native rules dir: ${RULES_DIR}`,
+        daemon,
       ].join("\n"), "info");
     } catch (error) {
       ctx.ui.notify(`hindsight diagnose failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
@@ -365,38 +227,18 @@ export async function handleHindsightCommand(
   }
   if (command === "clear") {
     options.beforeClear?.(projectRoot);
-    clearMemories(projectRoot);
-    ctx.ui.notify("hindsight memories cleared.", "info");
-    return;
-  }
-  if (command === "rebuild") {
-    try {
-      options.beforeRebuild?.();
-      refreshRules(ctx.cwd || process.cwd());
-      const memory = options.rebuildMemory ? await options.rebuildMemory() : "memory rebuild unavailable";
-      ctx.ui.notify(`rebuilt rules: ${ruleCacheRef.length}\n${memory}`, "info");
-    } catch (error) {
-      ctx.ui.notify(`memory rebuild failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    }
-    return;
-  }
-  if (command === "enqueue") {
-    if (!options.enqueueMemory) {
-      ctx.ui.notify("memory rebuild enqueue unavailable.", "warning");
+    if (!options.clearMemory) {
+      ctx.ui.notify("clear requires real Hindsight client; use Hindsight UI or delete the scoped bank.", "warning");
       return;
     }
-    try {
-      options.enqueueMemory();
-      ctx.ui.notify("memory rebuild queued.", "info");
-    } catch (error) {
-      ctx.ui.notify(`memory rebuild enqueue failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
-    }
+    ctx.ui.notify(await options.clearMemory(), "info");
     return;
   }
   if (command === "recall") {
     const query = rest.join(" ").trim();
-    options.beforeRecall?.();
-    ctx.ui.notify(formatMemoryBlock(searchMemories(projectRoot, query, 5)) || "No relevant hindsight memories.", "info");
+    await options.beforeRecall?.();
+    const text = options.recallMemory ? await options.recallMemory(query) : "real Hindsight recall unavailable in test harness";
+    ctx.ui.notify(text || "No relevant hindsight memories.", "info");
     return;
   }
   if (command === "memory") {
@@ -411,7 +253,7 @@ export async function handleHindsightCommand(
       return;
     }
   }
-  ctx.ui.notify("Usage: /hindsight view|stats|diagnose|clear|rebuild|enqueue|recall <query>|memory enable|disable", "warning");
+  ctx.ui.notify("Usage: /hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable", "warning");
 }
 
 export function handleRulesCommand(args: string, ctx: { cwd?: string; ui: { notify: (msg: string, kind: string) => void } }): void {
@@ -443,7 +285,7 @@ export function handleRulesCommand(args: string, ctx: { cwd?: string; ui: { noti
 }
 
 // Shared mutable state for command handlers (ref'd so exported handlers stay in sync with the closure).
-const configRef = { autoRecall: true, autoRetain: true, memoryBackend: false as boolean };
+const configRef = defaultHindsightConfig();
 const ruleCacheRef: Rule[] = discoverRules(RULES_DIR);
 let ruleCacheCwd = "";
 
@@ -468,7 +310,8 @@ function bucketsSummary(): string {
 }
 
 export default function hindsight(pi: ExtensionAPI) {
-  const retainQueue: Array<{ cwd: string; entry: MemoryEntry }> = [];
+  const client = (pi as any).hindsightClient ?? new HindsightHttpClient(configRef);
+  const retainQueue: Array<{ cwd: string; item: RetainItem }> = [];
   const skipAutoRetainAfterClear = new Set<string>();
   let retainTimer: ReturnType<typeof setTimeout> | undefined;
   let autoRecallInjected = false;
@@ -476,15 +319,17 @@ export default function hindsight(pi: ExtensionAPI) {
   const RETAIN_FLUSH_MS = 5000;
   const MAX_AUTO_RETAIN_CHARS = 50_000;
 
-  function flushRetainQueue(): void {
+  async function flushRetainQueue(): Promise<void> {
     if (retainTimer) clearTimeout(retainTimer);
     retainTimer = undefined;
     const batch = retainQueue.splice(0);
-    for (const item of batch) {
+    const byCwd = new Map<string, RetainItem[]>();
+    for (const item of batch) byCwd.set(item.cwd, [...(byCwd.get(item.cwd) ?? []), item.item]);
+    for (const [cwd, items] of byCwd) {
       try {
-        appendMemory(item.cwd, item.entry);
+        await client.retain(computeBankScope(configRef, cwd), items, { async: true });
       } catch {
-        // shutdown/hooks must never throw
+        // background memory must never break agent work
       }
     }
   }
@@ -504,13 +349,13 @@ export default function hindsight(pi: ExtensionAPI) {
     skipAutoRetainAfterClear.add(cwd);
   }
 
-  function queueRetain(cwd: string, entry: MemoryEntry): void {
-    retainQueue.push({ cwd, entry });
+  function queueRetain(cwd: string, item: RetainItem): void {
+    retainQueue.push({ cwd, item });
     if (retainQueue.length >= MAX_RETAIN_BATCH) {
-      flushRetainQueue();
+      void flushRetainQueue();
       return;
     }
-    retainTimer ??= setTimeout(flushRetainQueue, RETAIN_FLUSH_MS);
+    retainTimer ??= setTimeout(() => void flushRetainQueue(), RETAIN_FLUSH_MS);
     retainTimer.unref?.();
   }
 
@@ -597,12 +442,15 @@ export default function hindsight(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { text, category } = params as { text: string; category?: string };
       const projectRoot = ctx.cwd || process.cwd();
-      const clean = redactSecrets(text);
-      const entry = makeMemoryEntry(projectRoot, clean, category ?? "general", "retain");
-      queueRetain(projectRoot, entry);
+      queueRetain(projectRoot, {
+        content: text,
+        context: category ?? "agent-retain",
+        metadata: { source: "pi-hindsight", category: category ?? "general", project: projectRoot },
+        timestamp: new Date().toISOString(),
+      });
       return {
-        content: [{ type: "text", text: `Queued retained memory ${entry.id}.` }],
-        details: { id: entry.id, category: entry.category, queued: true },
+        content: [{ type: "text", text: "Queued memory for Hindsight." }],
+        details: { category: category ?? "general", queued: true, backend: "hindsight" },
       };
     },
   });
@@ -610,38 +458,41 @@ export default function hindsight(pi: ExtensionAPI) {
   pi.registerTool({
     name: "hindsight_recall",
     label: "Hindsight Recall",
-    description: "Recall relevant memories for a query (P1).",
-    promptSnippet: "Recall memories matching a query (P1).",
-    promptGuidelines: ["Use hindsight_recall to retrieve relevant local memories for current task context."],
+    description: "Recall relevant memories from the local Hindsight daemon.",
+    promptSnippet: "Recall memories matching a query from Hindsight.",
+    promptGuidelines: ["Use hindsight_recall before tasks where prior user/project context may matter."],
     parameters: Schema.Object({
       query: Schema.String({ description: "Query to match against memories." }),
-      limit: Schema.Optional(Schema.String({ description: "Max results (P1)." })),
+      budget: Schema.Optional(Schema.String({ description: "Recall budget: low, mid, or high." })),
     }) as any,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const { query, limit } = params as { query: string; limit?: string };
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const { query, budget } = params as { query: string; budget?: "low" | "mid" | "high" };
       const projectRoot = ctx.cwd || process.cwd();
-      flushRetainQueue();
-      const results = searchMemories(projectRoot, query, Number(limit) || 5);
+      await flushRetainQueue();
+      const response = await client.recall(computeBankScope(configRef, projectRoot), query, { budget: budget || configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal });
       return {
-        content: [{ type: "text", text: formatMemoryBlock(results) || "No relevant hindsight memories." }],
+        content: [{ type: "text", text: formatRecallResponse(response) || "No relevant hindsight memories." }],
       };
     },
   });
 
   pi.registerTool({
-    name: "hindsight_memory",
-    label: "Hindsight Memory",
-    description: "Browse the memory backend tree.",
-    promptSnippet: "Browse hindsight memory tree with memory://root paths.",
-    promptGuidelines: ["Use hindsight_memory to inspect MEMORY.md and memory_summary.md."],
+    name: "hindsight_reflect",
+    label: "Hindsight Reflect",
+    description: "Ask Hindsight for a memory-grounded answer.",
+    promptSnippet: "Use Hindsight reflect for deeper reasoning over retained memories.",
+    promptGuidelines: ["Use hindsight_reflect when recall snippets are not enough and a memory-grounded answer is useful."],
     parameters: Schema.Object({
-      path: Schema.Optional(Schema.String({ description: "memory:// path (default memory://root)." })),
+      query: Schema.String({ description: "Question for Hindsight reflect." }),
+      context: Schema.Optional(Schema.String({ description: "Optional current task context." })),
+      budget: Schema.Optional(Schema.String({ description: "Reflect budget: low, mid, or high." })),
     }) as any,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const { path } = params as { path?: string };
-      return {
-        content: [{ type: "text", text: readMemoryUrl(ctx?.cwd || process.cwd(), path || "memory://root") }],
-      };
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const { query, context, budget } = params as { query: string; context?: string; budget?: "low" | "mid" | "high" };
+      const projectRoot = ctx.cwd || process.cwd();
+      await flushRetainQueue();
+      const response = await client.reflect(computeBankScope(configRef, projectRoot), query, { context, budget: budget || "low", signal });
+      return { content: [{ type: "text", text: formatReflectResponse(response) }] };
     },
   });
 
@@ -665,18 +516,19 @@ export default function hindsight(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("hindsight", {
-    description: "Manage hindsight memory + OMP-style rules",
+    description: "Manage real Hindsight memory + Pi rules",
     handler: async (args, ctx) => handleHindsightCommand(args, ctx, {
       beforeRecall: flushRetainQueue,
       beforeClear: clearRuntimeMemory,
       beforeRebuild: flushRetainQueue,
-      rebuildMemory: async () => {
-        const result = await rebuildAutonomousMemory(ctx);
-        return `rebuilt memory: ${result.usedModel ? "model" : "deterministic fallback"}`;
+      statusMemory: async () => `hindsight health: ${JSON.stringify(await client.health(ctx?.signal))}`,
+      clearMemory: async () => {
+        const scope = computeBankScope(configRef, ctx?.cwd || process.cwd());
+        if (configRef.scoping === "per-project-tagged") return "clear skipped: per-project-tagged uses shared bank; delete/curate tagged memories in Hindsight UI to avoid wiping other projects.";
+        await client.clearMemories(scope, ctx?.signal);
+        return `cleared Hindsight memories in bank ${scope.bankId}`;
       },
-      enqueueMemory: () => {
-        void rebuildAutonomousMemory(ctx).catch((error) => ctx?.ui?.notify?.(`hindsight memory rebuild failed: ${error?.message ?? error}`, "warning"));
-      },
+      recallMemory: async (query) => formatRecallResponse(await client.recall(computeBankScope(configRef, ctx?.cwd || process.cwd()), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal })),
     }),
   });
 
@@ -685,14 +537,7 @@ export default function hindsight(pi: ExtensionAPI) {
     handler: async (args, ctx) => handleRulesCommand(args, ctx),
   });
 
-  (pi as any).on?.("session_start", async (_event: any, ctx: any) => {
-    try {
-      if (!configRef.memoryBackend) return;
-      void rebuildAutonomousMemory(ctx).catch((error) => ctx?.ui?.notify?.(`hindsight memory rebuild failed: ${error?.message ?? error}`, "warning"));
-    } catch {
-      return;
-    }
-  });
+  (pi as any).on?.("session_start", async () => undefined);
 
   (pi as any).on?.("before_agent_start", async (event: any, ctx: any) => {
     const projectRoot = projectRootFrom(event, ctx);
@@ -707,11 +552,16 @@ export default function hindsight(pi: ExtensionAPI) {
     if (!configRef.memoryBackend || !configRef.autoRecall || autoRecallInjected) return;
     const messages = Array.isArray(event?.messages) ? event.messages : [];
     const query = queryFromMessages(messages);
-    flushRetainQueue();
-    const block = formatMemoryBlock(searchMemories(ctx?.cwd || process.cwd(), query, 5));
-    if (!block) return;
-    autoRecallInjected = true;
-    return { messages: [customMemoryMessage(block), ...messages] };
+    await flushRetainQueue();
+    try {
+      const projectRoot = ctx?.cwd || process.cwd();
+      const block = formatRecallResponse(await client.recall(computeBankScope(configRef, projectRoot), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal }));
+      if (!block) return;
+      autoRecallInjected = true;
+      return { messages: [customMemoryMessage(block), ...messages] };
+    } catch {
+      return;
+    }
   });
 
   (pi as any).on?.("tool_result", async (event: any, ctx: any) => {
@@ -763,11 +613,16 @@ export default function hindsight(pi: ExtensionAPI) {
   (pi as any).on?.("session_shutdown", async (_event: any, ctx: any) => {
     try {
       const projectRoot = ctx?.cwd || process.cwd();
-      flushRetainQueue();
+      await flushRetainQueue();
       if (skipAutoRetainAfterClear.delete(projectRoot)) return;
       if (!configRef.memoryBackend || !configRef.autoRetain) return;
       const text = sessionTranscript(ctx);
-      if (text) appendMemory(projectRoot, makeMemoryEntry(projectRoot, text, "session", "auto-retain"));
+      if (text) await client.retain(computeBankScope(configRef, projectRoot), [{
+        content: text,
+        context: "pi session transcript",
+        metadata: { source: "pi-session", project: projectRoot },
+        timestamp: new Date().toISOString(),
+      }], { async: true, signal: ctx?.signal });
     } catch {
       // shutdown must never throw
     }

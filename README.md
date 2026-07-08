@@ -11,7 +11,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Permission approval gates for tools, bash, MCP, skills, and external paths
 - Context-mode workflows and context tooling with `context-mode`
 - Local Headroom Labs adapter for managed context compression and token-savings visibility
-- Local OMP-style Hindsight Memory adapter/template
+- Local real-Hindsight memory adapter/template
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - Local `/goal` command template for Codex/Claude-style goal loops in Pi
@@ -214,13 +214,22 @@ Run `/reload` after changing config.
 
 ### Local Hindsight Memory adapter
 
-This repo includes a local Pi extension template at `pi/extensions/hindsight/`.
+This repo includes a Pi extension template at `pi/extensions/hindsight/` that uses real Hindsight via a local daemon.
 
-- OMP-inspired local retain/recall, rulebook/TTSR portable subset, and autonomous `MEMORY.md` backend.
-- Commands: `/hindsight view|stats|diagnose|clear|rebuild|enqueue|recall <query>|memory enable|disable`; `/rules list|reload|show <name>`.
-- Tools: `hindsight_retain`, `hindsight_recall`, `hindsight_memory`, `hindsight_rule`.
-- Storage: `~/.pi/agent/hindsight/<project-key>/...`, `~/.pi/agent/rules/*.{md,mdc}`.
-- Limits: true OMP mid-token TTSR abort/rewind is fork-only; stock Pi approximates via `tool_result`, `tool_call`, and `input` hooks.
+Set up local Hindsight first:
+
+```bash
+uvx hindsight-embed@latest configure
+uvx hindsight-embed daemon status
+```
+
+Defaults: `HINDSIGHT_API_URL=http://127.0.0.1:8888`, `HINDSIGHT_BANK_ID=pi`, `HINDSIGHT_SCOPING=per-project-tagged`.
+
+- Real Hindsight retain/recall/reflect over the local daemon; local rulebook/TTSR portable subset stays in Pi.
+- Commands: `/hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable`; `/rules list|reload|show <name>`.
+- Tools: `hindsight_retain`, `hindsight_recall`, `hindsight_reflect`, `hindsight_rule`.
+- Memory: Hindsight daemon/API; rules: `~/.pi/agent/rules/*.{md,mdc}` plus project rules.
+- Limits: true oh-my-pi mid-token TTSR abort/rewind is fork-only; stock Pi approximates via `tool_result`, `tool_call`, and `input` hooks.
 
 Install globally:
 
