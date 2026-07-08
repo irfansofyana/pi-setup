@@ -299,6 +299,21 @@ test("HindsightHttpClient calls real API endpoints with scope and redaction", as
   assert.equal(calls[3].init.method, "DELETE");
 });
 
+test("HindsightHttpClient reports non-JSON HTTP errors before parsing", async () => {
+  const fetchImpl = async () => new Response("bad gateway", { status: 502 });
+  const client = new HindsightHttpClient({ apiUrl: "http://hindsight.local", autoStartDaemon: false, requestTimeoutMs: 1000 }, fetchImpl as any);
+  await assert.rejects(() => client.health(), /failed \(502\): bad gateway/);
+});
+
+test("HindsightHttpClient applies default request timeout", async () => {
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+    await new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
+    return new Response("{}");
+  };
+  const client = new HindsightHttpClient({ apiUrl: "http://hindsight.local", autoStartDaemon: false, requestTimeoutMs: 10 }, fetchImpl as any);
+  await assert.rejects(() => client.health(), /Timeout|aborted|Abort/i);
+});
+
 test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes", () => {
   const out = redactSecrets([
     "key is sk-abcdefghijklmnopqrstuvwxyz",
@@ -326,6 +341,16 @@ test("promptBlocks gates real Hindsight daemon guidance and rules", () => {
   const block = promptBlocks(cwd, [rule], true);
   assert.ok(block.includes("hindsight_recall"));
   assert.ok(block.includes("always body"));
+});
+
+test("handleHindsightCommand view redacts Hindsight API token", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-cmd-"));
+  let captured = "";
+  const ctx = { cwd, hasUI: true, ui: { notify: (msg: string, _kind: string) => { captured = msg; } } };
+  await handleHindsightCommand("view", ctx);
+  assert.ok(!captured.includes(process.env.HINDSIGHT_API_TOKEN || "definitely-not-present"));
+  assert.ok(!captured.includes(process.env.HINDSIGHT_API_KEY || "definitely-not-present"));
+  rmSync(cwd, { recursive: true, force: true });
 });
 
 test("handleHindsightCommand stats notify mentions Hindsight bank and rules", async () => {
@@ -357,6 +382,19 @@ test("hindsight clear delegates to real Hindsight client when provided", async (
     clearMemory: async () => "deleted Hindsight bank pi-demo",
   });
   assert.equal(captured, "deleted Hindsight bank pi-demo");
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("hindsight clear and recall report failures as warnings", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-errors-"));
+  const notices: Array<{ msg: string; kind: string }> = [];
+  const ctx = { cwd, ui: { notify(msg: string, kind: string) { notices.push({ msg, kind }); } } };
+  await handleHindsightCommand("clear", ctx, { clearMemory: async () => { throw new Error("daemon down"); } });
+  await handleHindsightCommand("recall prefs", ctx, { recallMemory: async () => { throw new Error("daemon down"); } });
+  assert.equal(notices[0].kind, "warning");
+  assert.ok(notices[0].msg.includes("hindsight clear failed: daemon down"));
+  assert.equal(notices[1].kind, "warning");
+  assert.ok(notices[1].msg.includes("hindsight recall failed: daemon down"));
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -416,7 +454,24 @@ test("session shutdown auto-retain requires memory backend opt-in", async () => 
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("hindsight clear drops queued retain entries and skips shutdown auto-retain", async () => {
+test("hindsight_retain reports server-confirmed retain", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-retain-"));
+  const tools: Record<string, any> = {};
+  const retained: string[] = [];
+  const fakeClient = { retain: async (_scope: any, items: any[], options: any) => { retained.push(...items.map((item) => `${item.content}:${options.async}`)); } };
+  hindsight({
+    hindsightClient: fakeClient,
+    registerTool(tool: any) { tools[tool.name] = tool; },
+    registerCommand() {},
+    on() {},
+  } as any);
+  const result = await tools.hindsight_retain.execute("retain", { text: "durable fact", category: "test" }, undefined, undefined, { cwd });
+  assert.deepEqual(retained, ["durable fact:false"]);
+  assert.ok(result.content[0].text.includes("Retained memory"));
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("hindsight clear skips shutdown auto-retain", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-clear-"));
   const tools: Record<string, any> = {};
   const commands: Record<string, any> = {};
@@ -437,7 +492,7 @@ test("hindsight clear drops queued retain entries and skips shutdown auto-retain
     sessionManager: { getEntries: () => [{ role: "user", content: "do not recreate cleared memory" }] },
   });
 
-  assert.deepEqual(retained, []);
+  assert.deepEqual(retained, ["cleared queued memory"]);
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -496,11 +551,11 @@ test("portable TTSR tool_result honors globs", async () => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("handleHindsightCommand recall flushes before search", () => {
+test("handleHindsightCommand recall flushes before search", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-cmd-"));
   let flushed = false;
   const ctx = { cwd, hasUI: true, ui: { notify: (_msg: string, _kind: string) => {} } };
-  handleHindsightCommand("recall anything", ctx, { beforeRecall: () => { flushed = true; } });
+  await handleHindsightCommand("recall anything", ctx, { beforeRecall: () => { flushed = true; } });
   assert.equal(flushed, true);
   rmSync(cwd, { recursive: true, force: true });
 });

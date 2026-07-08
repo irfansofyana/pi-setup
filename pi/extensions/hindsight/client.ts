@@ -19,6 +19,7 @@ export interface HindsightConfig {
   retainMode: "full-session" | "last-turn";
   recallBudget: HindsightBudget;
   recallMaxTokens: number;
+  requestTimeoutMs: number;
 }
 
 export interface BankScope {
@@ -67,6 +68,7 @@ export function defaultHindsightConfig(env: NodeJS.ProcessEnv = process.env): Hi
     retainMode: env.HINDSIGHT_RETAIN_MODE === "last-turn" ? "last-turn" : "full-session",
     recallBudget: (env.HINDSIGHT_RECALL_BUDGET as HindsightBudget) || "mid",
     recallMaxTokens: Number(env.HINDSIGHT_RECALL_MAX_TOKENS) || 1024,
+    requestTimeoutMs: Number(env.HINDSIGHT_REQUEST_TIMEOUT_MS) || 30_000,
   };
 }
 
@@ -111,7 +113,7 @@ export async function runHindsightEmbed(args: string[], timeoutMs = 30_000): Pro
 }
 
 export class HindsightHttpClient {
-  constructor(private readonly config: Pick<HindsightConfig, "apiUrl" | "apiToken" | "autoStartDaemon">, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(private readonly config: Pick<HindsightConfig, "apiUrl" | "apiToken" | "autoStartDaemon"> & Partial<Pick<HindsightConfig, "requestTimeoutMs">>, private readonly fetchImpl: typeof fetch = fetch) {}
 
   async health(signal?: AbortSignal): Promise<unknown> {
     return this.request("GET", "/health", undefined, signal, false);
@@ -150,10 +152,13 @@ export class HindsightHttpClient {
 
   private async request(method: string, path: string, body?: unknown, signal?: AbortSignal, retry = true): Promise<unknown> {
     const url = `${this.config.apiUrl.replace(/\/$/, "")}${path}`;
+    const timeoutMs = this.config.requestTimeoutMs ?? 30_000;
+    const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+    const requestSignal = signal && timeoutSignal ? AbortSignal.any([signal, timeoutSignal]) : (signal ?? timeoutSignal);
     try {
       const response = await this.fetchImpl(url, {
         method,
-        signal,
+        signal: requestSignal,
         headers: {
           ...(body ? { "Content-Type": "application/json" } : {}),
           ...(this.config.apiToken ? { Authorization: `Bearer ${this.config.apiToken}` } : {}),
@@ -161,9 +166,13 @@ export class HindsightHttpClient {
         body: body ? JSON.stringify(body) : undefined,
       });
       const text = await response.text();
-      const data = text ? JSON.parse(text) : {};
       if (!response.ok) throw new Error(`Hindsight ${method} ${path} failed (${response.status}): ${text}`);
-      return data;
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
     } catch (error) {
       if (retry && this.config.autoStartDaemon && this.config.apiUrl.includes("127.0.0.1")) {
         await runHindsightEmbed(["daemon", "start"], 60_000).catch(() => undefined);

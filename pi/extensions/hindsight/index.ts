@@ -106,7 +106,14 @@ export function rulebookPromptBlock(rules: Rule[], paths: string[] = []): string
 
 export function promptBlocks(_projectRoot: string, rules: Rule[], memoryBackend: boolean, _rootDir?: string, paths: string[] = []): string {
   const memoryBlock = memoryBackend
-    ? "Hindsight memory is backed by the local Hindsight daemon. Use hindsight_recall before relying on prior context, hindsight_retain for durable learnings, and hindsight_reflect for deeper memory-grounded answers. Treat recalled memory as heuristic when it conflicts with current repo state or user instruction."
+    ? [
+      "Hindsight memory is backed by the local Hindsight daemon.",
+      "Recall first: use hindsight_recall before non-trivial tasks, implementation decisions, tool/library suggestions, or work in unfamiliar project areas.",
+      "Retain immediately: use hindsight_retain when you learn durable user preferences, project conventions, procedure outcomes, bugs and fixes, workarounds, architecture decisions, or dependency/version requirements.",
+      "Pass rich context to retain: include what happened, why, exact commands/errors/outcomes, and relevant conversation excerpts. Do not over-summarize; Hindsight extracts facts/entities/relationships server-side.",
+      "Use hindsight_reflect when recall snippets are not enough and you need a memory-grounded synthesis.",
+      "Never retain secrets, credentials, API keys, tokens, or other sensitive values. Treat recalled memory as heuristic when it conflicts with current repo state or user instruction.",
+    ].join("\n")
     : "";
   return [memoryBlock, rulebookPromptBlock(rules, paths)].filter(Boolean).join("\n\n");
 }
@@ -188,7 +195,8 @@ export async function handleHindsightCommand(
   const sub = rest[0] ?? "";
 
   if (command === "view") {
-    ctx.ui.notify(JSON.stringify(configRef, null, 2), "info");
+    const { apiToken: _apiToken, ...safeConfig } = configRef;
+    ctx.ui.notify(JSON.stringify({ ...safeConfig, apiToken: configRef.apiToken ? "[REDACTED]" : undefined }, null, 2), "info");
     return;
   }
   if (command === "stats") {
@@ -231,25 +239,34 @@ export async function handleHindsightCommand(
       ctx.ui.notify("clear requires real Hindsight client; use Hindsight UI or delete the scoped bank.", "warning");
       return;
     }
-    ctx.ui.notify(await options.clearMemory(), "info");
+    try {
+      ctx.ui.notify(await options.clearMemory(), "info");
+    } catch (error) {
+      ctx.ui.notify(`hindsight clear failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
     return;
   }
   if (command === "recall") {
     const query = rest.join(" ").trim();
-    await options.beforeRecall?.();
-    const text = options.recallMemory ? await options.recallMemory(query) : "real Hindsight recall unavailable in test harness";
-    ctx.ui.notify(text || "No relevant hindsight memories.", "info");
+    try {
+      await options.beforeRecall?.();
+      const text = options.recallMemory ? await options.recallMemory(query) : "real Hindsight recall unavailable in test harness";
+      ctx.ui.notify(text || "No relevant hindsight memories.", "info");
+    } catch (error) {
+      ctx.ui.notify(`hindsight recall failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
     return;
   }
   if (command === "memory") {
     if (sub === "enable") {
-      configRef.memoryBackend = true;
-      ctx.ui.notify("memory backend enabled.", "info");
+      memoryBackendByCwd.set(projectRoot, true);
+      ctx.ui.notify("memory backend enabled for this project.", "info");
       return;
     }
     if (sub === "disable") {
-      configRef.memoryBackend = false;
-      ctx.ui.notify("memory backend disabled.", "info");
+      memoryBackendByCwd.set(projectRoot, false);
+      autoRecallInjectedByCwd.delete(projectRoot);
+      ctx.ui.notify("memory backend disabled for this project.", "info");
       return;
     }
   }
@@ -286,6 +303,8 @@ export function handleRulesCommand(args: string, ctx: { cwd?: string; ui: { noti
 
 // Shared mutable state for command handlers (ref'd so exported handlers stay in sync with the closure).
 const configRef = defaultHindsightConfig();
+const memoryBackendByCwd = new Map<string, boolean>();
+const autoRecallInjectedByCwd = new Set<string>();
 const ruleCacheRef: Rule[] = discoverRules(RULES_DIR);
 let ruleCacheCwd = "";
 
@@ -311,52 +330,20 @@ function bucketsSummary(): string {
 
 export default function hindsight(pi: ExtensionAPI) {
   const client = (pi as any).hindsightClient ?? new HindsightHttpClient(configRef);
-  const retainQueue: Array<{ cwd: string; item: RetainItem }> = [];
   const skipAutoRetainAfterClear = new Set<string>();
-  let retainTimer: ReturnType<typeof setTimeout> | undefined;
-  let autoRecallInjected = false;
-  const MAX_RETAIN_BATCH = 16;
-  const RETAIN_FLUSH_MS = 5000;
   const MAX_AUTO_RETAIN_CHARS = 50_000;
 
   async function flushRetainQueue(): Promise<void> {
-    if (retainTimer) clearTimeout(retainTimer);
-    retainTimer = undefined;
-    const batch = retainQueue.splice(0);
-    const byCwd = new Map<string, RetainItem[]>();
-    for (const item of batch) byCwd.set(item.cwd, [...(byCwd.get(item.cwd) ?? []), item.item]);
-    for (const [cwd, items] of byCwd) {
-      try {
-        await client.retain(computeBankScope(configRef, cwd), items, { async: true });
-      } catch {
-        // background memory must never break agent work
-      }
-    }
+    // Real Hindsight explicit retains are synchronous; kept as hook seam for commands/tests.
   }
 
-  function dropRetainQueue(cwd: string): void {
-    for (let i = retainQueue.length - 1; i >= 0; i--) {
-      if (retainQueue[i]?.cwd === cwd) retainQueue.splice(i, 1);
-    }
-    if (retainQueue.length === 0 && retainTimer) {
-      clearTimeout(retainTimer);
-      retainTimer = undefined;
-    }
+  function memoryEnabled(cwd: string): boolean {
+    return memoryBackendByCwd.get(cwd) ?? configRef.memoryBackend;
   }
 
   function clearRuntimeMemory(cwd: string): void {
-    dropRetainQueue(cwd);
     skipAutoRetainAfterClear.add(cwd);
-  }
-
-  function queueRetain(cwd: string, item: RetainItem): void {
-    retainQueue.push({ cwd, item });
-    if (retainQueue.length >= MAX_RETAIN_BATCH) {
-      void flushRetainQueue();
-      return;
-    }
-    retainTimer ??= setTimeout(() => void flushRetainQueue(), RETAIN_FLUSH_MS);
-    retainTimer.unref?.();
+    autoRecallInjectedByCwd.delete(cwd);
   }
 
   function textFrom(value: unknown): string {
@@ -373,7 +360,8 @@ export default function hindsight(pi: ExtensionAPI) {
 
   function sessionTranscript(ctx: any): string {
     try {
-      const entries = ctx?.sessionManager?.getEntries?.() ?? [];
+      const allEntries = ctx?.sessionManager?.getEntries?.() ?? [];
+      const entries = configRef.retainMode === "last-turn" ? allEntries.slice(-2) : allEntries;
       const text = entries
         .map((entry: any) => `${entry?.role ?? entry?.type ?? "entry"}: ${textFrom(entry)}`.trim())
         .filter((line: string) => line && !line.endsWith(":"))
@@ -434,23 +422,27 @@ export default function hindsight(pi: ExtensionAPI) {
     label: "Hindsight Retain",
     description: "Persist a memory note for the current project.",
     promptSnippet: "Save a durable memory note for the current project via hindsight.",
-    promptGuidelines: ["Use hindsight_retain for facts worth keeping across sessions."],
+    promptGuidelines: [
+      "Use hindsight_retain immediately after learning durable user preferences, project conventions, procedure outcomes, bugs/fixes, workarounds, architecture decisions, or dependency/version requirements.",
+      "Pass rich full context: what happened, why, commands/errors/outcomes, and relevant conversation excerpts. Do not pre-summarize aggressively; Hindsight extracts facts server-side.",
+      "Never retain secrets, credentials, API keys, tokens, or sensitive values.",
+    ],
     parameters: Schema.Object({
-      text: Schema.String({ description: "Memory text to retain." }),
-      category: Schema.Optional(Schema.String({ description: "Optional category tag." })),
+      text: Schema.String({ description: "Rich memory content to retain, including observations, commands/errors, rationale, outcomes, or conversation excerpts." }),
+      category: Schema.Optional(Schema.String({ description: "Optional context label such as preferences, procedures, learnings, decisions, bugs, or workarounds." })),
     }) as any,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const { text, category } = params as { text: string; category?: string };
       const projectRoot = ctx.cwd || process.cwd();
-      queueRetain(projectRoot, {
+      await client.retain(computeBankScope(configRef, projectRoot), [{
         content: text,
         context: category ?? "agent-retain",
         metadata: { source: "pi-hindsight", category: category ?? "general", project: projectRoot },
         timestamp: new Date().toISOString(),
-      });
+      }], { async: false, signal: _signal });
       return {
-        content: [{ type: "text", text: "Queued memory for Hindsight." }],
-        details: { category: category ?? "general", queued: true, backend: "hindsight" },
+        content: [{ type: "text", text: "Retained memory in Hindsight." }],
+        details: { category: category ?? "general", retained: true, backend: "hindsight" },
       };
     },
   });
@@ -460,7 +452,10 @@ export default function hindsight(pi: ExtensionAPI) {
     label: "Hindsight Recall",
     description: "Recall relevant memories from the local Hindsight daemon.",
     promptSnippet: "Recall memories matching a query from Hindsight.",
-    promptGuidelines: ["Use hindsight_recall before tasks where prior user/project context may matter."],
+    promptGuidelines: [
+      "Use hindsight_recall before non-trivial tasks, implementation decisions, tool/library suggestions, or work in unfamiliar project areas.",
+      "Prefer current repo state and explicit user instruction when recalled memory conflicts.",
+    ],
     parameters: Schema.Object({
       query: Schema.String({ description: "Query to match against memories." }),
       budget: Schema.Optional(Schema.String({ description: "Recall budget: low, mid, or high." })),
@@ -481,7 +476,7 @@ export default function hindsight(pi: ExtensionAPI) {
     label: "Hindsight Reflect",
     description: "Ask Hindsight for a memory-grounded answer.",
     promptSnippet: "Use Hindsight reflect for deeper reasoning over retained memories.",
-    promptGuidelines: ["Use hindsight_reflect when recall snippets are not enough and a memory-grounded answer is useful."],
+    promptGuidelines: ["Use hindsight_reflect when recall snippets are not enough and you need memory-grounded synthesis or task approach guidance."],
     parameters: Schema.Object({
       query: Schema.String({ description: "Question for Hindsight reflect." }),
       context: Schema.Optional(Schema.String({ description: "Optional current task context." })),
@@ -520,7 +515,6 @@ export default function hindsight(pi: ExtensionAPI) {
     handler: async (args, ctx) => handleHindsightCommand(args, ctx, {
       beforeRecall: flushRetainQueue,
       beforeClear: clearRuntimeMemory,
-      beforeRebuild: flushRetainQueue,
       statusMemory: async () => `hindsight health: ${JSON.stringify(await client.health(ctx?.signal))}`,
       clearMemory: async () => {
         const scope = computeBankScope(configRef, ctx?.cwd || process.cwd());
@@ -541,23 +535,23 @@ export default function hindsight(pi: ExtensionAPI) {
 
   (pi as any).on?.("before_agent_start", async (event: any, ctx: any) => {
     const projectRoot = projectRootFrom(event, ctx);
-    autoRecallInjected = false;
+    autoRecallInjectedByCwd.delete(projectRoot);
     refreshRules(projectRoot);
-    const blocks = promptBlocks(projectRoot, ruleCacheRef, configRef.memoryBackend);
+    const blocks = promptBlocks(projectRoot, ruleCacheRef, memoryEnabled(projectRoot));
     if (!blocks) return undefined;
     return { systemPrompt: `${event?.systemPrompt ?? ""}\n\n${blocks}` };
   });
 
   (pi as any).on?.("context", async (event: any, ctx: any) => {
-    if (!configRef.memoryBackend || !configRef.autoRecall || autoRecallInjected) return;
+    const projectRoot = ctx?.cwd || process.cwd();
+    if (!memoryEnabled(projectRoot) || !configRef.autoRecall || autoRecallInjectedByCwd.has(projectRoot)) return;
     const messages = Array.isArray(event?.messages) ? event.messages : [];
     const query = queryFromMessages(messages);
     await flushRetainQueue();
     try {
-      const projectRoot = ctx?.cwd || process.cwd();
       const block = formatRecallResponse(await client.recall(computeBankScope(configRef, projectRoot), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal }));
       if (!block) return;
-      autoRecallInjected = true;
+      autoRecallInjectedByCwd.add(projectRoot);
       return { messages: [customMemoryMessage(block), ...messages] };
     } catch {
       return;
@@ -615,7 +609,7 @@ export default function hindsight(pi: ExtensionAPI) {
       const projectRoot = ctx?.cwd || process.cwd();
       await flushRetainQueue();
       if (skipAutoRetainAfterClear.delete(projectRoot)) return;
-      if (!configRef.memoryBackend || !configRef.autoRetain) return;
+      if (!memoryEnabled(projectRoot) || !configRef.autoRetain) return;
       const text = sessionTranscript(ctx);
       if (text) await client.retain(computeBankScope(configRef, projectRoot), [{
         content: text,

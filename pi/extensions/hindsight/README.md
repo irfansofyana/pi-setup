@@ -2,7 +2,7 @@
 
 Real Hindsight-backed memory + Pi rulebook/TTSR helpers for stock Pi.
 
-Memory uses a local Hindsight daemon (`hindsight-embed` or full Hindsight API) instead of the old JSONL search backend. Rules remain local Pi-compatible helpers.
+Memory uses a local Hindsight daemon (`hindsight-embed` or full Hindsight API). Rules remain local Pi-compatible helpers.
 
 ## Setup
 
@@ -36,9 +36,10 @@ Environment variables:
 - `HINDSIGHT_AUTO_RECALL` — `false` disables first-turn recall.
 - `HINDSIGHT_AUTO_RETAIN` — `false` disables shutdown transcript retain.
 - `HINDSIGHT_MEMORY_BACKEND` — `false` disables memory hooks.
-- `HINDSIGHT_RETAIN_MODE` — `full-session` or `last-turn`; current hooks retain full session tail.
+- `HINDSIGHT_RETAIN_MODE` — `full-session` or `last-turn`; controls shutdown auto-retain transcript scope.
 - `HINDSIGHT_RECALL_BUDGET` — `low`, `mid`, or `high`; default `mid`.
 - `HINDSIGHT_RECALL_MAX_TOKENS` — default `1024`.
+- `HINDSIGHT_REQUEST_TIMEOUT_MS` — HTTP timeout for daemon calls, default `30000`; set `0` to disable.
 - `HINDSIGHT_AUTO_START_DAEMON` — `true` lets failed local HTTP calls try `uvx hindsight-embed daemon start` once.
 
 ## Scoping
@@ -63,12 +64,22 @@ Default is oh-my-pi-style `per-project-tagged`:
 
 ## Tools
 
-- `hindsight_retain` — queues rich content to real Hindsight; flushes at 16 items / 5s / recall / shutdown.
+- `hindsight_retain` — synchronously retains rich content in real Hindsight and reports failures.
 - `hindsight_recall` — calls `/v1/default/banks/{bank}/memories/recall`.
 - `hindsight_reflect` — calls `/v1/default/banks/{bank}/reflect`.
 - `hindsight_rule` — looks up local rule cache by name or `rule://name`.
 
 Retain full context. Hindsight extracts facts, entities, temporal/causal relationships, and embeddings server-side.
+
+## Memory behavior guidance
+
+This extension follows the upstream `hindsight-local` skill shape:
+
+- Recall first before non-trivial tasks, implementation decisions, tool/library suggestions, or unfamiliar project areas.
+- Retain immediately after learning durable user preferences, project conventions, procedure outcomes, bugs and fixes, workarounds, architecture decisions, or dependency/version requirements.
+- Pass rich context to retain: include what happened, why, exact commands/errors/outcomes, and relevant conversation excerpts. Do not over-summarize; Hindsight extracts facts server-side.
+- Use categories as context labels such as `preferences`, `procedures`, `learnings`, `decisions`, `bugs`, or `workarounds`.
+- Never retain secrets, credentials, API keys, tokens, or sensitive values.
 
 ## Rules
 
