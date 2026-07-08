@@ -10,6 +10,7 @@ import hindsight, {
   HindsightHttpClient,
   computeBankScope,
   defaultHindsightConfig,
+  readHindsightConfigFile,
   formatRecallResponse,
   handleHindsightCommand,
   markRuleInjected,
@@ -22,6 +23,7 @@ import hindsight, {
   ruleMatchesGlobs,
   ruleStateKey,
   shouldInjectRule,
+  statusText,
 } from "./index.ts";
 import type { Rule } from "./types.ts";
 
@@ -268,7 +270,7 @@ test("defaultHindsightConfig reads local daemon defaults", () => {
   const cwd = tempRoot();
   const config = defaultHindsightConfig({ HINDSIGHT_CONFIG_PATH: join(cwd, "missing.json") } as NodeJS.ProcessEnv);
   assert.equal(config.apiUrl, "http://127.0.0.1:8888");
-  assert.equal(config.bankId, "pi");
+  assert.equal(config.bankId, "coding-agent");
   assert.equal(config.scoping, "per-project-tagged");
   assert.equal(config.autoStartDaemon, false);
   rmSync(cwd, { recursive: true, force: true });
@@ -303,6 +305,28 @@ test("defaultHindsightConfig reads config file and lets env override", () => {
   assert.equal(overridden.apiUrl, "http://env.local");
   assert.equal(overridden.memoryBackend, true);
   rmSync(cwd, { recursive: true, force: true });
+});
+
+test("handleHindsightCommand config set persists and reloads runtime", async () => {
+  const cwd = tempRoot();
+  const oldPath = process.env.HINDSIGHT_CONFIG_PATH;
+  const configPath = join(cwd, "config.json");
+  process.env.HINDSIGHT_CONFIG_PATH = configPath;
+  const notices: Array<{ msg: string; kind: string }> = [];
+  const ctx = { cwd, ui: { notify(msg: string, kind: string) { notices.push({ msg, kind }); } } };
+
+  try {
+    await handleHindsightCommand("config set bankId coding-agent-test", ctx);
+    assert.equal(readHindsightConfigFile({ HINDSIGHT_CONFIG_PATH: configPath } as NodeJS.ProcessEnv).bankId, "coding-agent-test");
+    await handleHindsightCommand("stats", ctx, { statusMemory: async () => "hindsight health: ok" });
+    assert.ok(notices.some((notice) => notice.msg.includes("bank: coding-agent-test")));
+    await handleHindsightCommand("config reset", ctx);
+    assert.deepEqual(readHindsightConfigFile({ HINDSIGHT_CONFIG_PATH: configPath } as NodeJS.ProcessEnv), {});
+  } finally {
+    if (oldPath === undefined) delete process.env.HINDSIGHT_CONFIG_PATH;
+    else process.env.HINDSIGHT_CONFIG_PATH = oldPath;
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("HindsightHttpClient calls real API endpoints with scope and redaction", async () => {
@@ -364,6 +388,13 @@ test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes",
   for (const secret of ["sk-abcdefghijklmnopqrstuvwxyz", "sk-proj-abcdefghijklmnopqrstuvwxyz_123456789", "xyz1234567890", "openaisecret12345", "githubsecret12345", "dbsecret12345", "ghp_", "github_pat_", "xoxb-", "AKIA1234567890ABCDEF"]) {
     assert.ok(!out.includes(secret));
   }
+});
+
+test("statusText reports footer states", () => {
+  assert.equal(statusText(false, "pi"), "hindsight off");
+  assert.equal(statusText(true, "pi"), "hindsight on · pi · checking");
+  assert.equal(statusText(true, "pi", true), "hindsight on · pi · working");
+  assert.equal(statusText(true, "pi", false), "hindsight on · pi · offline");
 });
 
 test("promptBlocks gates real Hindsight daemon guidance and rules", () => {

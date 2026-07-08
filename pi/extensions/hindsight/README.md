@@ -38,7 +38,7 @@ Example:
 ```json
 {
   "apiUrl": "http://127.0.0.1:9478",
-  "bankId": "pi",
+  "bankId": "coding-agent",
   "scoping": "per-project-tagged"
 }
 ```
@@ -48,7 +48,7 @@ Environment variables override config file values:
 - `HINDSIGHT_CONFIG_PATH` — optional alternate config file path.
 - `HINDSIGHT_API_URL` / `apiUrl` — Hindsight API URL, default `http://127.0.0.1:8888`.
 - `HINDSIGHT_API_TOKEN` / `HINDSIGHT_API_KEY` — bearer token, optional for local daemon; env-only, do not put secrets in config files.
-- `HINDSIGHT_BANK_ID` / `bankId` — base bank, default `pi`.
+- `HINDSIGHT_BANK_ID` / `bankId` — base bank, default `coding-agent`.
 - `HINDSIGHT_SCOPING` / `scoping` — `global`, `per-project`, or `per-project-tagged`; default `per-project-tagged`.
 - `HINDSIGHT_AUTO_RECALL` / `autoRecall` — `false` disables first-turn recall.
 - `HINDSIGHT_AUTO_RETAIN` / `autoRetain` — `false` disables shutdown transcript retain.
@@ -63,7 +63,7 @@ Environment variables override config file values:
 
 Default is oh-my-pi-style `per-project-tagged`:
 
-- bank: `pi`
+- bank: `coding-agent`
 - retain tags: `project:<basename>-<8-char sha1 cwd>`
 - recall/reflect use `tags_match: any`, so project memories and untagged global memories can surface.
 
@@ -71,12 +71,19 @@ Default is oh-my-pi-style `per-project-tagged`:
 
 ## Commands
 
-- `/hindsight view` — show config.
+- Footer/status — Pi shows `hindsight on · <bank> · working` when memory is enabled and the daemon health check succeeds; `checking` while probing and `offline` when unreachable.
+- `/hindsight view` — show runtime config.
+- `/hindsight config show` — show config file plus effective runtime config.
+- `/hindsight config set <key> <value>` — update runtime config and persist it to `~/.pi/agent/hindsight/config.json`.
+- `/hindsight config save` — persist current runtime config.
+- `/hindsight config reset` — clear the config file and reload defaults/env.
 - `/hindsight stats` — show Hindsight URL, bank scope, daemon health, and rule counts.
 - `/hindsight diagnose` — show paths/config/rules and `hindsight-embed daemon status`.
 - `/hindsight recall <query>` — recall from real Hindsight.
 - `/hindsight clear` — clears memories in the scoped bank only when not using shared `per-project-tagged`; otherwise tells you to curate tagged memories in Hindsight UI.
 - `/hindsight memory enable|disable` — toggle memory hooks for current Pi session.
+
+Config keys accepted by `/hindsight config set`: `apiUrl`, `bankId`, `scoping`, `autoRecall`, `autoRetain`, `autoStartDaemon`, `memoryBackend`, `retainMode`, `recallBudget`, `recallMaxTokens`, `requestTimeoutMs`. Environment variables still override matching file values until Pi restarts without those variables.
 - `/rules list|reload|show <name>` — inspect or reload local rule cache.
 
 ## Tools

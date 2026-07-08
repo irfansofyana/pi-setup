@@ -235,7 +235,7 @@ mkdir -p ~/.pi/agent/hindsight
 cat > ~/.pi/agent/hindsight/config.json <<'JSON'
 {
   "apiUrl": "http://127.0.0.1:9478",
-  "bankId": "pi",
+  "bankId": "coding-agent",
   "scoping": "per-project-tagged"
 }
 JSON
@@ -243,10 +243,11 @@ JSON
 
 `HINDSIGHT_EMBED_PROFILE` selects the `hindsight-embed` profile; `~/.pi/agent/hindsight/config.json` is what the Pi extension reads when the Pi process does not inherit shell env. Env vars still override config values.
 
-Defaults: `HINDSIGHT_API_URL`/`apiUrl=http://127.0.0.1:8888`, `HINDSIGHT_BANK_ID`/`bankId=pi`, `HINDSIGHT_SCOPING`/`scoping=per-project-tagged`.
+Defaults: `HINDSIGHT_API_URL`/`apiUrl=http://127.0.0.1:8888`, `HINDSIGHT_BANK_ID`/`bankId=coding-agent`, `HINDSIGHT_SCOPING`/`scoping=per-project-tagged`.
 
 - Real Hindsight retain/recall/reflect over the local daemon; local rulebook/TTSR portable subset stays in Pi.
-- Commands: `/hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable`; `/rules list|reload|show <name>`.
+- Footer/status: Pi shows `hindsight on · <bank> · working` when the extension can reach the daemon.
+- Commands: `/hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable|config show|config set <key> <value>|config save|config reset`; `/rules list|reload|show <name>`.
 - Tools: `hindsight_retain`, `hindsight_recall`, `hindsight_reflect`, `hindsight_rule`.
 - Memory: Hindsight daemon/API; rules: `~/.pi/agent/rules/*.{md,mdc}` plus project rules.
 - Limits: true oh-my-pi mid-token TTSR abort/rewind is fork-only; stock Pi approximates via `tool_result`, `tool_call`, and `input` hooks.

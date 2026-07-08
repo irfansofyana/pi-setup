@@ -5,9 +5,12 @@ import {
   HindsightHttpClient,
   computeBankScope,
   defaultHindsightConfig,
+  readHindsightConfigFile,
+  writeHindsightConfigFile,
   formatRecallResponse,
   formatReflectResponse,
   runHindsightEmbed,
+  type HindsightConfigFile,
   type RetainItem,
 } from "./client.ts";
 import { redactSecrets } from "./store.ts";
@@ -25,6 +28,8 @@ export {
   HindsightHttpClient,
   computeBankScope,
   defaultHindsightConfig,
+  readHindsightConfigFile,
+  writeHindsightConfigFile,
   formatRecallResponse,
   formatReflectResponse,
   runHindsightEmbed,
@@ -39,6 +44,7 @@ export {
 
 const MAX_RULE_BODY_CHARS = 1000;
 const MAX_RULEBOOK_CHARS = 6000;
+const STATUS_ID = "hindsight";
 
 function cap(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
@@ -104,6 +110,12 @@ export function rulebookPromptBlock(rules: Rule[], paths: string[] = []): string
     for (const rule of buckets.rulebook) lines.push(`- ${rule.name}: ${rule.description ?? ""} (rule://${rule.name})`);
   }
   return cap(lines.join("\n").trim(), MAX_RULEBOOK_CHARS);
+}
+
+export function statusText(enabled: boolean, bankId = "coding-agent", healthy?: boolean): string {
+  if (!enabled) return "hindsight off";
+  const state = healthy === true ? "working" : healthy === false ? "offline" : "checking";
+  return `hindsight on · ${bankId} · ${state}`;
 }
 
 export function promptBlocks(_projectRoot: string, rules: Rule[], memoryBackend: boolean, _rootDir?: string, paths: string[] = []): string {
@@ -186,6 +198,51 @@ const Schema = {
   },
 };
 
+const CONFIG_KEYS = ["apiUrl", "bankId", "scoping", "autoRecall", "autoRetain", "autoStartDaemon", "memoryBackend", "retainMode", "recallBudget", "recallMaxTokens", "requestTimeoutMs"] as const;
+type ConfigKey = typeof CONFIG_KEYS[number];
+
+function configFileFromRuntime(): HindsightConfigFile {
+  return {
+    apiUrl: configRef.apiUrl,
+    bankId: configRef.bankId,
+    scoping: configRef.scoping,
+    autoRecall: configRef.autoRecall,
+    autoRetain: configRef.autoRetain,
+    autoStartDaemon: configRef.autoStartDaemon,
+    memoryBackend: configRef.memoryBackend,
+    retainMode: configRef.retainMode,
+    recallBudget: configRef.recallBudget,
+    recallMaxTokens: configRef.recallMaxTokens,
+    requestTimeoutMs: configRef.requestTimeoutMs,
+  };
+}
+
+function parseConfigValue(key: ConfigKey, raw: string): HindsightConfigFile[ConfigKey] {
+  if (["autoRecall", "autoRetain", "autoStartDaemon", "memoryBackend"].includes(key)) {
+    if (!["true", "false"].includes(raw)) throw new Error(`${key} must be true or false.`);
+    return raw === "true";
+  }
+  if (["recallMaxTokens", "requestTimeoutMs"].includes(key)) {
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) throw new Error(`${key} must be a non-negative number.`);
+    return value;
+  }
+  if (key === "scoping" && !["global", "per-project", "per-project-tagged"].includes(raw)) throw new Error("scoping must be global, per-project, or per-project-tagged.");
+  if (key === "retainMode" && !["full-session", "last-turn"].includes(raw)) throw new Error("retainMode must be full-session or last-turn.");
+  if (key === "recallBudget" && !["low", "mid", "high"].includes(raw)) throw new Error("recallBudget must be low, mid, or high.");
+  if (!raw.trim()) throw new Error(`${key} cannot be empty.`);
+  return raw;
+}
+
+function envOverrideFor(key: ConfigKey): string | undefined {
+  const envName = `HINDSIGHT_${key.replace(/[A-Z]/g, (char) => `_${char}`).toUpperCase()}`;
+  return process.env[envName] ? envName : undefined;
+}
+
+function reloadConfigRef(): void {
+  Object.assign(configRef, defaultHindsightConfig());
+}
+
 export async function handleHindsightCommand(
   args: string,
   ctx: { cwd?: string; ui: { notify: (msg: string, kind: string) => void } },
@@ -200,6 +257,43 @@ export async function handleHindsightCommand(
     const { apiToken: _apiToken, ...safeConfig } = configRef;
     ctx.ui.notify(JSON.stringify({ ...safeConfig, apiToken: configRef.apiToken ? "[REDACTED]" : undefined }, null, 2), "info");
     return;
+  }
+  if (command === "config") {
+    const action = sub || "show";
+    try {
+      if (action === "show") {
+        const fileConfig = readHindsightConfigFile();
+        const { apiToken: _apiToken, ...safeConfig } = configRef;
+        ctx.ui.notify(JSON.stringify({ path: process.env.HINDSIGHT_CONFIG_PATH || HINDSIGHT_CONFIG_PATH, file: fileConfig, runtime: { ...safeConfig, apiToken: configRef.apiToken ? "[REDACTED]" : undefined } }, null, 2), "info");
+        return;
+      }
+      if (action === "save") {
+        const path = writeHindsightConfigFile(configFileFromRuntime());
+        ctx.ui.notify(`Hindsight config saved to ${path}.`, "info");
+        return;
+      }
+      if (action === "reset") {
+        const path = writeHindsightConfigFile({});
+        reloadConfigRef();
+        ctx.ui.notify(`Hindsight config reset at ${path}. Runtime reloaded from defaults/env.`, "info");
+        return;
+      }
+      if (action === "set") {
+        const key = rest[1] as ConfigKey | undefined;
+        const rawValue = rest.slice(2).join(" ").trim();
+        if (!key || !CONFIG_KEYS.includes(key) || !rawValue) throw new Error(`Usage: /hindsight config set <${CONFIG_KEYS.join("|")}> <value>`);
+        const nextConfig = { ...readHindsightConfigFile(), [key]: parseConfigValue(key, rawValue) };
+        const path = writeHindsightConfigFile(nextConfig);
+        reloadConfigRef();
+        const override = envOverrideFor(key);
+        const overrideNote = override ? ` ${override} overrides this key until Pi restarts without that env var.` : "";
+        ctx.ui.notify(`Hindsight config updated: ${key}=${JSON.stringify(nextConfig[key])} (${path}).${overrideNote}`, override ? "warning" : "info");
+        return;
+      }
+    } catch (error) {
+      ctx.ui.notify(`hindsight config failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+      return;
+    }
   }
   if (command === "stats") {
     ensureRules(projectRoot);
@@ -273,7 +367,7 @@ export async function handleHindsightCommand(
       return;
     }
   }
-  ctx.ui.notify("Usage: /hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable", "warning");
+  ctx.ui.notify("Usage: /hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable|config show|config set <key> <value>|config save|config reset", "warning");
 }
 
 export function handleRulesCommand(args: string, ctx: { cwd?: string; ui: { notify: (msg: string, kind: string) => void } }): void {
@@ -347,6 +441,22 @@ export default function hindsight(pi: ExtensionAPI) {
   function clearRuntimeMemory(cwd: string): void {
     skipAutoRetainAfterClear.add(cwd);
     autoRecallInjectedByCwd.delete(cwd);
+  }
+
+  function updateStatus(ctx: any, projectRoot: string, healthy?: boolean): void {
+    if (!ctx?.hasUI || typeof ctx?.ui?.setStatus !== "function") return;
+    const scope = computeBankScope(configRef, projectRoot);
+    ctx.ui.setStatus(STATUS_ID, statusText(memoryEnabled(projectRoot), scope.bankId, healthy));
+  }
+
+  async function refreshStatus(ctx: any, projectRoot: string): Promise<void> {
+    updateStatus(ctx, projectRoot);
+    try {
+      await client.health(ctx?.signal);
+      updateStatus(ctx, projectRoot, true);
+    } catch {
+      updateStatus(ctx, projectRoot, false);
+    }
   }
 
   function textFrom(value: unknown): string {
@@ -518,7 +628,11 @@ export default function hindsight(pi: ExtensionAPI) {
     handler: async (args, ctx) => handleHindsightCommand(args, ctx, {
       beforeRecall: flushRetainQueue,
       beforeClear: clearRuntimeMemory,
-      statusMemory: async () => `hindsight health: ${JSON.stringify(await client.health(ctx?.signal))}`,
+      statusMemory: async () => {
+        const health = await client.health(ctx?.signal);
+        updateStatus(ctx, ctx?.cwd || process.cwd(), true);
+        return `hindsight health: ${JSON.stringify(health)}`;
+      },
       clearMemory: async () => {
         const scope = computeBankScope(configRef, ctx?.cwd || process.cwd());
         if (configRef.scoping === "per-project-tagged") return "clear skipped: per-project-tagged uses shared bank; delete/curate tagged memories in Hindsight UI to avoid wiping other projects.";
@@ -534,12 +648,16 @@ export default function hindsight(pi: ExtensionAPI) {
     handler: async (args, ctx) => handleRulesCommand(args, ctx),
   });
 
-  (pi as any).on?.("session_start", async () => undefined);
+  (pi as any).on?.("session_start", async (_event: any, ctx: any) => {
+    const projectRoot = ctx?.cwd || process.cwd();
+    void refreshStatus(ctx, projectRoot);
+  });
 
   (pi as any).on?.("before_agent_start", async (event: any, ctx: any) => {
     const projectRoot = projectRootFrom(event, ctx);
     autoRecallInjectedByCwd.delete(projectRoot);
     refreshRules(projectRoot);
+    void refreshStatus(ctx, projectRoot);
     const blocks = promptBlocks(projectRoot, ruleCacheRef, memoryEnabled(projectRoot));
     if (!blocks) return undefined;
     return { systemPrompt: `${event?.systemPrompt ?? ""}\n\n${blocks}` };

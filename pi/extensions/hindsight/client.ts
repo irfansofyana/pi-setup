@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { projectKey, redactSecrets } from "./store.ts";
 
@@ -65,7 +65,7 @@ export interface ReflectResponse {
   text?: string;
 }
 
-function readConfigFile(env: NodeJS.ProcessEnv = process.env): HindsightConfigFile {
+export function readHindsightConfigFile(env: NodeJS.ProcessEnv = process.env): HindsightConfigFile {
   const path = env.HINDSIGHT_CONFIG_PATH || HINDSIGHT_CONFIG_PATH;
   try {
     if (!existsSync(path)) return {};
@@ -74,6 +74,13 @@ function readConfigFile(env: NodeJS.ProcessEnv = process.env): HindsightConfigFi
   } catch {
     return {};
   }
+}
+
+export function writeHindsightConfigFile(config: HindsightConfigFile, env: NodeJS.ProcessEnv = process.env): string {
+  const path = env.HINDSIGHT_CONFIG_PATH || HINDSIGHT_CONFIG_PATH;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  return path;
 }
 
 function stringValue(envValue: string | undefined, configValue: unknown, fallback: string): string {
@@ -107,11 +114,11 @@ function enumValue<T extends string>(envValue: string | undefined, configValue: 
 }
 
 export function defaultHindsightConfig(env: NodeJS.ProcessEnv = process.env): HindsightConfig {
-  const fileConfig = readConfigFile(env);
+  const fileConfig = readHindsightConfigFile(env);
   return {
     apiUrl: stringValue(env.HINDSIGHT_API_URL, fileConfig.apiUrl, "http://127.0.0.1:8888"),
     apiToken: env.HINDSIGHT_API_TOKEN || env.HINDSIGHT_API_KEY || undefined,
-    bankId: stringValue(env.HINDSIGHT_BANK_ID, fileConfig.bankId, "pi"),
+    bankId: stringValue(env.HINDSIGHT_BANK_ID, fileConfig.bankId, "coding-agent"),
     scoping: enumValue(env.HINDSIGHT_SCOPING, fileConfig.scoping, "per-project-tagged", ["global", "per-project", "per-project-tagged"] as const),
     autoRecall: boolValue(env.HINDSIGHT_AUTO_RECALL, fileConfig.autoRecall, true),
     autoRetain: boolValue(env.HINDSIGHT_AUTO_RETAIN, fileConfig.autoRetain, true),
@@ -165,7 +172,13 @@ export async function runHindsightEmbed(args: string[], timeoutMs = 30_000): Pro
 }
 
 export class HindsightHttpClient {
-  constructor(private readonly config: Pick<HindsightConfig, "apiUrl" | "apiToken" | "autoStartDaemon"> & Partial<Pick<HindsightConfig, "requestTimeoutMs">>, private readonly fetchImpl: typeof fetch = fetch) {}
+  private readonly config: Pick<HindsightConfig, "apiUrl" | "apiToken" | "autoStartDaemon"> & Partial<Pick<HindsightConfig, "requestTimeoutMs">>;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(config: Pick<HindsightConfig, "apiUrl" | "apiToken" | "autoStartDaemon"> & Partial<Pick<HindsightConfig, "requestTimeoutMs">>, fetchImpl: typeof fetch = fetch) {
+    this.config = config;
+    this.fetchImpl = fetchImpl;
+  }
 
   async health(signal?: AbortSignal): Promise<unknown> {
     return this.request("GET", "/health", undefined, signal, false);
