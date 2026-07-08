@@ -203,14 +203,15 @@ Default config highlights:
   "proxyUrl": "http://127.0.0.1:8787",
   "allowRemote": false,
   "minChars": 500,
+  "startupHealthTimeoutMs": 30000,
   "storeTtlHours": 24,
   "notifyFailures": "once"
 }
 ```
 
-Remote Headroom proxies are blocked unless `allowRemote` is set to `true`; only enable that for a proxy you trust with tool output content.
+`/headroom start` waits up to `startupHealthTimeoutMs` for slow local proxy readiness. Remote Headroom proxies are blocked unless `allowRemote` is set to `true`; only enable that for a proxy you trust with tool output content.
 
-Run `/reload` after changing config.
+Run `/reload` after changing config or copying a new extension version.
 
 ### Local Hindsight Memory adapter
 

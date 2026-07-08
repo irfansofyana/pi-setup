@@ -87,6 +87,7 @@ Defaults:
   "port": 8787,
   "minChars": 500,
   "compressionTimeoutMs": 10000,
+  "startupHealthTimeoutMs": 30000,
   "fallbackToOriginal": true,
   "notifyFailures": "once",
   "allowRemote": false,
@@ -122,6 +123,8 @@ Defaults:
 - Default startup is manual. Nothing starts until `/headroom start`.
 - Remote proxy URLs are blocked unless `allowRemote` is explicitly set to `true`.
 - If a proxy is already healthy at `proxyUrl`, extension adopts it as external.
+- `/headroom start` waits up to `startupHealthTimeoutMs` (default 30s) for slow local proxy readiness.
+- Readiness is compression-oriented: upstream-only health failures do not block local tool-output compression.
 - `/headroom stop` never kills an external proxy.
 - `/headroom stop` disables compression for current session.
 - Commands mutate runtime state only. Use `/headroom config save` to persist.

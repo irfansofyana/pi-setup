@@ -26,6 +26,7 @@ export interface HeadroomConfig {
   port: number;
   minChars: number;
   compressionTimeoutMs: number;
+  startupHealthTimeoutMs: number;
   fallbackToOriginal: boolean;
   notifyFailures: NotifyFailures;
   allowRemote: boolean;
@@ -89,6 +90,7 @@ export const DEFAULT_CONFIG: HeadroomConfig = {
   port: 8787,
   minChars: 500,
   compressionTimeoutMs: 10_000,
+  startupHealthTimeoutMs: 30_000,
   fallbackToOriginal: true,
   notifyFailures: "once",
   allowRemote: false,
@@ -198,6 +200,7 @@ export function normalizeHeadroomConfig(raw: unknown): HeadroomConfig {
     port,
     minChars: clampNumber(input.minChars, DEFAULT_CONFIG.minChars, 1, 1_000_000),
     compressionTimeoutMs: clampNumber(input.compressionTimeoutMs, DEFAULT_CONFIG.compressionTimeoutMs, 500, 120_000),
+    startupHealthTimeoutMs: clampNumber(input.startupHealthTimeoutMs, DEFAULT_CONFIG.startupHealthTimeoutMs, 5_000, 120_000),
     fallbackToOriginal: input.fallbackToOriginal !== false,
     notifyFailures: notifyFailuresFrom(input.notifyFailures, DEFAULT_CONFIG.notifyFailures),
     allowRemote: input.allowRemote === true,
@@ -375,9 +378,44 @@ export function headroomReadyFromPayload(payload: unknown): boolean | undefined 
   return undefined;
 }
 
+export function headroomCompressionReadyFromPayload(payload: unknown): boolean | undefined {
+  const aggregateReady = headroomReadyFromPayload(payload);
+  if (aggregateReady === true) return true;
+  if (!isRecord(payload) || payload.service !== "headroom-proxy" || !isRecord(payload.checks)) return aggregateReady;
+
+  const checks = payload.checks;
+  const startup = checks.startup;
+  if (!isRecord(startup) || startup.ready !== true) return aggregateReady;
+
+  for (const [name, check] of Object.entries(checks)) {
+    if (name === "upstream") continue;
+    if (!isRecord(check)) continue;
+    if (check.enabled === false || check.status === "disabled") continue;
+    if (typeof check.ready === "boolean" && !check.ready) return aggregateReady;
+  }
+
+  return true;
+}
+
 async function endpointReady(url: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
   const payload = await fetchJson(url, { method: "GET" }, timeoutMs, signal);
-  return headroomReadyFromPayload(payload) ?? true;
+  return headroomCompressionReadyFromPayload(payload) ?? true;
+}
+
+async function waitForHealth(
+  config: HeadroomConfig,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+  shouldContinue: () => boolean = () => true,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!signal?.aborted && shouldContinue()) {
+    if (await health(config, signal)) return true;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, remainingMs)));
+  }
+  return false;
 }
 
 export function isLocalProxyUrl(rawUrl: string): boolean {
@@ -718,15 +756,12 @@ export default function headroom(pi: ExtensionAPI) {
     });
     if (managedProcess.pid) writeFileSync(PID_PATH, `${managedProcess.pid}\n`, "utf8");
 
-    for (let i = 0; i < 30; i++) {
-      if (await health(config, getContextSignal(ctx))) {
-        owner = "managed";
-        runtimeEnabled = config.enabled;
-        updateStatus(ctx, runtimeEnabled, owner, stats);
-        if (ctx.hasUI) ctx.ui.notify("Headroom proxy started.", "info");
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    if (await waitForHealth(config, getContextSignal(ctx), config.startupHealthTimeoutMs, () => managedProcess !== undefined)) {
+      owner = "managed";
+      runtimeEnabled = config.enabled;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (ctx.hasUI) ctx.ui.notify("Headroom proxy started.", "info");
+      return;
     }
 
     if (managedProcess) {
@@ -738,7 +773,7 @@ export default function headroom(pi: ExtensionAPI) {
     try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
     if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
     updateStatus(ctx, runtimeEnabled, owner, stats);
-    notifyFailure(ctx, "Headroom proxy did not become healthy; bypassing compression.");
+    notifyFailure(ctx, `Headroom proxy did not become healthy within ${config.startupHealthTimeoutMs}ms; bypassing compression. Check /headroom logs.`);
   };
 
   const stopManagedProxy = (ctx: ExtensionContext): void => {
