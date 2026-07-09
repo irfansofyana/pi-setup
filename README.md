@@ -20,7 +20,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Todo | `rpiv-todo` task tracking extension |
 | 9router | `pi-9router-ext` model/search routing tools |
 | Stats | `pi-stats-ext` usage statistics |
-| Caveman | `pi-caveman` terse-response extension |
+| Caveman | Local `/caveman` terse-response extension template |
 | Skills | Research, review, diagrams, frontend, sparring, docs, Notion/n8n workflows |
 | Optional graphing | Understand-Anything Pi commands and skills |
 | Notion | Official `ntn` CLI and Notion skills |
@@ -37,6 +37,7 @@ pi/
     headroom/                # local Headroom adapter template
     hindsight/               # local Hindsight adapter template
     goal-loop/               # local /goal extension template
+    caveman/                 # local /caveman extension template
 ```
 
 Do **not** copy entire `pi/` folder into `~/.pi/`. Copy only files/templates you need.
@@ -59,7 +60,6 @@ pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
 pi install npm:pi-9router-ext
 pi install npm:pi-stats-ext
-pi install git:github.com/jonjonrankin/pi-caveman
 
 # 3) Install local templates from this repo
 mkdir -p ~/.pi/agent/themes ~/.pi/agent/extensions
@@ -68,6 +68,8 @@ cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
 cp -r pi/extensions/headroom ~/.pi/agent/extensions/
 cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
 cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
+rm -rf ~/.pi/agent/extensions/caveman
+cp -r pi/extensions/caveman ~/.pi/agent/extensions/
 
 # 4) Install Headroom CLI
 pipx install "headroom-ai[proxy]"
@@ -125,7 +127,6 @@ pi
 | Todo | `pi install npm:@juicesharp/rpiv-todo` | Task tracking |
 | 9router | `pi install npm:pi-9router-ext` | Model/search routing |
 | Stats | `pi install npm:pi-stats-ext` | Usage stats |
-| Caveman | `pi install git:github.com/jonjonrankin/pi-caveman` | Terse style mode |
 
 Run `/reload` after install.
 
@@ -138,6 +139,7 @@ Run `/reload` after install.
 | Headroom | `cp -r pi/extensions/headroom ~/.pi/agent/extensions/` | Needs Headroom CLI |
 | Hindsight | `cp -r pi/extensions/hindsight ~/.pi/agent/extensions/` | Needs local daemon |
 | Goal loop | `cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/` | Adds `/goal` |
+| Caveman | `rm -rf ~/.pi/agent/extensions/caveman && cp -r pi/extensions/caveman ~/.pi/agent/extensions/` | Adds local `/caveman` |
 
 ## Configuration paths
 
@@ -148,6 +150,7 @@ Run `/reload` after install.
 | `~/.pi/agent/extensions/pi-permission-system/config.json` | Global Pi | Permission policy |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter config |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon config |
+| `~/.pi/agent/caveman/config.json` | Global Pi | Caveman extension config |
 | `~/.pi/agent/goal-loop/config.json` | Global Pi | Goal-loop config |
 | `~/.pi/agent/goal-loop/state.json` | Global Pi | Persisted project goals |
 | `~/.config/mcp/mcp.json` | Global shared | Preferred MCP config |
@@ -501,6 +504,42 @@ hindsight_rule
 
 Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
 
+## Caveman extension
+
+Purpose: local terse-response style extension, replacing old external `pi-caveman` Git package.
+
+Install:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+rm -rf ~/.pi/agent/extensions/caveman
+cp -r pi/extensions/caveman ~/.pi/agent/extensions/
+```
+
+Commands:
+
+```text
+/caveman
+/caveman lite|full|ultra|micro
+/caveman off|normal
+/caveman status
+/caveman config
+/caveman default full
+/caveman status-bar off
+/caveman auto-trigger on
+/caveman trigger-level full
+```
+
+Trigger phrases include `caveman mode`, `talk like caveman`, `less tokens`, `be brief`, `normal mode`, and `stop caveman`.
+
+Config path:
+
+```text
+~/.pi/agent/caveman/config.json
+```
+
+If old upstream config exists at `~/.pi/agent/caveman.json`, local extension reads it when new config is absent. Do not keep both old Git package and local template active: both register `/caveman`.
+
 ## Goal loop
 
 Purpose: project-scoped `/goal` command with persisted state, verification evidence, and auto-continue loop.
@@ -653,6 +692,7 @@ ntn workers --help
 | Permissions UI | `/permission-system` |
 | Headroom status | `/headroom status` |
 | Hindsight diagnose | `/hindsight diagnose` |
+| Caveman status | `/caveman status` |
 | Goal status | `/goal status` |
 | Update Pi | `pi update` |
 | Update extensions | `pi update --extensions` |
@@ -701,6 +741,7 @@ Use the notion-cli skill to list Notion API endpoints.
 | Skills do not trigger | Restart Pi or `/reload`; confirm skill in startup header |
 | Headroom offline | Run `/headroom doctor`, then `/headroom start` |
 | Hindsight offline | Run `/hindsight diagnose`, check daemon port/config |
+| Duplicate `/caveman` | Remove old external package or local duplicate; keep only repo template |
 | Theme not applied | Confirm `irfan-gruvbox.json` copied and selected in `/settings` |
 
 ## Maintenance
