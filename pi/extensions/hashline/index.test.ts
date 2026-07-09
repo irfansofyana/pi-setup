@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
+import hashlineExtension, {
   HashlineSession,
   applyHashlinePatch,
   applyHashlinePatchToFiles,
@@ -77,10 +77,102 @@ test("applyHashlinePatch rejects unseen anchored lines", () => {
 test("applyHashlinePatch rejects stale file tags with the current tag in the error", () => {
   const session = new HashlineSession();
   const tag = session.record(path, original, [2]);
-  const current = original.replace("const a = 1;", "const a = 10;");
+  const current = original.replace("const b = 2;", "const b = 20;");
   const patch = parseHashlineInput([`[${path}#${tag}]`, "SWAP 2.=2:", "+const b = 3;"].join("\n"));
 
   assert.throws(() => applyHashlinePatch(session, current, patch.sections[0]), new RegExp(`stale tag ${tag}.*current tag ${computeFileTag(current)}`));
+});
+
+test("applyHashlinePatch recovers stale anchors shifted by an insertion before the target", () => {
+  const session = new HashlineSession();
+  const before = ["one", "two", "three"].join("\n");
+  const tag = session.record("shift.txt", before, [3]);
+  const current = ["zero", "one", "two", "three"].join("\n");
+  const patch = parseHashlineInput([`[shift.txt#${tag}]`, "SWAP 3.=3:", "+THREE"].join("\n"));
+
+  const result = applyHashlinePatch(session, current, patch.sections[0]);
+
+  assert.equal(result.text, ["zero", "one", "two", "THREE"].join("\n"));
+  assert.match(result.warnings.join("\n"), /Recovered stale tag/);
+});
+
+test("applyHashlinePatch refuses stale recovery when anchor content changed", () => {
+  const session = new HashlineSession();
+  const before = ["one", "two", "three"].join("\n");
+  const tag = session.record("changed.txt", before, [3]);
+  const current = ["one", "two", "THREE already changed"].join("\n");
+  const patch = parseHashlineInput([`[changed.txt#${tag}]`, "SWAP 3.=3:", "+model write"].join("\n"));
+
+  assert.throws(() => applyHashlinePatch(session, current, patch.sections[0]), /stale tag/);
+});
+
+test("parse/apply supports brace block replacement", () => {
+  const session = new HashlineSession();
+  const source = [
+    "function keep() {",
+    "  return 1;",
+    "}",
+    "function change() {",
+    "  const value = 2;",
+    "  return value;",
+    "}",
+  ].join("\n");
+  const tag = session.record("blocks.ts", source, [4]);
+  const patch = parseHashlineInput([
+    `[blocks.ts#${tag}]`,
+    "SWAP.BLK 4:",
+    "+function change() {",
+    "+  return 42;",
+    "+}",
+  ].join("\n"));
+
+  const result = applyHashlinePatch(session, source, patch.sections[0]);
+
+  assert.equal(result.text, ["function keep() {", "  return 1;", "}", "function change() {", "  return 42;", "}"].join("\n"));
+});
+
+test("parse/apply supports block deletion and insert-after-block", () => {
+  const session = new HashlineSession();
+  const source = ["if (ready) {", "  run();", "}", "done();"].join("\n");
+  const tag = session.record("blocks.ts", source, [1]);
+  const patch = parseHashlineInput([
+    `[blocks.ts#${tag}]`,
+    "INS.BLK.POST 1:",
+    "+afterBlock();",
+    "DEL.BLK 1",
+  ].join("\n"));
+
+  const result = applyHashlinePatch(session, source, patch.sections[0]);
+
+  assert.equal(result.text, ["afterBlock();", "done();"].join("\n"));
+});
+
+test("hashline extension appends diagnostics from a best-effort ctx.lsp hook", async () => {
+  const tools: Record<string, any> = {};
+  const pi = {
+    registerTool(tool: any) { tools[tool.name] = tool; },
+    registerCommand() {},
+  };
+  hashlineExtension(pi as any);
+  const root = mkdtempSync(join(tmpdir(), "hashline-lsp-"));
+  try {
+    const file = join(root, "app.ts");
+    await import("node:fs").then(({ writeFileSync }) => writeFileSync(file, "const a = 1;\n", "utf8"));
+    const ctx = {
+      cwd: root,
+      lsp: {
+        diagnostics: async () => [{ severity: "error", message: "Type mismatch", line: 1 }],
+      },
+    };
+    const read = await tools.hashline_read.execute("read", { path: "app.ts" }, undefined, undefined, ctx);
+    const header = read.content[0].text.split("\n")[0];
+    const result = await tools.hashline_edit.execute("edit", { input: [header, "SWAP 1.=1:", "+const a: string = 1;"].join("\n") }, undefined, undefined, ctx);
+
+    assert.match(result.content[0].text, /Diagnostics:/);
+    assert.match(result.content[0].text, /Type mismatch/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("applyHashlinePatch preserves BOM and CRLF when producing persisted text", () => {

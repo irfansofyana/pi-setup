@@ -274,9 +274,12 @@ INS.PRE N:      insert + payload rows before line N
 INS.POST N:     insert + payload rows after line N
 INS.HEAD:       insert at start of file
 INS.TAIL:       insert at end of file
+SWAP.BLK N:     replace the brace/indent block starting at line N
+DEL.BLK N       delete the brace/indent block starting at line N
+INS.BLK.POST N: insert after the brace/indent block starting at line N
 ```
 
-Current scope: this is a hardened local extension inspired by Oh My Pi's hashline design. It implements whole-file tags, session snapshots, seen-line validation, project-root path confinement, duplicate-target rejection, all-or-nothing multi-section preflight, and BOM/line-ending preservation. It does **not** yet implement Oh My Pi's tree-sitter block operations, stale-tag 3-way recovery, or LSP diagnostics flush. Add LSP after the edit format has proven useful in daily Pi work.
+Current scope: this is a hardened local extension inspired by Oh My Pi's hashline design. It implements whole-file tags, session snapshots, seen-line validation, safe stale-tag recovery for line shifts, simple brace/indent block operations, project-root path confinement, duplicate-target rejection, all-or-nothing multi-section preflight, BOM/line-ending preservation, and best-effort post-write diagnostics from Pi LSP context hooks when available. Full tree-sitter block resolution is still a future upgrade.
 
 ### Local Hindsight Memory adapter
 

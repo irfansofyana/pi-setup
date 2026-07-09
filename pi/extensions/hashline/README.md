@@ -48,6 +48,9 @@ INS.PRE N:      insert + payload rows before line N
 INS.POST N:     insert + payload rows after line N
 INS.HEAD:       insert at start of file
 INS.TAIL:       insert at end of file
+SWAP.BLK N:     replace the brace/indent block starting at line N
+DEL.BLK N       delete the brace/indent block starting at line N
+INS.BLK.POST N: insert after the brace/indent block starting at line N
 ```
 
 ## Safety model
@@ -64,7 +67,9 @@ This extension intentionally starts smaller than Oh My Pi's native implementatio
 - Multi-section patches are preflighted before any write happens, so a stale second file cannot leave the first file half-applied.
 - Duplicate sections targeting the same file are rejected; merge operations under one `[path#TAG]` header.
 - Relative and absolute paths are confined to the current project root.
-- Stale-tag recovery, tree-sitter block operations, and LSP diagnostics are intentionally left for later iterations.
+- Stale tags are recovered only when every anchor maps through unchanged lines with one consistent offset; changed anchors still reject.
+- Block operations resolve simple brace-delimited and indentation-delimited blocks. This is not a full tree-sitter resolver yet.
+- After `hashline_edit`, the extension appends diagnostics from a best-effort Pi context LSP hook when available (`ctx.lsp.diagnostics`, `ctx.lsp.getDiagnostics`, or compatible function shape).
 
 ## Install
 
