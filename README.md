@@ -15,6 +15,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - Local `/goal` command template for Codex/Claude-style goal loops in Pi
+- Local `/caveman` terse-response extension template, replacing the external Git dependency
 - A curated set of agent skills for research, reviews, diagrams, frontend work, decision sparring, and Notion workflows
 - Notion CLI (`ntn`) plus Notion agent skills from `makenotion/skills`
 - Optional Understand-Anything plugin/skills for Pi codebase graphs
@@ -40,6 +41,9 @@ The `pi/` directory in this repository contains **example/template files** for y
 >
 > # Example: copy just the local hindsight memory extension template
 > cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+>
+> # Example: copy just the local caveman extension template
+> cp -r pi/extensions/caveman ~/.pi/agent/extensions/
 > ```
 
 ## Prerequisites
@@ -102,8 +106,7 @@ pi install npm:pi-9router-ext
 # Stats: Pi usage statistics extension
 pi install npm:pi-stats-ext
 
-# Caveman: caveman extension
-pi install git:github.com/jonjonrankin/pi-caveman
+# Caveman: local repo-owned template copied below; no external Git package
 ```
 
 Install Headroom CLI and the local Headroom adapter template:
@@ -121,6 +124,14 @@ Install local Hindsight Memory adapter template:
 ```bash
 mkdir -p ~/.pi/agent/extensions
 cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+```
+
+Install local Caveman terse-response extension template:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+rm -rf ~/.pi/agent/extensions/caveman
+cp -r pi/extensions/caveman ~/.pi/agent/extensions/
 ```
 
 Reload or restart Pi after installing extensions.
@@ -264,6 +275,67 @@ Reload Pi:
 ```text
 /reload
 ```
+
+### Local Caveman terse-response extension
+
+This repo includes a local Pi extension template at `pi/extensions/caveman/` that replaces the old external Caveman package with a repo-owned copy.
+
+Install globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+rm -rf ~/.pi/agent/extensions/caveman
+cp -r pi/extensions/caveman ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
+```
+
+Commands:
+
+```text
+/caveman                         # toggle off/full
+/caveman lite|full|ultra|micro   # set session level
+/caveman off|normal              # disable for current session
+/caveman status                  # show current state
+/caveman config                  # show config commands and current config
+/caveman default full            # persist default level
+/caveman status-bar off          # hide footer status
+/caveman auto-trigger on         # enable phrase triggers
+/caveman trigger-level full      # phrase-trigger level
+```
+
+Natural trigger phrases include `caveman mode`, `talk like caveman`, `less tokens`, `be brief`, `be terse`, `normal mode`, and `stop caveman`.
+
+Config lives at:
+
+```text
+~/.pi/agent/caveman/config.json
+```
+
+If the old upstream config exists at `~/.pi/agent/caveman.json`, the local extension reads it when the new config file is absent.
+
+Migration from the Git package:
+
+```bash
+pi list
+# Remove the old external Caveman package shown by pi list, if present.
+mkdir -p ~/.pi/agent/extensions
+rm -rf ~/.pi/agent/extensions/caveman
+cp -r pi/extensions/caveman ~/.pi/agent/extensions/
+```
+
+Then run:
+
+```text
+/reload
+/caveman status
+```
+
+Do not keep both the old Git package and the local template active: both register `/caveman`.
 
 ### Local goal loop command
 
@@ -645,7 +717,6 @@ npx skills add irfansofyana/ai-marketplace --global --skill idea-refinery
 
 ```bash
 npx skills@latest add mattpocock/skills --global --skill grill-me
-npx skills@latest add mattpocock/skills --global --skill caveman
 npx skills@latest add mattpocock/skills --global --skill teach
 ```
 

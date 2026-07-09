@@ -45,8 +45,7 @@ pi install npm:@juicesharp/rpiv-todo
 # Hindsight: copy real local-daemon memory template from pi/extensions/hindsight
 pi install npm:pi-9router-ext
 pi install npm:pi-stats-ext
-# Caveman: terse response style extension
-pi install git:github.com/jonjonrankin/pi-caveman
+# Caveman: copy local terse-response extension template from pi/extensions/caveman
 ```
 
 ## Permission policy notes
