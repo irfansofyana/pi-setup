@@ -1,0 +1,5 @@
+{
+  "name": "managed-skills-pi-extension",
+  "private": true,
+  "type": "module"
+}

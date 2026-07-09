@@ -14,6 +14,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Context tooling | `context-mode` plus context-mode tools/skills |
 | Headroom | Local Headroom adapter template for tool-output compression/retrieval |
 | Hindsight | Local Hindsight memory adapter template backed by `hindsight-embed` daemon |
+| Managed skills | Local generated reusable skills template with Hindsight-backed `learn` |
 | Goal loop | Local `/goal` command template for persisted goal loops |
 | Ask user | Structured `ask_user_question` UI helper |
 | Preview | Markdown preview/export helper |
@@ -36,6 +37,7 @@ pi/
     pi-signature.ts          # signature header + compact footer
     headroom/                # local Headroom adapter template
     hindsight/               # local Hindsight adapter template
+    managed-skills/          # local managed generated skills template
     goal-loop/               # local /goal extension template
     caveman/                 # local /caveman extension template
 ```
@@ -67,6 +69,7 @@ cp pi/themes/irfan-gruvbox.json ~/.pi/agent/themes/
 cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
 cp -r pi/extensions/headroom ~/.pi/agent/extensions/
 cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+cp -r pi/extensions/managed-skills ~/.pi/agent/extensions/
 cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
 rm -rf ~/.pi/agent/extensions/caveman
 cp -r pi/extensions/caveman ~/.pi/agent/extensions/
@@ -138,6 +141,7 @@ Run `/reload` after install.
 | Signature UI | `cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/` | Header, spinner, compact footer |
 | Headroom | `cp -r pi/extensions/headroom ~/.pi/agent/extensions/` | Needs Headroom CLI |
 | Hindsight | `cp -r pi/extensions/hindsight ~/.pi/agent/extensions/` | Needs local daemon |
+| Managed skills | `cp -r pi/extensions/managed-skills ~/.pi/agent/extensions/` | Adds `manage_skill`, `learn`, `/managed-skills` |
 | Goal loop | `cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/` | Adds `/goal` |
 | Caveman | `rm -rf ~/.pi/agent/extensions/caveman && cp -r pi/extensions/caveman ~/.pi/agent/extensions/` | Adds local `/caveman` |
 
@@ -150,6 +154,8 @@ Run `/reload` after install.
 | `~/.pi/agent/extensions/pi-permission-system/config.json` | Global Pi | Permission policy |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter config |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon config |
+| `~/.pi/agent/managed-skills/config.json` | Global Pi | Managed skills config |
+| `~/.pi/agent/managed-skills/` | Global Pi | Generated managed skill files |
 | `~/.pi/agent/caveman/config.json` | Global Pi | Caveman extension config |
 | `~/.pi/agent/goal-loop/config.json` | Global Pi | Goal-loop config |
 | `~/.pi/agent/goal-loop/state.json` | Global Pi | Persisted project goals |
@@ -323,6 +329,8 @@ Recommended policy:
     "todo": "allow",
     "write": "ask",
     "edit": "ask",
+    "manage_skill": "ask",
+    "learn": "ask",
     "subagent": "ask",
     "bash": {
       "*": "ask",
@@ -503,6 +511,69 @@ hindsight_rule
 ```
 
 Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
+
+## Managed skills extension
+
+Purpose: OMP-inspired generated reusable skills for stock Pi. Provides `manage_skill`, `learn`, and `/managed-skills`, writing only isolated generated skills under:
+
+```text
+~/.pi/agent/managed-skills/<skill-name>/SKILL.md
+```
+
+Install:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/managed-skills ~/.pi/agent/extensions/
+```
+
+Commands:
+
+```text
+/managed-skills status
+/managed-skills list
+/managed-skills enable
+/managed-skills disable
+/managed-skills learn on|off
+/managed-skills auto on|off
+/managed-skills autocontinue on|off
+/managed-skills view <name>
+/managed-skills delete <name>
+/managed-skills config
+/managed-skills reload
+```
+
+Tools:
+
+```text
+manage_skill  # create/update/delete/list/view isolated managed SKILL.md files
+learn         # retain durable lessons in Hindsight, optionally with a managed skill
+```
+
+Default config:
+
+```json
+{
+  "enabled": true,
+  "learnEnabled": true,
+  "autoCapture": false,
+  "autoContinue": false,
+  "minToolCalls": 5,
+  "maxSkillBytes": 64000,
+  "maxMemoryChars": 12000
+}
+```
+
+Safety:
+
+- generated skills stay under `~/.pi/agent/managed-skills`
+- discovery contributes only explicit, lstat-validated `SKILL.md` files, never the parent root
+- managed root, skill directories, and `SKILL.md` files must not be symlinks
+- discovery and updates reject hard-linked `SKILL.md` files
+- `learn` redacts common secret patterns before retaining to Hindsight
+- keep `autoCapture` and `autoContinue` off until manual capture feels safe
+
+Run `/reload` after creating, updating, deleting, or copying managed skills.
 
 ## Caveman extension
 
