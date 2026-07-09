@@ -38,6 +38,7 @@ pi install npm:pi-mcp-adapter
 pi install npm:@tintinweb/pi-subagents
 pi install npm:@gotgenes/pi-permission-system
 pi install npm:context-mode
+pi install npm:pi-lsp-extension
 pi install npm:@juicesharp/rpiv-ask-user-question
 pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
@@ -53,8 +54,8 @@ pi install git:github.com/jonjonrankin/pi-caveman
 
 - `~/.pi/agent/extensions/pi-permission-system/config.json` is the global policy path.
 - README should include the current intended policy.
-- Tavily, Exa, and Brave search tools should be allowed without approval.
-- Mutating tools (`write`, `edit`) and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.
+- Tavily, Exa, Brave search tools, and read-only LSP tools should be allowed without approval.
+- Mutating tools (`write`, `edit`), structural rewrite tools, and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.
 
 ## Validation
 
