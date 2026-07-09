@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { lstat, open, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -64,6 +64,12 @@ export interface ManagedSkillWriteInput {
 export interface ManagedSkillInfo {
   name: string;
   description: string;
+  path: string;
+  bytes: number;
+}
+
+export interface ValidatedManagedSkillFile {
+  name: string;
   path: string;
   bytes: number;
 }
@@ -441,6 +447,28 @@ function assertRegularSingleLinkSkillFile(name: string, fileStat: { isFile(): bo
   if (fileStat.nlink > 1) throw new Error(`Managed skill "${name}" SKILL.md has ${fileStat.nlink} hard links; refusing to overwrite it.`);
 }
 
+export async function discoverManagedSkillFiles(root = MANAGED_SKILLS_DIR, maxBytes = DEFAULT_MAX_MANAGED_SKILL_BYTES): Promise<ValidatedManagedSkillFile[]> {
+  await ensureManagedRootSafe(root);
+  const entries = readdirSync(root, { withFileTypes: true });
+  const files: ValidatedManagedSkillFile[] = [];
+  for (const entry of entries) {
+    if (!MANAGED_SKILL_NAME_PATTERN.test(entry.name)) continue;
+    const { dir, file } = skillPaths(root, entry.name);
+    try {
+      const dirStat = await lstatOrNull(dir);
+      if (!dirStat || dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue;
+      const fileStat = await lstatOrNull(file);
+      if (!fileStat) continue;
+      assertRegularSingleLinkSkillFile(entry.name, fileStat);
+      if (fileStat.size > maxBytes) continue;
+      files.push({ name: entry.name, path: file, bytes: fileStat.size });
+    } catch {
+      continue;
+    }
+  }
+  return files.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function writeManagedSkill(input: ManagedSkillWriteInput): Promise<{ path: string; name: string }> {
   const root = input.root ?? MANAGED_SKILLS_DIR;
   const maxBytes = input.maxBytes ?? DEFAULT_MAX_MANAGED_SKILL_BYTES;
@@ -527,23 +555,16 @@ export function parseSkillFrontmatter(content: string): { name?: string; descrip
 }
 
 export async function listManagedSkills(root = MANAGED_SKILLS_DIR): Promise<ManagedSkillInfo[]> {
-  await ensureManagedRootSafe(root);
-  const entries = readdirSync(root, { withFileTypes: true });
+  const files = await discoverManagedSkillFiles(root);
   const skills: ManagedSkillInfo[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (!MANAGED_SKILL_NAME_PATTERN.test(entry.name)) continue;
-    const file = join(root, entry.name, "SKILL.md");
-    if (!existsSync(file)) continue;
-    const stat = statSync(file);
-    if (!stat.isFile()) continue;
-    const content = await readFile(file, "utf8");
+  for (const fileInfo of files) {
+    const content = await readFile(fileInfo.path, "utf8");
     const fm = parseSkillFrontmatter(content);
     skills.push({
-      name: fm.name && MANAGED_SKILL_NAME_PATTERN.test(fm.name) ? fm.name : entry.name,
+      name: fm.name && MANAGED_SKILL_NAME_PATTERN.test(fm.name) ? fm.name : fileInfo.name,
       description: sanitizeManagedDescription(fm.description ?? ""),
-      path: file,
-      bytes: stat.size,
+      path: fileInfo.path,
+      bytes: fileInfo.bytes,
     });
   }
   return skills.sort((a, b) => a.name.localeCompare(b.name));
@@ -719,8 +740,8 @@ export default function managedSkillsExtension(pi: ExtensionAPI) {
   pi.on("resources_discover", async () => {
     config = readManagedSkillsConfig();
     if (!config.enabled) return {};
-    await ensureManagedRootSafe(MANAGED_SKILLS_DIR);
-    return { skillPaths: [MANAGED_SKILLS_DIR] };
+    const skills = await discoverManagedSkillFiles(MANAGED_SKILLS_DIR, config.maxSkillBytes);
+    return { skillPaths: skills.map((skill) => skill.path) };
   });
 
   pi.on("before_agent_start", async (event) => {

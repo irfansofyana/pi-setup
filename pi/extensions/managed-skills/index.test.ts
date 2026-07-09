@@ -9,6 +9,7 @@ import {
   autoCaptureDeliveryOptions,
   computeHindsightScope,
   deleteManagedSkill,
+  discoverManagedSkillFiles,
   ensureManagedRootSafe,
   listManagedSkills,
   normalizeManagedSkillsConfig,
@@ -118,6 +119,28 @@ test("ensureManagedRootSafe rejects symlinked roots", async () => {
     await assert.rejects(() => ensureManagedRootSafe(link), /root is a symlink/);
   } finally {
     cleanup(base);
+  }
+});
+
+test("discoverManagedSkillFiles returns only lstat-validated SKILL.md files", async () => {
+  const root = tempRoot();
+  const outside = tempRoot();
+  try {
+    const created = await writeManagedSkill({ action: "create", name: "valid-skill", description: "d", body: "body", root });
+    symlinkSync(outside, join(root, "linked-dir"), "dir");
+    await writeManagedSkill({ action: "create", name: "linked-file", description: "d", body: "body", root });
+    rmSync(join(root, "linked-file", "SKILL.md"));
+    symlinkSync(join(outside, "SKILL.md"), join(root, "linked-file", "SKILL.md"));
+    await writeManagedSkill({ action: "create", name: "hard-link", description: "d", body: "body", root });
+    linkSync(join(root, "hard-link", "SKILL.md"), join(root, "hard-link", "LINK.md"));
+
+    const files = await discoverManagedSkillFiles(root);
+
+    assert.deepEqual(files.map((file) => file.name), ["valid-skill"]);
+    assert.deepEqual(files.map((file) => file.path), [created.path]);
+  } finally {
+    cleanup(root);
+    cleanup(outside);
   }
 });
 

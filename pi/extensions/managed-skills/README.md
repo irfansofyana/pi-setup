@@ -167,7 +167,8 @@ The extension enforces:
 - no slashes, `..`, absolute paths, or empty names
 - managed root must not be a symlink
 - managed skill directory and `SKILL.md` must not be symlinks
-- update rejects hard-linked `SKILL.md` files
+- discovery contributes only explicit, lstat-validated `SKILL.md` files, never the parent managed root
+- update and discovery reject hard-linked `SKILL.md` files
 - create uses exclusive file creation
 - update requires an existing regular file
 - serialized `SKILL.md` is capped by `maxSkillBytes`
