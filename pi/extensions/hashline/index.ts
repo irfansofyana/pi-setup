@@ -4,6 +4,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const HASHLINE_TAG_HEX_LENGTH = 12;
 const STATUS_ID = "hashline";
 
 type JsonSchema = Record<string, unknown> & { optional?: true };
@@ -79,12 +80,12 @@ export interface HashlineFileIO {
 
 /**
  * Short model-facing tag for the whole normalized file state.
- * This is intentionally UX-sized, not cryptographic identity. The snapshot
- * store keeps full text so callers can still validate/recover around collisions.
+ * This remains UX-sized, but uses enough bits that accidental collisions are
+ * impractical for local editing. The snapshot store still validates full text.
  */
 export function computeFileTag(text: string): string {
   const normalized = normalizeHashText(text);
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 4).toUpperCase();
+  return createHash("sha256").update(normalized).digest("hex").slice(0, HASHLINE_TAG_HEX_LENGTH).toUpperCase();
 }
 
 function normalizeHashText(text: string): string {
@@ -198,7 +199,7 @@ export function parseHashlineInput(input: string): HashlinePatch {
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
     const lineNumber = index + 1;
-    const header = /^\[([^#\]]+)#([0-9A-Fa-f]{4})\]\s*$/.exec(row.trim());
+    const header = /^\[([^#\]]+)#([0-9A-Fa-f]{12})\]\s*$/.exec(row.trim());
     if (header) {
       flushPending();
       current = { path: header[1], tag: header[2].toUpperCase(), operations: [] };
@@ -295,33 +296,41 @@ function validateRange(start: number, end: number, lineNumber: number): void {
   if (start < 1 || end < 1 || end < start) throw new Error(`line ${lineNumber}: invalid range ${start}.=${end}`);
 }
 
-export function applyHashlinePatch(session: HashlineSession, currentText: string, section: HashlineSection): ApplyResult {
+export function applyHashlinePatch(session: HashlineSession, currentText: string, section: HashlineSection, options: { recordSnapshot?: boolean } = {}): ApplyResult {
   const { text: normalized, format } = normalizeTextWithFormat(currentText);
   const currentTag = computeFileTag(normalized);
   const snapshot = session.snapshot(section.path, section.tag);
+  if (!snapshot) {
+    throw new Error(`unknown hashline tag ${section.tag} for ${section.path}; current tag ${currentTag}. Re-read the file and retry.`);
+  }
   assertSeenAnchors(section, snapshot);
 
-  let baseText = normalized;
   let operations = section.operations;
   const warnings: string[] = [];
+  if (currentTag === section.tag && snapshot.text !== normalized) {
+    throw new Error(`hashline tag collision or stale snapshot for ${section.path}; current tag ${currentTag}. Re-read the file and retry.`);
+  }
   if (currentTag !== section.tag) {
-    const recovered = snapshot ? remapStaleSection(snapshot.text, normalized, section) : undefined;
+    const recovered = remapStaleSection(snapshot.text, normalized, section);
     if (!recovered) {
-      session.record(section.path, normalized);
       throw new Error(`stale tag ${section.tag} for ${section.path}; current tag ${currentTag}. Re-read the file and retry.`);
     }
     operations = recovered.operations;
     warnings.push(`Recovered stale tag ${section.tag} for ${section.path} by remapping anchors onto current content.`);
   }
 
-  const before = baseText.split("\n");
+  const before = normalized.split("\n");
   const lines = [...before];
+  if (operations.some(isBlockOperation)) {
+    warnings.push("Block operations use heuristic brace/indent resolution in this stock-Pi extension; verify the changed range or use explicit SWAP/DEL ranges if uncertain.");
+  }
   operations = resolveBlockOperations(operations, lines, section.path);
   assertNoOverlappingTargets({ ...section, operations });
   const ordered = [...operations].sort((a, b) => maxAnchorLine(b) - maxAnchorLine(a));
   for (const operation of ordered) applyOperation(lines, operation);
   const text = lines.join("\n");
-  const tag = session.record(section.path, text);
+  const tag = computeFileTag(text);
+  if (options.recordSnapshot ?? true) session.record(section.path, text);
   return {
     text,
     persisted: restoreTextFormat(text, format),
@@ -342,10 +351,11 @@ export function applyHashlinePatchToFiles(session: HashlineSession, patch: Hashl
 
   const prepared = patch.sections.map((section): PreparedHashlineWrite => {
     const current = io.readFile(section.path);
-    return { path: section.path, ...applyHashlinePatch(session, current, section) };
+    return { path: section.path, ...applyHashlinePatch(session, current, section, { recordSnapshot: false }) };
   });
 
   for (const entry of prepared) io.writeFile(entry.path, entry.persisted);
+  for (const entry of prepared) session.record(entry.path, entry.text);
   return prepared;
 }
 
@@ -416,6 +426,10 @@ function buildUnchangedLineMap(previousLines: string[], currentLines: string[]):
     }
   }
   return map;
+}
+
+function isBlockOperation(operation: HashlineOperation): boolean {
+  return operation.kind === "block_swap" || operation.kind === "block_delete" || operation.kind === "block_insert_post";
 }
 
 function resolveBlockOperations(operations: readonly HashlineOperation[], lines: readonly string[], path: string): HashlineOperation[] {

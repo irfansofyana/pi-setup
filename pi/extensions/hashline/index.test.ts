@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,8 +17,8 @@ import hashlineExtension, {
 const path = "src/app.ts";
 const original = ["const a = 1;", "const b = 2;", "console.log(a + b);"].join("\n");
 
-test("computeFileTag returns a stable 4-hex uppercase whole-file tag", () => {
-  assert.match(computeFileTag(original), /^[0-9A-F]{4}$/);
+test("computeFileTag returns a stable 12-hex uppercase whole-file tag", () => {
+  assert.match(computeFileTag(original), /^[0-9A-F]{12}$/);
   assert.equal(computeFileTag(original), computeFileTag(original));
   assert.notEqual(computeFileTag(original), computeFileTag(`${original}\nchanged`));
 });
@@ -48,6 +48,10 @@ test("parseHashlineInput splits sections and operations", () => {
   assert.deepEqual(patch.sections[0].operations.map((op) => op.kind), ["swap", "insert"]);
 });
 
+test("parseHashlineInput rejects legacy 4-hex tags", () => {
+  assert.throws(() => parseHashlineInput([`[${path}#A1B2]`, "DEL 1"].join("\n")), /hashline input must start/);
+});
+
 test("applyHashlinePatch edits only when the tag matches current content and touched lines were seen", () => {
   const session = new HashlineSession();
   const tag = session.record(path, original, [2, 3]);
@@ -72,6 +76,14 @@ test("applyHashlinePatch rejects unseen anchored lines", () => {
   const patch = parseHashlineInput([`[${path}#${tag}]`, "SWAP 3.=3:", "+console.log(b);"].join("\n"));
 
   assert.throws(() => applyHashlinePatch(session, original, patch.sections[0]), /line 3 was not shown/);
+});
+
+test("applyHashlinePatch rejects tags that were not minted by this session", () => {
+  const session = new HashlineSession();
+  const tag = computeFileTag(original);
+  const patch = parseHashlineInput([`[${path}#${tag}]`, "SWAP 2.=2:", "+const b = 3;"].join("\n"));
+
+  assert.throws(() => applyHashlinePatch(session, original, patch.sections[0]), /unknown hashline tag/);
 });
 
 test("applyHashlinePatch rejects stale file tags with the current tag in the error", () => {
@@ -145,6 +157,43 @@ test("parse/apply supports block deletion and insert-after-block", () => {
   const result = applyHashlinePatch(session, source, patch.sections[0]);
 
   assert.equal(result.text, ["afterBlock();", "done();"].join("\n"));
+  assert.match(result.warnings.join("\n"), /heuristic brace\/indent/);
+});
+
+test("parse/apply supports insert edges, insert before, and single-line delete", () => {
+  const session = new HashlineSession();
+  const source = ["one", "two", "three", "drop"].join("\n");
+  const tag = session.record("insert.txt", source, [2, 4]);
+  const patch = parseHashlineInput([
+    `[insert.txt#${tag}]`,
+    "INS.HEAD:",
+    "+zero",
+    "INS.PRE 2:",
+    "+before two",
+    "DEL 4",
+    "INS.TAIL:",
+    "+four",
+  ].join("\n"));
+
+  const result = applyHashlinePatch(session, source, patch.sections[0]);
+
+  assert.equal(result.text, ["zero", "one", "before two", "two", "three", "four"].join("\n"));
+});
+
+test("parse/apply supports indentation-delimited block replacement", () => {
+  const session = new HashlineSession();
+  const source = ["root:", "  child: 1", "  child: 2", "next: true"].join("\n");
+  const tag = session.record("config.yml", source, [1]);
+  const patch = parseHashlineInput([
+    `[config.yml#${tag}]`,
+    "SWAP.BLK 1:",
+    "+root:",
+    "+  child: 42",
+  ].join("\n"));
+
+  const result = applyHashlinePatch(session, source, patch.sections[0]);
+
+  assert.equal(result.text, ["root:", "  child: 42", "next: true"].join("\n"));
 });
 
 test("hashline extension appends diagnostics from a best-effort ctx.lsp hook", async () => {
@@ -217,6 +266,7 @@ test("applyHashlinePatchToFiles preflights every section before writing any file
 
   assert.deepEqual(writes, []);
   assert.equal(files.get("a.ts"), a);
+  assert.equal(session.snapshot("a.ts", computeFileTag("a1\nA2")), undefined);
 });
 
 test("applyHashlinePatchToFiles rejects duplicate target sections", () => {
@@ -240,7 +290,9 @@ test("applyHashlinePatchToFiles rejects duplicate target sections", () => {
 test("resolveProjectPath rejects paths outside the project root", () => {
   const root = mkdtempSync(join(tmpdir(), "hashline-root-"));
   try {
-    assert.equal(resolveProjectPath(root, "src/app.ts").absolutePath, join(root, "src/app.ts"));
+    const resolved = resolveProjectPath(root, "src/app.ts");
+    assert.equal(resolved.absolutePath, join(realpathSync.native(root), "src/app.ts"));
+    assert.equal(resolved.relativePath, "src/app.ts");
     assert.throws(() => resolveProjectPath(root, "../secret.txt"), /outside project root/);
     assert.throws(() => resolveProjectPath(root, "/etc/passwd"), /outside project root/);
   } finally {

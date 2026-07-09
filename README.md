@@ -261,8 +261,17 @@ Workflow:
 1. Use hashline_read before editing a file.
 2. Copy the exact [path#TAG] header from the read output.
 3. Use hashline_edit with SWAP/DEL/INS operations and + payload rows.
-4. If the tool reports a stale tag or unseen line, re-read the file/range first.
+4. If the tool reports an unknown tag, stale tag, or unseen line, re-read the file/range first.
 ```
+
+Tool inputs:
+
+```text
+hashline_read: path, optional startLine/endLine
+hashline_edit: input patch text
+```
+
+Recommended permission policy: allow `hashline_read`, ask for `hashline_edit`.
 
 Supported patch operations:
 
@@ -279,7 +288,13 @@ DEL.BLK N       delete the brace/indent block starting at line N
 INS.BLK.POST N: insert after the brace/indent block starting at line N
 ```
 
-Current scope: this is a hardened local extension inspired by Oh My Pi's hashline design. It implements whole-file tags, session snapshots, seen-line validation, safe stale-tag recovery for line shifts, simple brace/indent block operations, project-root path confinement, duplicate-target rejection, all-or-nothing multi-section preflight, BOM/line-ending preservation, and best-effort post-write diagnostics from Pi LSP context hooks when available. Full tree-sitter block resolution is still a future upgrade.
+Current scope: this is a hardened local extension inspired by Oh My Pi's hashline design. It implements 12-hex whole-file tags minted in the current session, full snapshot validation, seen-line validation, safe stale-tag recovery for line shifts, heuristic brace/indent block operations with warnings, project-root path confinement, duplicate-target rejection, all-or-nothing multi-section preflight before writes or snapshot updates, BOM/line-ending preservation, and best-effort post-write diagnostics from Pi LSP context hooks when available. Snapshots are in-memory only, keep 4 versions per path by default, and files larger than 4 MiB are rejected by `hashline_read`. Full tree-sitter block resolution, built-in read/edit replacement, persistent snapshots, and diff preview/accept UI are still future upgrades.
+
+Validate local changes:
+
+```bash
+node --test pi/extensions/hashline/index.test.ts
+```
 
 ### Local Hindsight Memory adapter
 
@@ -460,6 +475,8 @@ Current policy:
     "brave_search_*": "allow",
     "ask_user_question": "allow",
     "todo": "allow",
+    "hashline_read": "allow",
+    "hashline_edit": "ask",
     "write": "ask",
     "edit": "ask",
     "subagent": "ask",
