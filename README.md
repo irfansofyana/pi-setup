@@ -12,6 +12,7 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Context-mode workflows and context tooling with `context-mode`
 - Local Headroom Labs adapter for managed context compression and token-savings visibility
 - Local real-Hindsight memory adapter/template
+- Local hashline-inspired read/edit extension template for safer line-anchored edits
 - User-question and Markdown preview helpers
 - Todo tracking and task management with `rpiv-todo`
 - Local `/goal` command template for Codex/Claude-style goal loops in Pi
@@ -40,6 +41,9 @@ The `pi/` directory in this repository contains **example/template files** for y
 >
 > # Example: copy just the local hindsight memory extension template
 > cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+>
+> # Example: copy just the local hashline edit extension template
+> cp -r pi/extensions/hashline ~/.pi/agent/extensions/
 > ```
 
 ## Prerequisites
@@ -121,6 +125,13 @@ Install local Hindsight Memory adapter template:
 ```bash
 mkdir -p ~/.pi/agent/extensions
 cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
+```
+
+Install local Hashline edit adapter template:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/hashline ~/.pi/agent/extensions/
 ```
 
 Reload or restart Pi after installing extensions.
@@ -212,6 +223,60 @@ Default config highlights:
 `/headroom start` waits up to `startupHealthTimeoutMs` for slow local proxy readiness. Remote Headroom proxies are blocked unless `allowRemote` is set to `true`; only enable that for a proxy you trust with tool output content.
 
 Run `/reload` after changing config or copying a new extension version.
+
+### Local Hashline edit adapter
+
+This repo includes a local Pi extension template at `pi/extensions/hashline/` that adds hashline-inspired read/edit tools for stock Pi.
+
+Install globally:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp -r pi/extensions/hashline ~/.pi/agent/extensions/
+```
+
+Reload Pi:
+
+```text
+/reload
+```
+
+Tools:
+
+```text
+hashline_read   # read a file with [path#TAG] header and numbered lines
+hashline_edit   # apply a tagged SWAP/DEL/INS patch
+```
+
+Command:
+
+```text
+/hashline status
+/hashline clear
+```
+
+Workflow:
+
+```text
+1. Use hashline_read before editing a file.
+2. Copy the exact [path#TAG] header from the read output.
+3. Use hashline_edit with SWAP/DEL/INS operations and + payload rows.
+4. If the tool reports a stale tag or unseen line, re-read the file/range first.
+```
+
+Supported patch operations:
+
+```text
+SWAP N.=M:       replace inclusive line range with + payload rows
+DEL N           delete one line
+DEL N.=M        delete inclusive line range
+INS.PRE N:      insert + payload rows before line N
+INS.POST N:     insert + payload rows after line N
+INS.HEAD:       insert at start of file
+INS.TAIL:       insert at end of file
+```
+
+Current scope: this is an MVP inspired by Oh My Pi's hashline design. It implements whole-file tags, session snapshots, and seen-line validation. It does **not** yet implement Oh My Pi's tree-sitter block operations, stale-tag 3-way recovery, or LSP diagnostics flush. Add LSP after the edit format has proven useful in daily Pi work.
 
 ### Local Hindsight Memory adapter
 
