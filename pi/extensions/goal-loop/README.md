@@ -77,7 +77,7 @@ If the `Agent` tool is unavailable or the worker does not call it, the loop fall
 
 - Stores one active goal per project.
 - Persists state in `~/.pi/agent/goal-loop/state.json`.
-- Shows an animated footer status like `goal ◐ loops 0/8`; the counter is auto-continue loops used, not total assistant turns.
+- Shows compact animated footer status like `goal ◐ 0/8`; the counter is auto-continue loops used, not total assistant turns.
 - Keeps the last 10 evidence entries from verification, notes, or tool observations.
 - Injects goal instructions into each agent turn.
 - Tells the agent to call `get_goal` and `update_goal` when it needs persisted goal state.

@@ -258,7 +258,7 @@ export function resumeGoal(goal: GoalState, now = new Date()): GoalState {
 
 export function goalStatusText(goal: GoalState | undefined, frame = 0): string | undefined {
   if (!goal || goal.status !== "active") return undefined;
-  return `goal ${GOAL_STATUS_FRAMES[frame % GOAL_STATUS_FRAMES.length]} loops ${goal.turns}/${goal.maxTurns}`;
+  return `goal ${GOAL_STATUS_FRAMES[frame % GOAL_STATUS_FRAMES.length]} ${goal.turns}/${goal.maxTurns}`;
 }
 
 export function buildEvaluatorInstructions(goal: GoalState): string {

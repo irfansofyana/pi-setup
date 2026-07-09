@@ -299,6 +299,6 @@ test("status helpers summarize session savings", () => {
   stats.tokensSaved = 600;
   assert.equal(savingsPercent(stats), 60);
   assert.equal(formatCount(1500), "1.5k");
-  assert.match(statusText(true, "managed", stats), /headroom managed · saved 600 tok · 60% ↓/);
-  assert.equal(statusText(false, "none", stats), "headroom off");
+  assert.equal(statusText(true, "managed", stats), "hr m 600 ↓60%");
+  assert.equal(statusText(false, "none", stats), "hr off");
 });

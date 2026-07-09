@@ -391,10 +391,10 @@ test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes",
 });
 
 test("statusText reports footer states", () => {
-  assert.equal(statusText(false, "pi"), "hindsight off");
-  assert.equal(statusText(true, "pi"), "hindsight on · pi · checking");
-  assert.equal(statusText(true, "pi", true), "hindsight on · pi · working");
-  assert.equal(statusText(true, "pi", false), "hindsight on · pi · offline");
+  assert.equal(statusText(false, "pi"), "mem off");
+  assert.equal(statusText(true, "pi"), "mem:pi checking");
+  assert.equal(statusText(true, "pi", true), "mem:pi ok");
+  assert.equal(statusText(true, "pi", false), "mem:pi offline");
 });
 
 test("promptBlocks gates real Hindsight daemon guidance and rules", () => {

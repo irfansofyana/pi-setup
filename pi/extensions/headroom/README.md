@@ -12,7 +12,7 @@ Pi extension that integrates [Headroom Labs Headroom](https://github.com/headroo
 - Registers native Pi tools:
   - `headroom_retrieve` — retrieve original output by hash, optionally with query.
   - `headroom_stats` — show session savings.
-- Shows Pi-session savings in the footer.
+- Shows compact Pi-session savings in the footer: `hr off` or `hr m 55k ↓10%` (`m` = managed proxy, `x` = external proxy).
 
 ## Install Headroom CLI
 

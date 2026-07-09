@@ -255,9 +255,9 @@ export function savingsPercent(stats: SessionStats): number {
 }
 
 export function statusText(enabled: boolean, owner: ProxyOwner, stats: SessionStats): string {
-  if (!enabled) return "headroom off";
-  const ownerText = owner === "managed" ? "managed" : owner === "external" ? "external" : "proxy?";
-  return `headroom ${ownerText} · saved ${formatCount(stats.tokensSaved)} tok · ${savingsPercent(stats)}% ↓`;
+  if (!enabled) return "hr off";
+  const ownerText = owner === "managed" ? "m" : owner === "external" ? "x" : "?";
+  return `hr ${ownerText} ${formatCount(stats.tokensSaved)} ↓${savingsPercent(stats)}%`;
 }
 
 function updateStatus(ctx: ExtensionContext, enabled: boolean, owner: ProxyOwner, stats: SessionStats): void {
