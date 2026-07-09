@@ -60,7 +60,11 @@ This extension intentionally starts smaller than Oh My Pi's native implementatio
   - the live file no longer matches the `[path#TAG]` header,
   - an edit anchors to a line that was not shown in the read output,
   - an operation targets a non-existent line.
-- Stale-tag recovery and tree-sitter block operations are intentionally left for a later iteration.
+- Writes preserve the input file's UTF-8 BOM and dominant line ending (`LF` or `CRLF`).
+- Multi-section patches are preflighted before any write happens, so a stale second file cannot leave the first file half-applied.
+- Duplicate sections targeting the same file are rejected; merge operations under one `[path#TAG]` header.
+- Relative and absolute paths are confined to the current project root.
+- Stale-tag recovery, tree-sitter block operations, and LSP diagnostics are intentionally left for later iterations.
 
 ## Install
 

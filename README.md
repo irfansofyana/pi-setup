@@ -276,7 +276,7 @@ INS.HEAD:       insert at start of file
 INS.TAIL:       insert at end of file
 ```
 
-Current scope: this is an MVP inspired by Oh My Pi's hashline design. It implements whole-file tags, session snapshots, and seen-line validation. It does **not** yet implement Oh My Pi's tree-sitter block operations, stale-tag 3-way recovery, or LSP diagnostics flush. Add LSP after the edit format has proven useful in daily Pi work.
+Current scope: this is a hardened local extension inspired by Oh My Pi's hashline design. It implements whole-file tags, session snapshots, seen-line validation, project-root path confinement, duplicate-target rejection, all-or-nothing multi-section preflight, and BOM/line-ending preservation. It does **not** yet implement Oh My Pi's tree-sitter block operations, stale-tag 3-way recovery, or LSP diagnostics flush. Add LSP after the edit format has proven useful in daily Pi work.
 
 ### Local Hindsight Memory adapter
 

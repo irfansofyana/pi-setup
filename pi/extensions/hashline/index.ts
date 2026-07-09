@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
@@ -50,11 +50,28 @@ export interface HashlineSnapshot {
   recordedAt: number;
 }
 
+interface TextFormat {
+  bom: string;
+  lineEnding: "\n" | "\r\n";
+}
+
 export interface ApplyResult {
+  /** LF-normalized, BOM-stripped post-edit text. */
   text: string;
+  /** Text ready to write back to disk, preserving the input BOM and dominant EOL. */
+  persisted: string;
   tag: string;
   firstChangedLine?: number;
   warnings: string[];
+}
+
+export interface PreparedHashlineWrite extends ApplyResult {
+  path: string;
+}
+
+export interface HashlineFileIO {
+  readFile(path: string): string;
+  writeFile(path: string, text: string): void;
 }
 
 /**
@@ -68,11 +85,26 @@ export function computeFileTag(text: string): string {
 }
 
 function normalizeHashText(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/[ \t]+(?=\n|$)/g, "");
+  return normalizeTextWithFormat(text).text.replace(/[ \t]+(?=\n|$)/g, "");
 }
 
 function normalizeText(text: string): string {
-  return text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return normalizeTextWithFormat(text).text;
+}
+
+function normalizeTextWithFormat(text: string): { text: string; format: TextFormat } {
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const withoutBom = bom ? text.slice(1) : text;
+  const lineEnding = withoutBom.includes("\r\n") ? "\r\n" : "\n";
+  return {
+    text: withoutBom.replace(/\r\n/g, "\n").replace(/\r/g, "\n"),
+    format: { bom, lineEnding },
+  };
+}
+
+function restoreTextFormat(text: string, format: TextFormat): string {
+  const withLineEndings = format.lineEnding === "\n" ? text : text.replace(/\n/g, "\r\n");
+  return `${format.bom}${withLineEndings}`;
 }
 
 function lineNumbers(start: number, end: number): number[] {
@@ -184,7 +216,7 @@ export function parseHashlineInput(input: string): HashlinePatch {
     }
 
     flushPending();
-    const swap = /^SWAP\s+(\d+)\s*(?:\.=?\.|\.=|-|…|\s+)\s*(\d+)\s*:\s*$/.exec(trimmed);
+    const swap = /^SWAP\s+(\d+)\s*(?:\.=|\.\.|-|…|\s+)\s*(\d+)\s*:\s*$/.exec(trimmed);
     if (swap) {
       const operation: HashlineOperation = { kind: "swap", start: Number(swap[1]), end: Number(swap[2]), lines: [] };
       validateRange(operation.start, operation.end, lineNumber);
@@ -192,7 +224,7 @@ export function parseHashlineInput(input: string): HashlinePatch {
       pending = operation;
       continue;
     }
-    const del = /^DEL\s+(\d+)(?:\s*(?:\.=?\.|\.=|-|…|\s+)\s*(\d+))?\s*$/.exec(trimmed);
+    const del = /^DEL\s+(\d+)(?:\s*(?:\.=|\.\.|-|…|\s+)\s*(\d+))?\s*$/.exec(trimmed);
     if (del) {
       const start = Number(del[1]);
       const end = Number(del[2] ?? del[1]);
@@ -238,7 +270,7 @@ function validateRange(start: number, end: number, lineNumber: number): void {
 }
 
 export function applyHashlinePatch(session: HashlineSession, currentText: string, section: HashlineSection): ApplyResult {
-  const normalized = normalizeText(currentText);
+  const { text: normalized, format } = normalizeTextWithFormat(currentText);
   const currentTag = computeFileTag(normalized);
   const snapshot = session.snapshot(section.path, section.tag);
   if (currentTag !== section.tag) {
@@ -249,16 +281,36 @@ export function applyHashlinePatch(session: HashlineSession, currentText: string
 
   const before = normalized.split("\n");
   const lines = [...before];
+  assertNoOverlappingTargets(section);
   const ordered = [...section.operations].sort((a, b) => maxAnchorLine(b) - maxAnchorLine(a));
   for (const operation of ordered) applyOperation(lines, operation);
   const text = lines.join("\n");
   const tag = session.record(section.path, text);
   return {
     text,
+    persisted: restoreTextFormat(text, format),
     tag,
     firstChangedLine: firstChangedLine(before, lines),
     warnings: [],
   };
+}
+
+export function applyHashlinePatchToFiles(session: HashlineSession, patch: HashlinePatch, io: HashlineFileIO): PreparedHashlineWrite[] {
+  const seen = new Set<string>();
+  for (const section of patch.sections) {
+    if (seen.has(section.path)) {
+      throw new Error(`Multiple hashline sections resolve to the same file (${section.path}). Merge their ops under one header before applying.`);
+    }
+    seen.add(section.path);
+  }
+
+  const prepared = patch.sections.map((section): PreparedHashlineWrite => {
+    const current = io.readFile(section.path);
+    return { path: section.path, ...applyHashlinePatch(session, current, section) };
+  });
+
+  for (const entry of prepared) io.writeFile(entry.path, entry.persisted);
+  return prepared;
 }
 
 function maxAnchorLine(operation: HashlineOperation): number {
@@ -309,6 +361,17 @@ function assertSeenAnchors(section: HashlineSection, snapshot?: HashlineSnapshot
   }
 }
 
+function assertNoOverlappingTargets(section: HashlineSection): void {
+  const targeted = new Set<number>();
+  for (const operation of section.operations) {
+    if (operation.kind === "insert") continue;
+    for (let line = operation.start; line <= operation.end; line++) {
+      if (targeted.has(line)) throw new Error(`${section.path} line ${line} is targeted by more than one SWAP/DEL operation.`);
+      targeted.add(line);
+    }
+  }
+}
+
 function touchedAnchorLines(section: HashlineSection): number[] {
   const lines: number[] = [];
   for (const operation of section.operations) {
@@ -329,14 +392,21 @@ function firstChangedLine(before: string[], after: string[]): number | undefined
   return undefined;
 }
 
-function relativePath(cwd: string, maybePath: string): string {
-  if (!isAbsolute(maybePath)) return maybePath.replace(/\\/g, "/");
-  const rel = relative(cwd, maybePath);
-  return rel && !rel.startsWith("..") ? rel.replace(/\\/g, "/") : maybePath;
+function canonicalExistingOrParent(path: string): string {
+  if (existsSync(path)) return realpathSync.native(path);
+  const parent = dirname(path);
+  if (existsSync(parent)) return resolve(realpathSync.native(parent), path.split(/[\\/]/).pop() ?? "");
+  return resolve(path);
 }
 
-function absolutePath(cwd: string, maybePath: string): string {
-  return isAbsolute(maybePath) ? maybePath : resolve(cwd, maybePath);
+export function resolveProjectPath(cwd: string, maybePath: string): { absolutePath: string; relativePath: string } {
+  const root = realpathSync.native(resolve(cwd));
+  const absolutePath = canonicalExistingOrParent(isAbsolute(maybePath) ? maybePath : resolve(root, maybePath));
+  const rel = relative(root, absolutePath);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`hashline path ${JSON.stringify(maybePath)} resolves outside project root ${root}`);
+  }
+  return { absolutePath, relativePath: rel.replace(/\\/g, "/") };
 }
 
 function notify(ctx: any, message: string, level: "info" | "warning" | "error" = "info"): void {
@@ -367,19 +437,18 @@ export default function hashlineExtension(pi: ExtensionAPI) {
     }) as any,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx?.cwd || process.cwd();
-      const abs = absolutePath(cwd, (params as { path: string }).path);
-      const statText = readFileSync(abs, "utf8");
+      const resolved = resolveProjectPath(cwd, (params as { path: string }).path);
+      const statText = readFileSync(resolved.absolutePath, "utf8");
       if (Buffer.byteLength(statText, "utf8") > MAX_SNAPSHOT_BYTES) {
         throw new Error(`File is larger than ${MAX_SNAPSHOT_BYTES} bytes; hashline snapshots are disabled for this file.`);
       }
-      const rel = relativePath(cwd, abs);
-      const text = formatHashlineRead(session, rel, statText, {
+      const text = formatHashlineRead(session, resolved.relativePath, statText, {
         startLine: (params as { startLine?: number }).startLine,
         endLine: (params as { endLine?: number }).endLine,
       });
       reads++;
       updateStatus(ctx);
-      return { content: [{ type: "text", text }], details: { path: rel, tag: session.head(rel)?.tag } };
+      return { content: [{ type: "text", text }], details: { path: resolved.relativePath, tag: session.head(resolved.relativePath)?.tag } };
     },
   });
 
@@ -390,7 +459,7 @@ export default function hashlineExtension(pi: ExtensionAPI) {
     promptSnippet: "Apply hashline edits with [path#TAG], SWAP/DEL/INS operations, and + payload lines.",
     promptGuidelines: [
       "Prefer one [path#TAG] section per file.",
-      "Use SWAP N.=M: plus +payload lines to replace ranges, DEL N.=M to delete, INS.PRE/POST/HEAD/TAIL to insert.",
+      "Use SWAP N.=M: plus + payload lines to replace ranges, DEL N.=M to delete, INS.PRE/POST/HEAD/TAIL to insert.",
       "If hashline_edit reports a stale tag or unseen line, re-read the file/range before retrying.",
     ],
     parameters: Schema.Object({
@@ -400,17 +469,24 @@ export default function hashlineExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const cwd = ctx?.cwd || process.cwd();
       const patch = parseHashlineInput((params as { input: string }).input);
-      const summaries: string[] = [];
-      for (const section of patch.sections) {
-        const abs = absolutePath(cwd, section.path);
-        const current = readFileSync(abs, "utf8");
-        const result = applyHashlinePatch(session, current, section);
-        writeFileSync(abs, result.text, "utf8");
-        edits++;
-        summaries.push(`${formatHashlineHeader(section.path, result.tag)} changed at line ${result.firstChangedLine ?? "n/a"}`);
-      }
+      const pathMap = new Map<string, { absolutePath: string; relativePath: string }>();
+      const normalizedPatch: HashlinePatch = {
+        sections: patch.sections.map((section) => {
+          const resolved = resolveProjectPath(cwd, section.path);
+          pathMap.set(resolved.relativePath, resolved);
+          return { ...section, path: resolved.relativePath };
+        }),
+      };
+      const prepared = applyHashlinePatchToFiles(session, normalizedPatch, {
+        readFile: (filePath) => readFileSync(pathMap.get(filePath)?.absolutePath ?? resolve(cwd, filePath), "utf8"),
+        writeFile: (filePath, text) => writeFileSync(pathMap.get(filePath)?.absolutePath ?? resolve(cwd, filePath), text, "utf8"),
+      });
+      edits += prepared.length;
       updateStatus(ctx);
-      return { content: [{ type: "text", text: summaries.join("\n") }], details: { sections: patch.sections.length } };
+      return {
+        content: [{ type: "text", text: prepared.map((entry) => `${formatHashlineHeader(entry.path, entry.tag)} changed at line ${entry.firstChangedLine ?? "n/a"}`).join("\n") }],
+        details: { sections: prepared.length },
+      };
     },
   });
 
