@@ -10,7 +10,6 @@ Personal notes for setting up [Pi](https://pi.dev) as a coding-agent environment
 - Intercom coordination between parent and child agents
 - Permission approval gates for tools, bash, MCP, skills, and external paths
 - Context-mode workflows and context tooling with `context-mode`
-- LSP code intelligence via `pi-lsp-extension`
 - Local Headroom Labs adapter for managed context compression and token-savings visibility
 - Local real-Hindsight memory adapter/template
 - Local hashline-inspired read/edit extension template for safer line-anchored edits
@@ -92,9 +91,6 @@ pi install npm:@gotgenes/pi-permission-system
 # Context mode: switchable context/mode workflows
 pi install npm:context-mode
 
-# LSP: diagnostics, hover, definitions, references, symbols, and code structure
-pi install npm:pi-lsp-extension
-
 # Ask-user-question helper extension
 pi install npm:@juicesharp/rpiv-ask-user-question
 
@@ -146,69 +142,9 @@ Useful extension commands inside Pi:
 /mcp                 # Open MCP status/configuration UI
 /mcp setup           # Guided MCP setup
 /mcp tools           # List available MCP tools
-/lsp                 # Show running LSP servers
-/lsp-config          # Configure language servers
 /permission-system   # Open pi-permission-system settings
-/reload              # Reload extensions, skills, prompts, and config
+/reload                 # Reload extensions, skills, prompts, and config
 ```
-
-### LSP code intelligence
-
-Use [`pi-lsp-extension`](https://github.com/samfoy/pi-lsp-extension) for IDE-style code intelligence inside Pi.
-
-Install:
-
-```bash
-pi install npm:pi-lsp-extension
-```
-
-Package page:
-
-```text
-https://pi.dev/packages/pi-lsp-extension
-```
-
-Tools exposed:
-
-```text
-lsp_diagnostics   # compiler/type/lint diagnostics for a file
-lsp_hover         # type info and docs at a position
-lsp_definition    # go to definition
-lsp_references    # find references
-lsp_symbols       # file/workspace symbols
-lsp_rename        # preview rename refactor
-lsp_completions   # completion suggestions
-code_overview     # project structure and symbols
-code_search       # tree-sitter structural search
-code_rewrite      # structural rewrite; keep gated by permissions
-```
-
-Install language servers you actually use:
-
-```bash
-# TypeScript / JavaScript
-npm i -g typescript-language-server typescript
-
-# Python
-npm i -g pyright
-
-# Go
-go install golang.org/x/tools/gopls@latest
-
-# Rust
-rustup component add rust-analyzer
-```
-
-Optional project config in `.pi-lsp.json`:
-
-```json
-{
-  "autoStart": ["typescript"],
-  "autoInjectDiagnostics": ["typescript"]
-}
-```
-
-Run `/reload` after installing. Use `/lsp` to check status.
 
 ### Local Headroom adapter
 
@@ -541,16 +477,6 @@ Current policy:
     "todo": "allow",
     "hashline_read": "allow",
     "hashline_edit": "ask",
-    "lsp_diagnostics": "allow",
-    "lsp_hover": "allow",
-    "lsp_definition": "allow",
-    "lsp_references": "allow",
-    "lsp_symbols": "allow",
-    "lsp_completions": "allow",
-    "code_overview": "allow",
-    "code_search": "allow",
-    "lsp_rename": "ask",
-    "code_rewrite": "ask",
     "write": "ask",
     "edit": "ask",
     "subagent": "ask",
