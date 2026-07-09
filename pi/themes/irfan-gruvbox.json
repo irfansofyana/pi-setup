@@ -41,8 +41,8 @@
     "thinkingText": "fg2",
 
     "selectedBg": "#2d3340",
-    "userMessageBg": "bg1",
-    "userMessageText": "fg0",
+    "userMessageBg": "#24272d",
+    "userMessageText": "fg1",
     "customMessageBg": "#24272d",
     "customMessageText": "fg1",
     "customMessageLabel": "aqua",
