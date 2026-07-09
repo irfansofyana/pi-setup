@@ -188,8 +188,8 @@ test("resumeGoal extends spent turn budgets", () => {
   assert.equal(resumed.status, "active");
   assert.equal(resumed.turns, 10);
   assert.equal(resumed.maxTurns, 20);
-  assert.equal(goalStatusText(resumed), "goal ◐ loops 10/20");
-  assert.equal(goalStatusText(resumed, 2), "goal ◑ loops 10/20");
+  assert.equal(goalStatusText(resumed), "goal ◐ 10/20");
+  assert.equal(goalStatusText(resumed, 2), "goal ◑ 10/20");
 });
 
 test("recordEvaluation blocks after repeated verification failures", () => {

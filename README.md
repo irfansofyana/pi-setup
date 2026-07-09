@@ -188,6 +188,8 @@ headroom_retrieve  # retrieve original compressed output by local hr_... hash, o
 headroom_stats     # inspect Pi-session savings and adapter state
 ```
 
+Footer/status stays compact: `hr off` or `hr m 55k ↓10%` (`m` = managed proxy, `x` = external proxy).
+
 Optional config lives at:
 
 ```text
@@ -246,7 +248,7 @@ JSON
 Defaults: `HINDSIGHT_API_URL`/`apiUrl=http://127.0.0.1:8888`, `HINDSIGHT_BANK_ID`/`bankId=coding-agent`, `HINDSIGHT_SCOPING`/`scoping=per-project-tagged`.
 
 - Real Hindsight retain/recall/reflect over the local daemon; local rulebook/TTSR portable subset stays in Pi.
-- Footer/status: Pi shows `hindsight on · <bank> · working` when the extension can reach the daemon.
+- Footer/status: Pi shows compact memory state such as `mem ok`, `mem checking`, `mem offline`, or `mem:<bank> ok` when using a non-default bank.
 - Commands: `/hindsight view|stats|diagnose|clear|recall <query>|memory enable|disable|config show|config set <key> <value>|config save|config reset`; `/rules list|reload|show <name>`.
 - Tools: `hindsight_retain`, `hindsight_recall`, `hindsight_reflect`, `hindsight_rule`.
 - Memory: Hindsight daemon/API; rules: `~/.pi/agent/rules/*.{md,mdc}` plus project rules.
@@ -322,7 +324,7 @@ How the loop works:
 - `before_agent_start` injects the active goal into the turn instructions.
 - The extension registers model-callable `get_goal` and `update_goal` tools so the agent can inspect persisted state and record evidence while it works.
 - Human goal creation stays on `/goal <objective>` by default; optional config can re-enable model-created goals.
-- The footer shows animated status like `goal ◐ loops 0/8`; this counts auto-continue loops used, not total assistant turns.
+- The footer shows compact animated status like `goal ◐ 0/8`; this counts auto-continue loops used, not total assistant turns.
 - The goal state keeps the last 10 evidence entries from verification, notes, or tool observations.
 - When `@tintinweb/pi-subagents` exposes the `Agent` tool, the prompt asks the worker to call a foreground read-only evaluator subagent before terminal decisions.
 - The agent must end each loop turn with `GOAL_STATUS` and `GOAL_REASON` markers.
@@ -428,8 +430,8 @@ Run `/reload` or restart Pi after changing the policy.
 
 This setup includes:
 
-- `irfan-gruvbox` — Gruvbox Dark base with a personal theme name
-- `pi-signature.ts` — big gradient `π` signature header, auto-detected running user, fixed `crafted from Irfan's Pi setup` credit, and a `π` working spinner with short programmer-joke flavor text
+- `irfan-gruvbox` — Gruvbox Dark base with OMP-inspired neutral tool cards, clearer read/code output, and softer greens
+- `pi-signature.ts` — big gradient `π` signature header, auto-detected running user, fixed `crafted from Irfan's Pi setup` credit, a `π` working spinner with short programmer-joke flavor text, and compact footer rendering for extension statuses
 
 Install globally:
 
@@ -451,6 +453,12 @@ Override the displayed owner if needed:
 
 ```bash
 export PI_SIGNATURE_NAME="Your Name"
+```
+
+Disable the compact footer and restore Pi's default footer if needed:
+
+```bash
+export PI_SIGNATURE_COMPACT_FOOTER=0
 ```
 
 Run `/reload` or restart Pi after changing theme or extension files.

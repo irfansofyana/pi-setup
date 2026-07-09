@@ -113,9 +113,10 @@ export function rulebookPromptBlock(rules: Rule[], paths: string[] = []): string
 }
 
 export function statusText(enabled: boolean, bankId = "coding-agent", healthy?: boolean): string {
-  if (!enabled) return "hindsight off";
-  const state = healthy === true ? "working" : healthy === false ? "offline" : "checking";
-  return `hindsight on · ${bankId} · ${state}`;
+  if (!enabled) return "mem off";
+  const state = healthy === true ? "ok" : healthy === false ? "offline" : "checking";
+  const scope = bankId === "coding-agent" ? "" : `:${bankId}`;
+  return `mem${scope} ${state}`;
 }
 
 export function promptBlocks(_projectRoot: string, rules: Rule[], memoryBackend: boolean, _rootDir?: string, paths: string[] = []): string {

@@ -71,7 +71,7 @@ Default is oh-my-pi-style `per-project-tagged`:
 
 ## Commands
 
-- Footer/status — Pi shows `hindsight on · <bank> · working` when memory is enabled and the daemon health check succeeds; `checking` while probing and `offline` when unreachable.
+- Footer/status — Pi shows compact memory state such as `mem ok`, `mem checking`, `mem offline`, or `mem:<bank> ok` for non-default banks.
 - `/hindsight view` — show runtime config.
 - `/hindsight config show` — show config file plus effective runtime config.
 - `/hindsight config set <key> <value>` — update runtime config and persist it to `~/.pi/agent/hindsight/config.json`.
