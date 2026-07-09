@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   DEFAULT_CONFIG,
+  autoCaptureDeliveryOptions,
   computeHindsightScope,
   deleteManagedSkill,
   ensureManagedRootSafe,
@@ -50,6 +51,10 @@ test("serializeManagedSkill generates valid frontmatter", () => {
   const content = serializeManagedSkill({ name: "demo-skill", description: "Use for demos", body: "# Demo\n\nDo thing." });
   assert.match(content, /^---\nname: demo-skill\ndescription: "Use for demos"\n---\n\n# Demo/);
   assert.deepEqual(parseSkillFrontmatter(content), { name: "demo-skill", description: "Use for demos" });
+});
+
+test("autoCaptureDeliveryOptions can trigger hidden capture while idle", () => {
+  assert.deepEqual(autoCaptureDeliveryOptions(), { deliverAs: "followUp", triggerTurn: true });
 });
 
 test("normalizeManagedSkillsConfig fills defaults and clamps numbers", () => {

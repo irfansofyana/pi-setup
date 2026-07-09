@@ -116,6 +116,15 @@ export const DEFAULT_CONFIG: ManagedSkillsConfig = {
   maxMemoryChars: DEFAULT_MAX_LEARN_MEMORY_CHARS,
 };
 
+export interface AutoCaptureDeliveryOptions {
+  deliverAs: "followUp";
+  triggerTurn: true;
+}
+
+export function autoCaptureDeliveryOptions(): AutoCaptureDeliveryOptions {
+  return { deliverAs: "followUp", triggerTurn: true };
+}
+
 export const MANAGED_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const AGENT_DIR = join(homedir(), ".pi", "agent");
 const MANAGED_SKILLS_DIR = join(AGENT_DIR, "managed-skills");
@@ -872,6 +881,6 @@ export default function managedSkillsExtension(pi: ExtensionAPI) {
       content: AUTO_CAPTURE_PROMPT,
       display: false,
       details: { toolCalls, minToolCalls: config.minToolCalls },
-    }, { deliverAs: "nextTurn", triggerTurn: true });
+    }, autoCaptureDeliveryOptions());
   });
 }
