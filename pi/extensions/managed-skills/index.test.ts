@@ -144,6 +144,19 @@ test("discoverManagedSkillFiles returns only lstat-validated SKILL.md files", as
   }
 });
 
+test("viewManagedSkill rejects symlinked skill directories", async () => {
+  const root = tempRoot();
+  const outside = tempRoot();
+  try {
+    await writeManagedSkill({ action: "create", name: "outside", description: "d", body: "outside body", root: outside });
+    symlinkSync(join(outside, "outside"), join(root, "demo"), "dir");
+    await assert.rejects(() => viewManagedSkill("demo", root), /symlink/);
+  } finally {
+    cleanup(root);
+    cleanup(outside);
+  }
+});
+
 test("writeManagedSkill rejects symlinked skill directories", async () => {
   const root = tempRoot();
   const outside = tempRoot();

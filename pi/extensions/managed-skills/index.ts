@@ -573,7 +573,11 @@ export async function listManagedSkills(root = MANAGED_SKILLS_DIR): Promise<Mana
 export async function viewManagedSkill(name: string, root = MANAGED_SKILLS_DIR): Promise<{ path: string; content: string }> {
   const safeName = sanitizeSkillName(name);
   await ensureManagedRootSafe(root);
-  const { file } = skillPaths(root, safeName);
+  const { dir, file } = skillPaths(root, safeName);
+  const dirStat = await lstatOrNull(dir);
+  if (!dirStat) throw new Error(`Managed skill "${safeName}" does not exist.`);
+  if (dirStat.isSymbolicLink()) throw new Error(`Managed skill "${safeName}" resolves through a symlink; refusing to read outside the managed directory.`);
+  if (!dirStat.isDirectory()) throw new Error(`Managed skill "${safeName}" is not a directory; refusing to read it.`);
   const stat = await lstatOrNull(file);
   if (!stat) throw new Error(`Managed skill "${safeName}" does not exist.`);
   assertRegularSingleLinkSkillFile(safeName, stat);
