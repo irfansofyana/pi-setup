@@ -44,6 +44,9 @@ test("wrong-typed and unknown config fields fail closed", async (t) => {
     ["wrong-type", { enabled: "false" }],
     ["unknown-key", { enabled: false, surprise: true }],
     ["invalid-range", { minToolCalls: -1 }],
+    ["fractional-skill-limit", { maxSkillBytes: 0.5 }],
+    ["fractional-memory-limit", { maxMemoryChars: 2.9 }],
+    ["fractional-tool-limit", { minToolCalls: 2.9 }],
   ] as const) {
     const path = join(root, `${name}.json`);
     await writeFile(path, JSON.stringify(value));
@@ -70,6 +73,9 @@ test("config writes replace symlinks without overwriting their targets", async (
 
 test("config normalization keeps defaults and clamps numeric values", () => {
   assert.deepEqual(normalizeManagedSkillsConfig({}), DEFAULT_CONFIG);
-  assert.equal(normalizeManagedSkillsConfig({ minToolCalls: 2.9 }).minToolCalls, 2);
+  assert.equal(normalizeManagedSkillsConfig({ minToolCalls: 2.9 }).minToolCalls, DEFAULT_CONFIG.minToolCalls);
   assert.equal(normalizeManagedSkillsConfig({ maxSkillBytes: -1 }).maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes);
+  assert.equal(normalizeManagedSkillsConfig({ maxSkillBytes: 0.5 }).maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes);
+  assert.equal(normalizeManagedSkillsConfig({ maxMemoryChars: 2.9 }).maxMemoryChars, DEFAULT_CONFIG.maxMemoryChars);
+  assert.equal(normalizeManagedSkillsConfig({ maxSkillBytes: 1 }).maxSkillBytes, 1);
 });

@@ -35,7 +35,7 @@ export interface ManagedSkillsConfigResult {
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
-  return Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : fallback;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 export function normalizeManagedSkillsConfig(value: unknown): ManagedSkillsConfig {
@@ -47,8 +47,8 @@ export function normalizeManagedSkillsConfig(value: unknown): ManagedSkillsConfi
     learnEnabled: typeof obj.learnEnabled === "boolean" ? obj.learnEnabled : DEFAULT_CONFIG.learnEnabled,
     autoCapture: typeof obj.autoCapture === "boolean" ? obj.autoCapture : DEFAULT_CONFIG.autoCapture,
     autoContinue: typeof obj.autoContinue === "boolean" ? obj.autoContinue : DEFAULT_CONFIG.autoContinue,
-    minToolCalls: Number.isFinite(obj.minToolCalls) && Number(obj.minToolCalls) >= 0
-      ? Math.floor(Number(obj.minToolCalls))
+    minToolCalls: typeof obj.minToolCalls === "number" && Number.isInteger(obj.minToolCalls) && obj.minToolCalls >= 0
+      ? obj.minToolCalls
       : DEFAULT_CONFIG.minToolCalls,
     maxSkillBytes: positiveInteger(obj.maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes),
     maxMemoryChars: positiveInteger(obj.maxMemoryChars, DEFAULT_CONFIG.maxMemoryChars),
@@ -79,6 +79,7 @@ function validateManagedSkillsConfig(value: Record<string, unknown>): void {
     if (!(key in value)) continue;
     const number = value[key];
     if (typeof number !== "number" || !Number.isFinite(number)) throw new Error(`field "${key}" must be a finite number`);
+    if (!Number.isInteger(number)) throw new Error(`field "${key}" must be an integer`);
     if (key === "minToolCalls" ? number < 0 : number <= 0) throw new Error(`field "${key}" is outside its allowed range`);
   }
 }
