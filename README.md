@@ -514,7 +514,7 @@ Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
 
 ## Managed skills extension
 
-Purpose: OMP-inspired generated reusable skills for stock Pi. Provides `manage_skill`, `learn`, and `/managed-skills`, writing only isolated generated skills under:
+Purpose: OMP-inspired generated reusable skills for Pi. Provides `manage_skill`, `learn`, and `/managed-skills`, writing only isolated generated skills under:
 
 Requires Pi `>=0.80.4`; `autoContinue` uses `agent_settled` so hidden capture waits for retries, compaction, and queued follow-ups to finish.
 

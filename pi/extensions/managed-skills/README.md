@@ -1,6 +1,6 @@
 # Managed Skills Pi Extension
 
-Local OMP-inspired managed skills for stock Pi.
+Local OMP-inspired managed skills for Pi.
 
 Requires Pi `>=0.80.4`. Automatic continuation uses Pi's `agent_settled` lifecycle hook, introduced in `0.80.4`.
 
