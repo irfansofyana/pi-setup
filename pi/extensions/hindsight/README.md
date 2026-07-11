@@ -1,6 +1,6 @@
 # hindsight
 
-Real Hindsight-backed memory + Pi rulebook/TTSR helpers for stock Pi.
+Real Hindsight-backed memory + Pi rulebook/TTSR helpers for Pi.
 
 Memory uses a local Hindsight daemon (`hindsight-embed` or full Hindsight API). Rules remain local Pi-compatible helpers.
 
@@ -119,9 +119,9 @@ Rules are still local:
 
 Buckets: TTSR first (`condition`/`astCondition`), then `alwaysApply`, then rulebook (`description`).
 
-## Stock Pi limits
+## Upstream Pi limitations
 
-Stock Pi means normal upstream Pi, not an oh-my-pi fork. This extension can use tools/commands/hooks, but cannot do true fork-only mid-token abort/rewind. TTSR is approximated with `tool_result`, `tool_call`, and `input` hooks.
+Upstream Pi, unlike an oh-my-pi fork, cannot do true fork-only mid-token abort/rewind. This extension approximates TTSR with `tool_result`, `tool_call`, and `input` hooks.
 
 ## Verify
 

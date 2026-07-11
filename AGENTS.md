@@ -20,7 +20,7 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 
 - Use `pi install npm:<package>` for npm Pi packages.
 - Use `pi install git:github.com/<owner>/<repo>` for GitHub package installs.
-- Use local copy instructions for repo-owned extension templates such as `pi/extensions/headroom` and `pi/extensions/hindsight`.
+- Use local copy instructions for repo-owned extension templates such as `pi/extensions/headroom`, `pi/extensions/hindsight`, and `pi/extensions/managed-skills`.
 - Headroom CLI is installed with `pipx install "headroom-ai[proxy]"` or `uv tool install "headroom-ai[proxy]"`; npm `headroom-ai` is SDK-only.
 - oh-my-pi is the reference shape for the local Hindsight extension; Headroom is separate/unrelated.
 - Local Hindsight extension config lives at `~/.pi/agent/hindsight/config.json`; use it for daemon URLs such as named `hindsight-embed` profile ports when Pi does not inherit shell env. Keep provider credentials in env/profile config, not this repo.
@@ -43,6 +43,7 @@ pi install npm:pi-markdown-preview
 pi install npm:@juicesharp/rpiv-todo
 # Headroom: install CLI with pipx/uv, then copy local template from pi/extensions/headroom
 # Hindsight: copy real local-daemon memory template from pi/extensions/hindsight
+# Managed Skills: copy OMP-style generated skills template from pi/extensions/managed-skills
 pi install npm:pi-9router-ext
 pi install npm:pi-stats-ext
 # Caveman: copy local terse-response extension template from pi/extensions/caveman
@@ -53,7 +54,7 @@ pi install npm:pi-stats-ext
 - `~/.pi/agent/extensions/pi-permission-system/config.json` is the global policy path.
 - README should include the current intended policy.
 - Tavily, Exa, and Brave search tools should be allowed without approval.
-- Mutating tools (`write`, `edit`) and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.
+- Mutating/retention tools (`write`, `edit`, `manage_skill`, `learn`) and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.
 
 ## Validation
 

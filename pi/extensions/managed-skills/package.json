@@ -1,0 +1,17 @@
+{
+  "name": "managed-skills-pi-extension",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test \"*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.4",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}
