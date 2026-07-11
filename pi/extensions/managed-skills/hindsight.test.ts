@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   computeHindsightScope,
   projectKey,
+  readHindsightRetainConfig,
   redactSecrets,
   retainHindsightLesson,
   sanitizeLearnText,
@@ -25,6 +29,33 @@ test("Hindsight scoping supports global and project modes", () => {
     tags: [`project:${key}`],
     tagsMatch: "any",
   });
+});
+
+test("Hindsight retain config preserves zero timeouts from file and env", () => {
+  const root = mkdtempSync(join(tmpdir(), "managed-skills-hindsight-"));
+  const configPath = join(root, "config.json");
+  try {
+    writeFileSync(configPath, JSON.stringify({ requestTimeoutMs: 0 }));
+    assert.equal(readHindsightRetainConfig({ HINDSIGHT_CONFIG_PATH: configPath }).requestTimeoutMs, 0);
+    assert.equal(readHindsightRetainConfig({
+      HINDSIGHT_CONFIG_PATH: join(root, "missing.json"),
+      HINDSIGHT_REQUEST_TIMEOUT_MS: "0",
+    }).requestTimeoutMs, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Hindsight retain config rejects blank and negative timeouts", () => {
+  const missingConfig = join(tmpdir(), "missing-managed-skills-hindsight-config.json");
+  assert.equal(readHindsightRetainConfig({
+    HINDSIGHT_CONFIG_PATH: missingConfig,
+    HINDSIGHT_REQUEST_TIMEOUT_MS: "",
+  }).requestTimeoutMs, 30_000);
+  assert.equal(readHindsightRetainConfig({
+    HINDSIGHT_CONFIG_PATH: missingConfig,
+    HINDSIGHT_REQUEST_TIMEOUT_MS: "-1",
+  }).requestTimeoutMs, 30_000);
 });
 
 test("retain posts an encoded, authorized, redacted Hindsight payload", async () => {

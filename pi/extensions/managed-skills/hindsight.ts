@@ -46,8 +46,12 @@ function stringValue(...values: unknown[]): string {
 
 function numberValue(...values: unknown[]): number | undefined {
   for (const value of values) {
-    const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-    if (Number.isFinite(number) && number > 0) return Math.floor(number);
+    const number = typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : NaN;
+    if (Number.isFinite(number) && number >= 0) return Math.floor(number);
   }
   return undefined;
 }
