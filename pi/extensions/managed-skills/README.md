@@ -178,7 +178,7 @@ If an existing config file is malformed or unreadable, the extension fails close
 
 The extension enforces:
 
-- strict kebab-case names: lowercase letters, digits, hyphens, max 64 chars
+- strict kebab-case names: lowercase letters/digits with single hyphens between segments, max 64 chars
 - no slashes, `..`, absolute paths, or empty names
 - managed root must not be a symlink
 - managed skill directories and `SKILL.md` files must not be symlinks

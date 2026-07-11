@@ -12,7 +12,7 @@ import {
 } from "./filesystem.ts";
 import type { ManagedSkillInfo, ManagedSkillWriteInput, ValidatedManagedSkillFile } from "./types.ts";
 
-export const MANAGED_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export const MANAGED_SKILL_NAME_PATTERN = /^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface SkillStoreDependencies {
   atomicCreate?: typeof atomicCreateFile;
@@ -35,7 +35,7 @@ function serializeSkillMutation<T>(key: string, operation: () => Promise<T>): Pr
 export function sanitizeSkillName(raw: string): string {
   const name = raw.trim().toLowerCase();
   if (!MANAGED_SKILL_NAME_PATTERN.test(name)) {
-    throw new Error(`Invalid skill name "${raw}". Use lowercase letters, digits, and hyphens (1-64 chars, starting with a letter or digit).`);
+    throw new Error(`Invalid skill name "${raw}". Use lowercase letters, digits, and single hyphens between segments (1-64 chars).`);
   }
   return name;
 }

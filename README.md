@@ -569,6 +569,7 @@ Default config:
 Safety:
 
 - generated skills stay under `~/.pi/agent/managed-skills`
+- skill names use strict kebab-case: lowercase letters/digits with single hyphens between segments, max 64 chars
 - discovery contributes only explicit, bounded `SKILL.md` files, never the parent root
 - managed root, skill directories, and `SKILL.md` files must not be symlinks
 - reads reject hard-linked files and use `O_NOFOLLOW`

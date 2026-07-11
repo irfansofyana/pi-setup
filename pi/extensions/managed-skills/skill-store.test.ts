@@ -37,8 +37,11 @@ test("skill store supports validated CRUD", async (t) => {
 test("skill store rejects unsafe names and create/update contract violations", async (t) => {
   const root = await tempRoot();
   t.after(() => rm(root, { recursive: true, force: true }));
-  for (const name of ["", "-bad", "bad/skill", "../bad", "bad_skill", "a".repeat(65)]) {
+  for (const name of ["", "-bad", "demo-", "demo--flow", "bad/skill", "../bad", "bad_skill", "a".repeat(65)]) {
     assert.throws(() => sanitizeSkillName(name), /Invalid skill name/);
+  }
+  for (const name of ["demo-", "demo--flow"]) {
+    await assert.rejects(() => writeManagedSkill({ action: "create", name, description: "d", body: "body", root }), /Invalid skill name/);
   }
   await writeManagedSkill({ action: "create", name: "demo", description: "d", body: "body", root });
   await assert.rejects(() => writeManagedSkill({ action: "create", name: "demo", description: "d", body: "body", root }), /already exists/);
