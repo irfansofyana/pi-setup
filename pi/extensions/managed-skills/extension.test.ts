@@ -21,7 +21,9 @@ function fakePi() {
       on(name: string, handler: Handler) { handlers.set(name, handler); },
       registerTool(tool: any) { tools.set(tool.name, tool); },
       registerCommand(name: string, command: any) { commands.set(name, command); },
-      sendMessage(message: any, options: any) { sent.push({ message, options }); },
+      sendMessage(message: any, options: any) {
+        sent.push({ message: { ...message, role: "custom", timestamp: Date.now() }, options });
+      },
     },
   };
 }
@@ -107,6 +109,7 @@ test("capture dispatch waits for settled idle and suppresses its own chain", asy
   assert.equal(pi.sent.length, 0);
   await pi.handlers.get("agent_settled")?.({}, ctx);
   assert.equal(pi.sent.length, 1);
+  assert.equal(pi.sent[0].message.role, "custom");
   assert.equal(pi.sent[0].message.customType, AUTO_CAPTURE_TYPE);
   assert.deepEqual(pi.sent[0].options, { deliverAs: "followUp", triggerTurn: true });
 
