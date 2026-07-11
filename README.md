@@ -516,6 +516,8 @@ Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
 
 Purpose: OMP-inspired generated reusable skills for stock Pi. Provides `manage_skill`, `learn`, and `/managed-skills`, writing only isolated generated skills under:
 
+Requires Pi `>=0.80.4`; `autoContinue` uses `agent_settled` so hidden capture waits for retries, compaction, and queued follow-ups to finish.
+
 ```text
 ~/.pi/agent/managed-skills/<skill-name>/SKILL.md
 ```
@@ -567,9 +569,11 @@ Default config:
 Safety:
 
 - generated skills stay under `~/.pi/agent/managed-skills`
-- discovery contributes only explicit, lstat-validated `SKILL.md` files, never the parent root
+- discovery contributes only explicit, bounded `SKILL.md` files, never the parent root
 - managed root, skill directories, and `SKILL.md` files must not be symlinks
-- discovery and updates reject hard-linked `SKILL.md` files
+- reads reject hard-linked files and use `O_NOFOLLOW`
+- config and skill updates use same-directory atomic replacement
+- malformed existing config fails closed and reports a diagnostic in `/managed-skills status`
 - `learn` redacts common secret patterns before retaining to Hindsight
 - keep `autoCapture` and `autoContinue` off until manual capture feels safe
 

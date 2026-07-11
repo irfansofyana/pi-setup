@@ -2,6 +2,8 @@
 
 Local OMP-inspired managed skills for stock Pi.
 
+Requires Pi `>=0.80.4`. Automatic continuation uses Pi's `agent_settled` lifecycle hook, introduced in `0.80.4`.
+
 This extension adds model-callable `manage_skill` and `learn` tools plus a `/managed-skills` command. It writes generated skills only under an isolated managed directory:
 
 ```text
@@ -138,7 +140,7 @@ Defaults:
 - `enabled`: registers managed-skills tooling and discovers managed skills.
 - `learnEnabled`: registers `learn` for Hindsight-backed lesson retention.
 - `autoCapture`: adds system prompt guidance telling the agent it may call `learn` and/or `manage_skill`.
-- `autoContinue`: after a turn with at least `minToolCalls`, queues one hidden capture turn that may call `learn` and/or `manage_skill`, then stop.
+- `autoContinue`: after eligible tool-heavy work and all queued follow-ups/retries settle, runs one hidden capture turn that may call `learn` and/or `manage_skill`, then stops.
 - `minToolCalls`: threshold for `autoContinue`.
 - `maxSkillBytes`: max serialized `SKILL.md` size.
 - `maxMemoryChars`: max Hindsight lesson/context length for `learn`.
@@ -159,6 +161,19 @@ Recommended start:
 
 Turn on automation only after manual workflow feels good.
 
+If an existing config file is malformed or unreadable, the extension fails closed: managed tools, discovery, and automation stay disabled. `/managed-skills status` and `/managed-skills config` show the diagnostic. Correct the file or run a config-changing command, then `/reload`.
+
+## Architecture
+
+- `extension.ts`: Pi commands, tools, discovery, prompts, and lifecycle wiring
+- `auto-capture.ts`: pure `agent_end`/`agent_settled` state machine
+- `config.ts`: defaults, fail-closed reads, and atomic config persistence
+- `filesystem.ts`: bounded no-follow reads and atomic file primitives
+- `skill-store.ts`: isolated generated-skill CRUD and discovery
+- `hindsight.ts`: redaction, scoping, and Hindsight retention
+- `schema.ts` / `types.ts`: tool schemas and shared contracts
+- `index.ts`: thin Pi entry point and compatibility exports
+
 ## Safety rules
 
 The extension enforces:
@@ -166,12 +181,12 @@ The extension enforces:
 - strict kebab-case names: lowercase letters, digits, hyphens, max 64 chars
 - no slashes, `..`, absolute paths, or empty names
 - managed root must not be a symlink
-- managed skill directory and `SKILL.md` must not be symlinks
-- discovery contributes only explicit, lstat-validated `SKILL.md` files, never the parent managed root
-- update and discovery reject hard-linked `SKILL.md` files
-- create uses exclusive file creation
-- update requires an existing regular file
-- serialized `SKILL.md` is capped by `maxSkillBytes`
+- managed skill directories and `SKILL.md` files must not be symlinks
+- reads use bounded `O_NOFOLLOW` file handles and reject hard links
+- discovery contributes only explicit validated `SKILL.md` files, never the parent managed root
+- create is exclusive; config and skill updates use same-directory atomic replacement
+- failed updates preserve the previous complete file
+- serialized, discovered, listed, and viewed skills honor `maxSkillBytes`
 - descriptions are one-line sanitized strings
 - authored skills keep priority; the tool refuses known authored-name collisions during active turns
 - `learn` redacts common secret patterns before retaining to Hindsight
@@ -186,6 +201,7 @@ Keep `pi-permission-system` enabled and leave `manage_skill` and `learn` gated a
 - `learn` requires the local Hindsight daemon/config to be reachable.
 - `learn` stores memory first; if optional skill creation fails, it reports a partial outcome.
 - `autoContinue` spends extra tokens and can surprise you; keep it off unless explicitly wanted.
+- Pi `0.80.3` and older do not provide `agent_settled`; upgrade Pi before using this extension version.
 
 ## Smoke test
 
@@ -203,5 +219,12 @@ Ask the agent: create a managed skill named demo-workflow that says when to use 
 Local helper tests from this repository:
 
 ```bash
-node --test pi/extensions/managed-skills/index.test.ts
+npm test --prefix pi/extensions/managed-skills
+```
+
+Typecheck after installing development dependencies in the extension directory:
+
+```bash
+npm install --prefix pi/extensions/managed-skills
+npm run typecheck --prefix pi/extensions/managed-skills
 ```
