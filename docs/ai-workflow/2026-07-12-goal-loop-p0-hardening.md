@@ -10,7 +10,7 @@ Large/Risky
 
 ## Current Status
 
-Design approved and self-reviewed; formal spec written on `feat/goal-loop-p0-hardening`. Awaiting user review before implementation planning.
+Design and implementation plan approved through their respective gates on `feat/goal-loop-p0-hardening`. Awaiting execution-mode selection before test-first implementation.
 
 ## Local Instructions
 
@@ -52,8 +52,8 @@ Design approved and self-reviewed; formal spec written on `feat/goal-loop-p0-har
 - [x] Approve data, error, and testing semantics.
 - [x] Create feature branch.
 - [x] Write and self-review design spec.
-- [ ] Obtain user approval of the written spec.
-- [ ] Write implementation plan.
+- [x] Obtain user approval of the written spec.
+- [x] Write and self-review implementation plan.
 - [ ] Implement each behavior with red-green-refactor cycles.
 - [ ] Update README.
 - [ ] Run targeted and complete extension tests.
@@ -72,6 +72,7 @@ Design approved and self-reviewed; formal spec written on `feat/goal-loop-p0-har
 - Baseline before changes: `node --test pi/extensions/goal-loop/index.test.ts` passed 18/18.
 - Branch creation: `feat/goal-loop-p0-hardening` created from clean `advisor-model` state aligned with `origin/main` at review time.
 - Design/spec self-review separated `goalRevision` from optimistic-concurrency `storageRevision` and clarified how model terminal proposals are stored without changing authoritative status.
+- Implementation-plan self-review confirmed coverage for authority, leases, structured decisions, storage migration/corruption, settled lifecycle, documentation, and final verification. No placeholder steps remain.
 
 ## Open Questions And Risks
 
@@ -82,4 +83,4 @@ Design approved and self-reviewed; formal spec written on `feat/goal-loop-p0-har
 
 ## Handoff
 
-Commit the design/workflow documents and ask the user to review the written spec before producing an implementation plan.
+Select inline or subagent-driven execution. Then begin Task 1 in `docs/superpowers/plans/2026-07-12-goal-loop-p0-hardening.md` by writing the failing schema and authority tests before production code.
