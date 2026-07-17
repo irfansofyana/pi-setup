@@ -158,7 +158,8 @@ Run `/reload` after install.
 | `~/.pi/agent/managed-skills/` | Global Pi | Generated managed skill files |
 | `~/.pi/agent/caveman/config.json` | Global Pi | Caveman extension config |
 | `~/.pi/agent/goal-loop/config.json` | Global Pi | Goal-loop config |
-| `~/.pi/agent/goal-loop/state.json` | Global Pi | Persisted project goals |
+| `~/.pi/agent/goal-loop/state/<project-key>.json` | Global Pi | Per-project goal-loop state |
+| `~/.pi/agent/goal-loop/logs/<project-key>.jsonl` | Global Pi | Append-only goal-loop audit log |
 | `~/.config/mcp/mcp.json` | Global shared | Preferred MCP config |
 | `.mcp.json` | Project-local | Project MCP servers |
 | `~/.pi/agent/mcp.json` | Pi global | Pi-specific MCP override |
@@ -620,6 +621,8 @@ If old upstream config exists at `~/.pi/agent/caveman.json`, local extension rea
 
 Purpose: project-scoped `/goal` command with persisted state, verification evidence, and auto-continue loop.
 
+Requires Pi `>=0.80.4`. The extension records run output at `agent_end` and makes one continuation decision at `agent_settled`.
+
 Install:
 
 ```bash
@@ -661,6 +664,8 @@ Default:
 ```
 
 Keep `allowModelCreateGoal: false` unless you want model-callable goal creation.
+
+The human owns goal creation, pause/resume, objective edits, and turn budgets. Models can record evidence and propose only terminal outcomes; the coordinator verifies the current run, evaluator approval, and configured checks before changing state. Existing installations should recopy the template, then run `/reload` or restart Pi.
 
 ## Skills
 

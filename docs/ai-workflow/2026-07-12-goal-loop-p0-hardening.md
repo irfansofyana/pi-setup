@@ -10,7 +10,7 @@ Large/Risky
 
 ## Current Status
 
-Design and implementation plan approved through their respective gates on `feat/goal-loop-p0-hardening`. Awaiting execution-mode selection before test-first implementation.
+Implemented on `feat/goal-loop-p0-hardening`; ready for final review and integration decision.
 
 ## Local Instructions
 
@@ -54,10 +54,10 @@ Design and implementation plan approved through their respective gates on `feat/
 - [x] Write and self-review design spec.
 - [x] Obtain user approval of the written spec.
 - [x] Write and self-review implementation plan.
-- [ ] Implement each behavior with red-green-refactor cycles.
-- [ ] Update README.
-- [ ] Run targeted and complete extension tests.
-- [ ] Refresh verification and handoff.
+- [x] Implement coordinator state, strict decision parsing, and per-project storage with red-green-refactor tests.
+- [x] Update README and extension compatibility metadata.
+- [x] Run targeted and complete extension tests.
+- [x] Refresh verification and handoff.
 
 ## Key Areas
 
@@ -73,6 +73,7 @@ Design and implementation plan approved through their respective gates on `feat/
 - Branch creation: `feat/goal-loop-p0-hardening` created from clean `advisor-model` state aligned with `origin/main` at review time.
 - Design/spec self-review separated `goalRevision` from optimistic-concurrency `storageRevision` and clarified how model terminal proposals are stored without changing authoritative status.
 - Implementation-plan self-review confirmed coverage for authority, leases, structured decisions, storage migration/corruption, settled lifecycle, documentation, and final verification. No placeholder steps remain.
+- Final extension suite: `node --test pi/extensions/goal-loop/*.test.ts` passed after adding state, parser, storage, and adapter coverage.
 
 ## Open Questions And Risks
 
@@ -83,4 +84,4 @@ Design and implementation plan approved through their respective gates on `feat/
 
 ## Handoff
 
-Select inline or subagent-driven execution. Then begin Task 1 in `docs/superpowers/plans/2026-07-12-goal-loop-p0-hardening.md` by writing the failing schema and authority tests before production code.
+Review the final diff, then either commit the branch or open a draft PR. Recopy `pi/extensions/goal-loop` into `~/.pi/agent/extensions/` and run `/reload` before manual Pi smoke testing.

@@ -1,0 +1,369 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  acquireGoalLease,
+  createGoal,
+  createPendingRun,
+  editGoalObjective,
+  normalizeGoalState,
+  recordEvidence,
+  recordRunCandidate,
+  releaseGoalLease,
+  resumeGoal,
+  settlePendingRun,
+  shouldAutoContinue,
+} from "./state.ts";
+
+const NOW = new Date("2026-07-12T00:00:00.000Z");
+const LATER = new Date("2026-07-12T00:05:00.000Z");
+const MUCH_LATER = new Date(NOW.getTime() + 4 * 60 * 60 * 1000 + 1);
+
+function decision(decision: "complete" | "continue" | "blocked" | "needs_user") {
+  return {
+    goalId: "goal-1",
+    goalRevision: 1,
+    runId: "run-1",
+    evaluationRequestId: "eval-1",
+    decision,
+    reason: `${decision} reason`,
+    confidence: "high" as const,
+  };
+}
+
+test("createGoal creates versioned coordinator state", () => {
+  const goal = createGoal("/repo/app", "Make tests pass", NOW, "goal-1");
+
+  assert.equal(goal.schemaVersion, 2);
+  assert.equal(goal.goalId, "goal-1");
+  assert.equal(goal.goalRevision, 1);
+  assert.equal(goal.storageRevision, 0);
+  assert.equal(goal.pendingRun, undefined);
+  assert.equal(goal.lease, undefined);
+});
+
+test("normalizeGoalState fills coordinator fields from legacy state", () => {
+  const goal = normalizeGoalState({
+    projectRoot: "/repo/app",
+    objective: "Make tests pass",
+    status: "active",
+    createdAt: NOW.toISOString(),
+    updatedAt: NOW.toISOString(),
+    turns: 2,
+    maxTurns: 10,
+    maxFailedVerificationAttempts: 3,
+    consecutiveFailedVerificationAttempts: 0,
+    verification: { commands: ["npm test"] },
+  });
+
+  assert.equal(goal.schemaVersion, 2);
+  assert.equal(goal.goalRevision, 1);
+  assert.equal(goal.storageRevision, 0);
+  assert.equal(goal.pendingRun, undefined);
+  assert.equal(goal.lease, undefined);
+  assert.deepEqual(goal.verification.commands, ["npm test"]);
+});
+
+test("editGoalObjective invalidates proof and pending work", () => {
+  const goal = {
+    ...createGoal("/repo/app", "Old objective", NOW, "goal-1"),
+    turns: 4,
+    pendingRun: {
+      runId: "run-1",
+      evaluationRequestId: "eval-1",
+      goalRevision: 1,
+      sessionId: "session-a",
+      dispatchedAt: NOW.toISOString(),
+      toolProposal: "complete" as const,
+    },
+    evidence: [
+      {
+        at: NOW.toISOString(),
+        kind: "verification" as const,
+        summary: "passed",
+        command: "npm test",
+        outcome: "passed" as const,
+        goalRevision: 1,
+        runId: "run-1",
+      },
+    ],
+    verification: { commands: ["npm test"], lastResult: "passed: passed" },
+  };
+
+  const edited = editGoalObjective(goal, "New objective", LATER);
+
+  assert.equal(edited.goalRevision, 2);
+  assert.equal(edited.turns, 0);
+  assert.equal(edited.pendingRun, undefined);
+  assert.deepEqual(edited.evidence, []);
+  assert.deepEqual(edited.verification.commands, ["npm test"]);
+  assert.equal(edited.verification.lastResult, undefined);
+});
+
+test("lease helpers enforce ownership and expiry", () => {
+  const goal = createGoal("/repo", "Ship", NOW, "goal-1");
+  const owned = acquireGoalLease(goal, "session-a", NOW);
+  assert.equal(owned.ok, true);
+  assert.equal(owned.goal.lease?.sessionId, "session-a");
+
+  const conflict = acquireGoalLease(owned.goal, "session-b", LATER);
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.ownerSessionId, "session-a");
+  assert.equal(conflict.expiresAt, owned.goal.lease?.expiresAt);
+
+  const renewed = acquireGoalLease(owned.goal, "session-a", LATER);
+  assert.equal(renewed.ok, true);
+  assert.equal(renewed.goal.lease?.sessionId, "session-a");
+
+  const released = releaseGoalLease(renewed.goal, "session-b", LATER);
+  assert.equal(released.lease?.sessionId, "session-a");
+
+  const cleared = releaseGoalLease(renewed.goal, "session-a", LATER);
+  assert.equal(cleared.lease, undefined);
+
+  const reclaimed = acquireGoalLease(owned.goal, "session-b", MUCH_LATER);
+  assert.equal(reclaimed.ok, true);
+  assert.equal(reclaimed.goal.lease?.sessionId, "session-b");
+});
+
+test("pending runs are recorded and settled exactly once", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  const pending = createPendingRun(goal, "session-a", NOW, {
+    runId: "run-1",
+    evaluationRequestId: "eval-1",
+  });
+  assert.equal(pending.ok, true);
+
+  goal = pending.goal;
+  goal = recordRunCandidate(goal, {
+    protocol: "valid",
+    worker: decision("continue"),
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+  assert.equal(settled.action, "dispatch");
+  assert.equal(settled.goal.turns, 1);
+  assert.equal(settled.goal.pendingRun, undefined);
+  assert.equal(settlePendingRun(settled.goal, LATER).action, "none");
+});
+
+test("completion requires a fresh passing verification record", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, {
+    runId: "run-1",
+    evaluationRequestId: "eval-1",
+  }).goal;
+  goal = recordEvidence(goal, {
+    kind: "verification",
+    summary: "npm test passed",
+    command: "npm test",
+    outcome: "passed",
+    goalRevision: 1,
+    runId: "run-1",
+  }, LATER);
+  goal = recordRunCandidate(goal, {
+    protocol: "valid",
+    worker: decision("complete"),
+    evaluator: {
+      goalId: "goal-1",
+      goalRevision: 1,
+      runId: "run-1",
+      evaluationRequestId: "eval-1",
+      decision: "complete",
+      reason: "looks good",
+      confidence: "high",
+    },
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+  assert.equal(settled.action, "complete");
+  assert.equal(settled.goal.status, "complete");
+});
+
+test("terminal settlement releases the lease so another session can act immediately", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordEvidence(goal, {
+    kind: "verification",
+    summary: "tests passed",
+    command: "npm test",
+    outcome: "passed",
+    goalRevision: 1,
+    runId: "run-1",
+  }, LATER);
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("complete"), evaluator: decision("complete") }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+  const nextSession = acquireGoalLease(settled.goal, "session-b", LATER);
+
+  assert.equal(settled.action, "complete");
+  assert.equal(settled.goal.lease, undefined);
+  assert.equal(nextSession.ok, true);
+  if (nextSession.ok) assert.equal(nextSession.goal.lease?.sessionId, "session-b");
+});
+
+test("completion retains proof for every configured command beyond the compact evidence cap", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  const commands = Array.from({ length: 11 }, (_, index) => `check-${index + 1}`);
+  goal = { ...goal, verification: { ...goal.verification, commands } };
+  for (const command of commands) {
+    goal = recordEvidence(goal, {
+      kind: "verification",
+      summary: `${command} passed`,
+      command,
+      outcome: "passed",
+      goalRevision: 1,
+      runId: "run-1",
+    }, LATER);
+  }
+  assert.equal(goal.evidence.length, 10);
+  assert.equal(goal.verification.proofs.length, 11);
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("complete"), evaluator: decision("complete") }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "complete");
+});
+
+test("completion rejects zero-command goals without current-run verification evidence", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunCandidate(goal, {
+    protocol: "valid",
+    worker: decision("complete"),
+    evaluator: decision("complete"),
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "needs_user");
+  assert.match(settled.reason ?? "", /verification evidence is missing/i);
+});
+
+test("completion rejects a command whose latest current-run result failed", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = { ...goal, verification: { commands: ["npm test"] } };
+  goal = recordEvidence(goal, {
+    kind: "verification",
+    summary: "initial pass",
+    command: "npm test",
+    outcome: "passed",
+    goalRevision: 1,
+    runId: "run-1",
+  }, LATER);
+  goal = recordEvidence(goal, {
+    kind: "verification",
+    summary: "regression",
+    command: "npm test",
+    outcome: "failed",
+    goalRevision: 1,
+    runId: "run-1",
+  }, LATER);
+  goal = recordRunCandidate(goal, {
+    protocol: "valid",
+    worker: decision("complete"),
+    evaluator: decision("complete"),
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "needs_user");
+  assert.match(settled.reason ?? "", /verification evidence is missing/i);
+});
+
+test("an evaluator terminal decision cannot override a worker continue decision", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunCandidate(goal, {
+    protocol: "valid",
+    worker: decision("continue"),
+    evaluator: decision("complete"),
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "needs_user");
+  assert.equal(settled.goal.status, "needs_user");
+});
+
+test("conflicting model terminal proposals require a human at settlement", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = {
+    ...goal,
+    pendingRun: { ...goal.pendingRun!, toolProposal: "complete", toolProposalConflict: true },
+  };
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("complete"), evaluator: decision("complete") }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "needs_user");
+  assert.match(settled.reason ?? "", /conflicting model terminal proposals/i);
+});
+
+test("a matching evaluator continue overrides a worker terminal proposal", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunCandidate(goal, {
+    protocol: "valid",
+    worker: decision("complete"),
+    evaluator: decision("continue"),
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "dispatch");
+  assert.equal(settled.goal.status, "active");
+});
+
+test("settlement blocks once structured verification failures reach the limit", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = { ...goal, consecutiveFailedVerificationAttempts: goal.maxFailedVerificationAttempts };
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("continue") }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "blocked");
+  assert.equal(settled.goal.pendingRun, undefined);
+});
+
+test("an aborted assistant run blocks without an automatic retry", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunCandidate(goal, {
+    protocol: "malformed",
+    source: "assistant_stop",
+    reason: "Assistant turn ended with aborted.",
+  }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "blocked");
+  assert.equal(settled.goal.status, "blocked");
+});
+
+test("resumeGoal extends spent turn budgets", () => {
+  const goal = {
+    ...createGoal("/repo/app", "Make tests pass", NOW, "goal-1"),
+    status: "blocked" as const,
+    turns: 10,
+    maxTurns: 10,
+  };
+
+  const resumed = resumeGoal(goal, LATER);
+
+  assert.equal(resumed.status, "active");
+  assert.equal(resumed.turns, 10);
+  assert.equal(resumed.maxTurns, 20);
+});
+
+test("shouldAutoContinue honors status and turn budget", () => {
+  const goal = createGoal("/repo/app", "Make tests pass", NOW, "goal-1");
+
+  assert.equal(shouldAutoContinue(goal), true);
+  assert.equal(shouldAutoContinue({ ...goal, status: "paused" }), false);
+  assert.equal(shouldAutoContinue({ ...goal, turns: 10 }), false);
+});
