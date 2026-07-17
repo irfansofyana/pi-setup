@@ -451,29 +451,33 @@ Footer examples: `hr off`, `hr m 55k ↓10%`, `hr x 55k ↓10%`.
 
 Purpose: real memory retain/recall/reflect via local Hindsight daemon, plus local rules.
 
-Setup daemon:
+Setup daemon with a named profile:
 
 ```bash
-uvx hindsight-embed@latest configure
-uvx hindsight-embed daemon status
-```
-
-Named profile example:
-
-```bash
-hindsight-embed profile create pi-litellm --port 9478 --merge
-hindsight-embed profile set-active pi-litellm
-hindsight-embed -p pi-litellm daemon status
+# Uses OpenAI Codex OAuth from ~/.codex/auth.json.
+# First authenticate if needed: codex auth login
+hindsight-embed profile create pi-codex --port 9478 --merge \
+  --env HINDSIGHT_API_LLM_PROVIDER=openai-codex \
+  --env HINDSIGHT_API_EMBEDDINGS_PROVIDER=local \
+  --env HINDSIGHT_API_RERANKER_PROVIDER=local
+hindsight-embed profile set-active pi-codex
+hindsight-embed -p pi-codex daemon start
+hindsight-embed -p pi-codex daemon status
 
 mkdir -p ~/.pi/agent/hindsight
 cat > ~/.pi/agent/hindsight/config.json <<'JSON'
 {
   "apiUrl": "http://127.0.0.1:9478",
   "bankId": "coding-agent",
-  "scoping": "per-project-tagged"
+  "scoping": "per-project-tagged",
+  "autoStartDaemon": true
 }
 JSON
 ```
+
+Profile naming convention: use `pi-codex` for OpenAI Codex OAuth. Reserve `pi-litellm` for a real LiteLLM server profile.
+
+For API-key OpenAI instead, set `HINDSIGHT_API_LLM_PROVIDER=openai` and pass `HINDSIGHT_API_LLM_API_KEY` via environment/profile config, not this repo.
 
 Install adapter:
 
