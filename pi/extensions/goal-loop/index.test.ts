@@ -1083,5 +1083,11 @@ test("README documents hardened lifecycle and storage requirements", () => {
   assert.match(readme, /\/goal budget/);
   assert.match(readme, /usage_limited/);
   assert.match(readme, /token_budget_limited/);
+  assert.match(readme, /4,000 characters/);
+  assert.match(readme, /stop.*off.*reset.*none.*cancel/);
+  assert.match(readme, /follow-up.*steer/i);
+  assert.match(readme, /evaluates every settled autonomous run/i);
+  assert.match(readme, /subagents:rpc:spawn/);
+  assert.match(readme, /fails closed.*needs_user/i);
   assert.match(readme, /\/reload/);
 });

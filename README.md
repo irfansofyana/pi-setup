@@ -622,11 +622,12 @@ If old upstream config exists at `~/.pi/agent/caveman.json`, local extension rea
 
 Purpose: Pi-working-root-scoped `/goal` command with persisted state, completion receipts, usage limits, verification evidence, and auto-continue loops.
 
-Requires Pi `>=0.80.4`. The extension records run output at `agent_end` and makes one continuation decision at `agent_settled`.
+Requires Pi `>=0.80.4` and `@tintinweb/pi-subagents`. The extension records run output at `agent_end`, calls a separate evaluator, and makes one continuation decision at `agent_settled`.
 
 Install:
 
 ```bash
+pi install npm:@tintinweb/pi-subagents
 mkdir -p ~/.pi/agent/extensions
 cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
 ```
@@ -634,9 +635,9 @@ cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
 Commands:
 
 ```text
-/goal                       # local status or latest archived achievement
+/goal                       # objective, duration, evaluated runs, usage, and latest reason
 /goal status                # explicit status alias
-/goal <objective>
+/goal <objective>           # starts immediately; maximum 4,000 characters
 /goal list                  # active goals across stored working roots
 /goal pause
 /goal resume
@@ -645,6 +646,8 @@ Commands:
 /goal verify <command>
 /goal budget <tokens|off>   # opt-in cumulative assistant-token budget
 ```
+
+Clear aliases: `/goal stop`, `/goal off`, `/goal reset`, `/goal none`, and `/goal cancel`.
 
 Tools:
 
@@ -669,7 +672,9 @@ Default:
 
 Keep `allowModelCreateGoal: false` unless you want model-callable goal creation.
 
-The human owns goal creation, pause/resume, objective edits, turn budgets, and optional token budgets. Models can record evidence and propose only terminal outcomes; the coordinator verifies the current run, evaluator approval, and configured checks before changing state.
+The human owns goal creation, pause/resume, objective edits, turn budgets, and optional token budgets. Models can record evidence and propose outcomes, but a coordinator-owned read-only `Explore` evaluator decides every settled autonomous run through `subagents:rpc:spawn`. Missing, malformed, failed, or stale evaluator results fail closed at `needs_user`; completion also requires fresh passed verification evidence.
+
+A normal user follow-up during an active run is saved as durable steering. It increments the goal revision, invalidates proof from the interrupted run, and resumes automatically with the new direction after the user turn settles.
 
 Identity is the normalized Pi working root (`ctx.cwd`), not a discovered Git worktree root or filesystem realpath. Parallel safety therefore requires launching each Pi session from a distinct Git worktree root. Launching from different subdirectories or symlink spellings creates distinct keys and is not detected as same-worktree concurrency. Each exact root key has one active goal and one session-owned execution lease.
 
@@ -678,6 +683,8 @@ Completion writes an idempotent snapshot under `~/.pi/agent/goal-loop/archive/` 
 Only finalized assistant usage from accepted autonomous runs is accumulated (`input`, `output`, cache fields, `totalTokens`, and `cost.total`). Reasoning is already included in output and is not added twice; ordinary user turns do not count. Reaching an opt-in token budget produces `token_budget_limited`. A correlated terminal HTTP 429 produces `usage_limited`, while a successful retry remains transient.
 
 Existing installations should recopy the template, then run `/reload` or restart Pi.
+
+The extension does not bypass Pi permissions. It does not schedule work after Pi exits or execute verification commands independently, and same-worktree detection still requires launching concurrent sessions from distinct Git worktree roots.
 
 ## Skills
 
