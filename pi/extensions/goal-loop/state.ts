@@ -118,6 +118,7 @@ export interface GoalState {
   createdAt: string;
   updatedAt: string;
   turns: number;
+  evaluatedRuns: number;
   maxTurns: number;
   maxFailedVerificationAttempts: number;
   consecutiveFailedVerificationAttempts: number;
@@ -146,9 +147,23 @@ export const GOAL_SCHEMA_VERSION = 2 as const;
 export const DEFAULT_MAX_TURNS = 10;
 export const DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS = 3;
 export const GOAL_LEASE_MS = 4 * 60 * 60 * 1000;
+export const MAX_GOAL_OBJECTIVE_CHARS = 4_000;
 
 const MAX_EVIDENCE_ENTRIES = 10;
 const GOAL_STATUS_FRAMES = ["◐", "◓", "◑", "◒"] as const;
+
+export type GoalObjectiveValidation =
+  | { ok: true; objective: string }
+  | { ok: false; reason: string };
+
+export function validateGoalObjective(objective: unknown): GoalObjectiveValidation {
+  const normalized = typeof objective === "string" ? objective.trim() : "";
+  if (!normalized) return { ok: false, reason: "Goal objective must not be empty." };
+  if (normalized.length > MAX_GOAL_OBJECTIVE_CHARS) {
+    return { ok: false, reason: "Goal objective must be 4,000 characters or fewer." };
+  }
+  return { ok: true, objective: normalized };
+}
 
 export function canonicalProjectRoot(projectRoot: string): string {
   const normalized = normalize(projectRoot);
@@ -255,6 +270,7 @@ export function createGoal(projectRoot: string, objective: string, now = new Dat
     createdAt: timestamp,
     updatedAt: timestamp,
     turns: 0,
+    evaluatedRuns: 0,
     maxTurns: DEFAULT_MAX_TURNS,
     maxFailedVerificationAttempts: DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS,
     consecutiveFailedVerificationAttempts: 0,
@@ -280,6 +296,7 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
         .map((entry) => normalizeEvidenceEntry(entry, goalRevision))
         .filter((entry): entry is GoalEvidence => entry !== undefined && entry.kind === "verification")
     : evidence.filter((entry) => entry.kind === "verification");
+  const turns = typeof raw.turns === "number" && Number.isFinite(raw.turns) ? Math.max(0, Math.trunc(raw.turns)) : 0;
 
   return {
     schemaVersion: GOAL_SCHEMA_VERSION,
@@ -291,7 +308,8 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
     status: raw.status === "active" || raw.status === "paused" || raw.status === "complete" || raw.status === "blocked" || raw.status === "needs_user" || raw.status === "usage_limited" || raw.status === "token_budget_limited" ? raw.status : "active",
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
-    turns: typeof raw.turns === "number" && Number.isFinite(raw.turns) ? Math.max(0, Math.trunc(raw.turns)) : 0,
+    turns,
+    evaluatedRuns: typeof raw.evaluatedRuns === "number" && Number.isFinite(raw.evaluatedRuns) ? Math.max(0, Math.trunc(raw.evaluatedRuns)) : turns,
     maxTurns: typeof raw.maxTurns === "number" && Number.isFinite(raw.maxTurns) ? Math.max(1, Math.trunc(raw.maxTurns)) : DEFAULT_MAX_TURNS,
     maxFailedVerificationAttempts:
       typeof raw.maxFailedVerificationAttempts === "number" && Number.isFinite(raw.maxFailedVerificationAttempts)

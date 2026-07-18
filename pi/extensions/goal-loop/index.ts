@@ -11,6 +11,7 @@ import {
   expireStalePendingRun,
   goalKey,
   goalStatusText,
+  MAX_GOAL_OBJECTIVE_CHARS,
   normalizeGoalState,
   normalizeGoalUsage,
   recordEvidence,
@@ -22,6 +23,7 @@ import {
   settlePendingRun,
   shouldAutoContinue,
   tokenBudgetAllowsResume,
+  validateGoalObjective,
   type GoalCommand,
   type GoalDecision,
   type GoalEvaluation,
@@ -90,6 +92,7 @@ type JsonSchema = Record<string, unknown> & { [OPTIONAL_SCHEMA]?: true };
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "goal-loop", "config.json");
 const DEFAULT_CONFIG: GoalLoopConfig = { allowModelCreateGoal: false };
 const COMMANDS = new Set<GoalCommand>(["status", "list", "pause", "resume", "clear", "edit", "verify", "budget"]);
+const CLEAR_ALIASES = new Set(["stop", "off", "reset", "none", "cancel"]);
 
 const Schema = {
   Object(properties: Record<string, JsonSchema>): JsonSchema {
@@ -114,6 +117,7 @@ export function parseGoalArgs(args: string): ParsedGoalArgs {
   const trimmed = args.trim();
   if (!trimmed) return { command: "status", value: "" };
   const [first = "", ...rest] = trimmed.split(/\s+/);
+  if (CLEAR_ALIASES.has(first) && rest.length === 0) return { command: "clear", value: "" };
   return COMMANDS.has(first as GoalCommand)
     ? { command: first as GoalCommand, value: rest.join(" ").trim() }
     : { command: "start", value: trimmed };
@@ -325,7 +329,15 @@ function formatAchievement(goal: GoalState): string {
   ].join("\n");
 }
 
-function formatStatus(goal: GoalState | undefined, latestAchievement?: GoalState): string {
+export function formatGoalDuration(startedAt: string, now: Date): string {
+  const seconds = Math.max(0, Math.floor((now.getTime() - Date.parse(startedAt)) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+function formatStatus(goal: GoalState | undefined, latestAchievement: GoalState | undefined, timestamp: Date): string {
   if (!goal) {
     return latestAchievement
       ? `No active goal for this working root. Latest achievement (read-only):\n${formatAchievement(latestAchievement)}`
@@ -335,6 +347,8 @@ function formatStatus(goal: GoalState | undefined, latestAchievement?: GoalState
   return [
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
+    `Duration: ${formatGoalDuration(goal.createdAt, timestamp)}`,
+    `Evaluated runs: ${goal.evaluatedRuns}`,
     `Loops used: ${goal.turns}/${goal.maxTurns}`,
     usageBudgetText(goal),
     `Revision: ${goal.goalRevision}`,
@@ -558,7 +572,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
         return { content: [{ type: "text", text: "Goal state is unavailable because storage could not be read." }], details: { error: "storage_error" } };
       }
       const latestAchievement = result.goal ? undefined : readLatestAchievement(storage, ctx.cwd || process.cwd(), ctx);
-      return { content: [{ type: "text", text: formatStatus(result.goal, latestAchievement) }], details: { goal: result.goal, latestAchievement } };
+      return { content: [{ type: "text", text: formatStatus(result.goal, latestAchievement, now()) }], details: { goal: result.goal, latestAchievement } };
     },
   });
 
@@ -568,7 +582,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       label: "Create Goal",
       description: "Create or replace the current working-root goal loop objective when model creation is explicitly enabled.",
       promptSnippet: "Create a goal only when the user has enabled model goal creation.",
-      parameters: Schema.Object({ objective: Schema.String({ description: "Goal objective.", minLength: 1 }) }) as any,
+      parameters: Schema.Object({ objective: Schema.String({ description: "Goal objective.", minLength: 1, maxLength: MAX_GOAL_OBJECTIVE_CHARS }) }) as any,
       executionMode: "sequential",
       async execute(_id, params, _signal, _update, ctx) {
         const projectRoot = ctx.cwd || process.cwd();
@@ -590,8 +604,9 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
           }
         }
         const input = params as CreateGoalToolParams;
-        const objective = String(input.objective ?? "").trim();
-        if (!objective) return { content: [{ type: "text", text: "Goal objective must not be empty." }], details: { error: "invalid_objective" } };
+        const validated = validateGoalObjective(input.objective);
+        if (!validated.ok) return { content: [{ type: "text", text: validated.reason }], details: { error: "invalid_objective" } };
+        const objective = validated.objective;
         let goal = { ...createGoal(projectRoot, objective, timestamp, randomId()), storageRevision: existing?.storageRevision ?? 0 };
         const prepared = ctx.isIdle() && !ctx.hasPendingMessages() ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
         if (prepared?.goal) goal = prepared.goal;
@@ -599,7 +614,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
         if (!persisted) return { content: [{ type: "text", text: "Goal was not created because storage rejected the transition." }], details: { error: "storage_error" } };
         status.sync(ctx);
         if (prepared?.goal) sendPrepared(pi, ctx, persisted);
-        return { content: [{ type: "text", text: `Goal created.\n\n${formatStatus(persisted)}` }], details: { goal: persisted } };
+        return { content: [{ type: "text", text: `Goal created.\n\n${formatStatus(persisted, undefined, timestamp)}` }], details: { goal: persisted } };
       },
     });
   }
@@ -675,7 +690,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       const persisted = persistGoal(storage, goal, auditEvent("goal_model_update", input.reason ?? "Model recorded goal evidence or proposal.", ctx, timestamp), ctx);
       if (!persisted) return { content: [{ type: "text", text: "Goal update was rejected by storage." }], details: { error: "storage_error" } };
       status.sync(ctx);
-      return { content: [{ type: "text", text: `Goal update recorded.\n\n${formatStatus(persisted)}` }], details: { goal: persisted } };
+      return { content: [{ type: "text", text: `Goal update recorded.\n\n${formatStatus(persisted, undefined, timestamp)}` }], details: { goal: persisted } };
     },
   });
 
@@ -701,13 +716,14 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       const existing = readResult.goal;
 
       if (parsed.command === "status") {
-        notify(ctx, formatStatus(existing, existing ? undefined : readLatestAchievement(storage, projectRoot, ctx)));
+        notify(ctx, formatStatus(existing, existing ? undefined : readLatestAchievement(storage, projectRoot, ctx), timestamp));
         return;
       }
 
       if (parsed.command === "start") {
-        if (!parsed.value) {
-          notify(ctx, "Usage: /goal <objective>", "warning");
+        const validated = validateGoalObjective(parsed.value);
+        if (!validated.ok) {
+          notify(ctx, validated.reason, "warning");
           return;
         }
         if (existing) {
@@ -718,7 +734,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
           }
           if (existing.status === "complete" && !archiveCompletedGoal(storage, existing, ctx)) return;
         }
-        let goal = { ...createGoal(projectRoot, parsed.value, timestamp, randomId()), storageRevision: existing?.storageRevision ?? 0 };
+        let goal = { ...createGoal(projectRoot, validated.objective, timestamp, randomId()), storageRevision: existing?.storageRevision ?? 0 };
         const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
         const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
         if (prepared?.goal) goal = prepared.goal;
@@ -792,11 +808,12 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       }
 
       if (parsed.command === "edit") {
-        if (!parsed.value) {
-          notify(ctx, "Usage: /goal edit <objective>", "warning");
+        const validated = validateGoalObjective(parsed.value);
+        if (!validated.ok) {
+          notify(ctx, validated.reason, "warning");
           return;
         }
-        let goal = editGoalObjective(existing, parsed.value, timestamp);
+        let goal = editGoalObjective(existing, validated.objective, timestamp);
         const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
         const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
         if (prepared?.goal) goal = prepared.goal;

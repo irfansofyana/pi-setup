@@ -9,6 +9,7 @@ import {
   buildGoalSystemPrompt,
   createGoal,
   createGoalLoopExtension,
+  formatGoalDuration,
   goalKey,
   goalStatusText,
   normalizeGoalLoopConfig,
@@ -187,6 +188,28 @@ test("parseGoalArgs treats bare /goal as status and keeps the status alias", () 
   assert.deepEqual(parseGoalArgs("pause"), { command: "pause", value: "" });
   assert.deepEqual(parseGoalArgs("list"), { command: "list", value: "" });
   assert.deepEqual(parseGoalArgs("budget 1000"), { command: "budget", value: "1000" });
+});
+
+test("parseGoalArgs supports native clear aliases", () => {
+  for (const alias of ["stop", "off", "reset", "none", "cancel"]) {
+    assert.deepEqual(parseGoalArgs(alias), { command: "clear", value: "" });
+  }
+});
+
+test("formatGoalDuration uses compact stable units", () => {
+  assert.equal(formatGoalDuration("2026-07-18T00:00:00.000Z", new Date("2026-07-18T00:02:05.000Z")), "2m 5s");
+  assert.equal(formatGoalDuration("2026-07-18T00:00:00.000Z", new Date("2026-07-18T01:02:00.000Z")), "1h 2m");
+});
+
+test("start and edit reject objectives over 4000 characters", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("x".repeat(4001), harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd), undefined);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /4,000 characters or fewer/);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await harness.commands.get("goal").handler(`edit ${"x".repeat(4001)}`, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "Ship safely");
+  harness.cleanup();
 });
 
 test("goal state compatibility helpers retain user-visible defaults", () => {

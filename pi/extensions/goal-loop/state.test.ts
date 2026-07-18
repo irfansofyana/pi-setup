@@ -16,12 +16,32 @@ import {
   settlePendingRun,
   shouldAutoContinue,
   tokenBudgetAllowsResume,
+  validateGoalObjective,
 } from "./state.ts";
 
 const NOW = new Date("2026-07-12T00:00:00.000Z");
 const LATER = new Date("2026-07-12T00:05:00.000Z");
 const MUCH_LATER = new Date(NOW.getTime() + 4 * 60 * 60 * 1000 + 1);
 const USAGE = { input: 10, output: 20, cacheRead: 3, cacheWrite: 4, totalTokens: 37, cost: { total: 0.037 } };
+
+test("goal objective validation accepts 1..4000 trimmed characters", () => {
+  assert.deepEqual(validateGoalObjective(" ship "), { ok: true, objective: "ship" });
+  assert.deepEqual(validateGoalObjective("x".repeat(4000)), { ok: true, objective: "x".repeat(4000) });
+  assert.deepEqual(validateGoalObjective("   "), { ok: false, reason: "Goal objective must not be empty." });
+  assert.deepEqual(validateGoalObjective("x".repeat(4001)), {
+    ok: false,
+    reason: "Goal objective must be 4,000 characters or fewer.",
+  });
+});
+
+test("new and legacy goals expose an evaluated-run counter", () => {
+  assert.equal(createGoal("/repo", "Ship", NOW, "goal-1").evaluatedRuns, 0);
+  assert.equal(normalizeGoalState({
+    ...createGoal("/repo", "Ship", NOW, "goal-1"),
+    evaluatedRuns: undefined,
+    turns: 3,
+  }).evaluatedRuns, 3);
+});
 
 function decision(decision: "complete" | "continue" | "blocked" | "needs_user") {
   return {
