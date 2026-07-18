@@ -39,6 +39,19 @@ export interface GoalLease {
   expiresAt: string;
 }
 
+export interface GoalSteer {
+  at: string;
+  text: string;
+  goalRevision: number;
+}
+
+export interface PendingGoalSteer {
+  sessionId: string;
+  requestedAt: string;
+  interruptedRunId?: string;
+  usageRunFingerprints?: string[];
+}
+
 export interface GoalUsage {
   input: number;
   output: number;
@@ -133,6 +146,8 @@ export interface GoalState {
     proofs: GoalEvidence[];
   };
   evidence: GoalEvidence[];
+  steering: GoalSteer[];
+  pendingSteer?: PendingGoalSteer;
   /** Human-owned, opt-in cumulative token ceiling. */
   tokenBudget?: number;
   /** Normalized cumulative Pi assistant usage from autonomous runs only. */
@@ -276,6 +291,7 @@ export function createGoal(projectRoot: string, objective: string, now = new Dat
     consecutiveFailedVerificationAttempts: 0,
     verification: { commands: [], proofs: [] },
     evidence: [],
+    steering: [],
   };
 }
 
@@ -296,6 +312,26 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
         .map((entry) => normalizeEvidenceEntry(entry, goalRevision))
         .filter((entry): entry is GoalEvidence => entry !== undefined && entry.kind === "verification")
     : evidence.filter((entry) => entry.kind === "verification");
+  const steering = Array.isArray(raw.steering)
+    ? raw.steering.flatMap((entry): GoalSteer[] => {
+        if (!isRecord(entry) || typeof entry.at !== "string" || typeof entry.text !== "string" || !entry.text.trim()) return [];
+        const revision = typeof entry.goalRevision === "number" && Number.isFinite(entry.goalRevision)
+          ? Math.max(1, Math.trunc(entry.goalRevision))
+          : goalRevision;
+        return [{ at: entry.at, text: entry.text.trim(), goalRevision: revision }];
+      }).slice(-20)
+    : [];
+  const rawPendingSteer = isRecord(raw.pendingSteer) ? raw.pendingSteer : undefined;
+  const pendingSteer = rawPendingSteer && typeof rawPendingSteer.sessionId === "string" && rawPendingSteer.sessionId && typeof rawPendingSteer.requestedAt === "string"
+    ? {
+        sessionId: rawPendingSteer.sessionId,
+        requestedAt: rawPendingSteer.requestedAt,
+        interruptedRunId: typeof rawPendingSteer.interruptedRunId === "string" ? rawPendingSteer.interruptedRunId : undefined,
+        usageRunFingerprints: Array.isArray(rawPendingSteer.usageRunFingerprints)
+          ? rawPendingSteer.usageRunFingerprints.filter((value): value is string => typeof value === "string")
+          : undefined,
+      }
+    : undefined;
   const turns = typeof raw.turns === "number" && Number.isFinite(raw.turns) ? Math.max(0, Math.trunc(raw.turns)) : 0;
 
   return {
@@ -325,6 +361,8 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
       proofs: verificationProofs,
     },
     evidence,
+    steering,
+    pendingSteer,
     tokenBudget: typeof raw.tokenBudget === "number" && Number.isInteger(raw.tokenBudget) && raw.tokenBudget > 0 ? raw.tokenBudget : undefined,
     usage: normalizeGoalUsage(raw.usage),
     limitDetail: normalizeLimitDetail(raw.limitDetail),
@@ -479,6 +517,8 @@ export function editGoalObjective(goal: GoalState, objective: string, now = new 
     lastEvaluation: undefined,
     limitDetail: undefined,
     pendingRun: undefined,
+    pendingSteer: undefined,
+    steering: [],
     evidence: [],
     verification: {
       commands: [...goal.verification.commands],
@@ -486,6 +526,49 @@ export function editGoalObjective(goal: GoalState, objective: string, now = new 
     },
     updatedAt: nowIso(now),
   };
+}
+
+export function recordGoalSteer(goal: GoalState, sessionId: string, text: string, now = new Date()): GoalState {
+  const normalized = text.trim();
+  if (!normalized) return goal;
+  const goalRevision = goal.goalRevision + 1;
+  return {
+    ...goal,
+    goalRevision,
+    status: "active",
+    steering: [...goal.steering, { at: nowIso(now), text: normalized, goalRevision }].slice(-20),
+    pendingSteer: {
+      sessionId,
+      requestedAt: nowIso(now),
+      interruptedRunId: goal.pendingRun?.runId,
+    },
+    pendingRun: undefined,
+    lastEvaluation: undefined,
+    limitDetail: undefined,
+    consecutiveFailedVerificationAttempts: 0,
+    evidence: [],
+    verification: { commands: [...goal.verification.commands], proofs: [] },
+    updatedAt: nowIso(now),
+  };
+}
+
+export function recordSteeredRunUsage(goal: GoalState, sessionId: string, usage: GoalUsage, fingerprint: string, now = new Date()): GoalState {
+  const pendingSteer = goal.pendingSteer;
+  if (!pendingSteer || pendingSteer.sessionId !== sessionId || pendingSteer.usageRunFingerprints?.includes(fingerprint)) return goal;
+  return {
+    ...goal,
+    usage: addGoalUsage(goal.usage, usage),
+    pendingSteer: {
+      ...pendingSteer,
+      usageRunFingerprints: [...(pendingSteer.usageRunFingerprints ?? []), fingerprint],
+    },
+    updatedAt: nowIso(now),
+  };
+}
+
+export function consumeGoalSteer(goal: GoalState, sessionId: string, now = new Date()): GoalState {
+  if (goal.pendingSteer?.sessionId !== sessionId) return goal;
+  return { ...goal, pendingSteer: undefined, updatedAt: nowIso(now) };
 }
 
 export type LeaseResult =

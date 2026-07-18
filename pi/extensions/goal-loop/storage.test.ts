@@ -369,6 +369,21 @@ test("read quarantines invalid lease timestamps", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("read quarantines malformed steering state", () => {
+  const { root, storage } = createStorageFixture();
+  const goal = {
+    ...createGoal("/repo/app", "Ship", NOW, "goal-1"),
+    storageRevision: 1,
+    steering: [{ at: NOW.toISOString(), text: "", goalRevision: 2 }],
+    pendingSteer: { sessionId: "", requestedAt: NOW.toISOString() },
+  };
+  writeFileSync(storage.statePathFor("/repo/app"), JSON.stringify(goal), "utf8");
+
+  assert.throws(() => storage.read("/repo/app"), GoalStorageCorruptError);
+  assert.equal(storage.stateExists("/repo/app"), false);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("read quarantines corrupt state", () => {
   const { root, storage } = createStorageFixture();
   writeFileSync(storage.statePathFor("/repo/app"), "{not-json", "utf8");

@@ -5,10 +5,12 @@ import {
   acquireGoalLease,
   createGoal,
   createPendingRun,
+  consumeGoalSteer,
   editGoalObjective,
   normalizeGoalState,
   markUsageLimited,
   recordEvidence,
+  recordGoalSteer,
   recordRunCandidate,
   recordRunUsage,
   releaseGoalLease,
@@ -122,6 +124,39 @@ test("editGoalObjective invalidates proof and pending work", () => {
   assert.deepEqual(edited.evidence, []);
   assert.deepEqual(edited.verification.commands, ["npm test"]);
   assert.equal(edited.verification.lastResult, undefined);
+});
+
+test("recordGoalSteer revisions the goal and invalidates interrupted proof", () => {
+  const active = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW);
+  assert.equal(active.ok, true);
+  const pending = createPendingRun(active.goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" });
+  assert.equal(pending.ok, true);
+  const configured = {
+    ...pending.goal,
+    verification: { ...pending.goal.verification, commands: ["npm test"] },
+  };
+  const evidenced = recordEvidence(configured, {
+    kind: "verification",
+    summary: "old pass",
+    command: "npm test",
+    outcome: "passed",
+    runId: "run-1",
+  }, NOW);
+
+  const steered = recordGoalSteer(evidenced, "session-a", "Keep the public API unchanged", LATER);
+  assert.equal(steered.goalRevision, 2);
+  assert.equal(steered.pendingRun, undefined);
+  assert.deepEqual(steered.evidence, []);
+  assert.deepEqual(steered.verification.proofs, []);
+  assert.deepEqual(steered.verification.commands, ["npm test"]);
+  assert.equal(steered.pendingSteer?.sessionId, "session-a");
+  assert.equal(steered.steering.at(-1)?.text, "Keep the public API unchanged");
+});
+
+test("consumeGoalSteer clears only the owning session marker", () => {
+  const goal = recordGoalSteer(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", "Use pnpm", LATER);
+  assert.equal(consumeGoalSteer(goal, "session-b", LATER).pendingSteer?.sessionId, "session-a");
+  assert.equal(consumeGoalSteer(goal, "session-a", LATER).pendingSteer, undefined);
 });
 
 test("lease helpers enforce ownership and expiry", () => {

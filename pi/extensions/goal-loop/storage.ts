@@ -202,6 +202,7 @@ function assertStoredGoal(value: unknown, expectedProjectRoot: string): GoalStat
   if (!(["active", "paused", "complete", "blocked", "needs_user", "usage_limited", "token_budget_limited"] as unknown[]).includes(value.status)) throw new TypeError("Goal status is invalid.");
   if (!isTimestamp(value.createdAt) || !isTimestamp(value.updatedAt)) throw new TypeError("Goal timestamps are invalid.");
   if (!isIntegerAtLeast(value.turns, 0) || !isIntegerAtLeast(value.maxTurns, 1)) throw new TypeError("Goal turn budget is invalid.");
+  if (value.evaluatedRuns !== undefined && !isIntegerAtLeast(value.evaluatedRuns, 0)) throw new TypeError("Goal evaluated-run count is invalid.");
   if (!isIntegerAtLeast(value.maxFailedVerificationAttempts, 1) || !isIntegerAtLeast(value.consecutiveFailedVerificationAttempts, 0)) throw new TypeError("Goal verification counters are invalid.");
   if (!isRecord(value.verification) || !Array.isArray(value.verification.commands) || !value.verification.commands.every((item) => typeof item === "string" && Boolean(item.trim()))) throw new TypeError("Goal verification configuration is invalid.");
   if (value.verification.lastResult !== undefined && typeof value.verification.lastResult !== "string") throw new TypeError("Goal verification result is invalid.");
@@ -212,6 +213,17 @@ function assertStoredGoal(value: unknown, expectedProjectRoot: string): GoalStat
     if (entry.command !== undefined && typeof entry.command !== "string") throw new TypeError("Goal evidence command is invalid.");
     if (entry.outcome !== undefined && !(["passed", "failed", "unknown"] as unknown[]).includes(entry.outcome)) throw new TypeError("Goal evidence outcome is invalid.");
     if (entry.runId !== undefined && typeof entry.runId !== "string") throw new TypeError("Goal evidence run ID is invalid.");
+  }
+  if (value.steering !== undefined) {
+    if (!Array.isArray(value.steering) || value.steering.length > 20) throw new TypeError("Goal steering history is invalid.");
+    for (const entry of value.steering) {
+      if (!isRecord(entry) || !isTimestamp(entry.at) || typeof entry.text !== "string" || !entry.text.trim() || !isIntegerAtLeast(entry.goalRevision, 1)) throw new TypeError("Goal steering entry is invalid.");
+    }
+  }
+  if (value.pendingSteer !== undefined) {
+    if (!isRecord(value.pendingSteer) || typeof value.pendingSteer.sessionId !== "string" || !value.pendingSteer.sessionId || !isTimestamp(value.pendingSteer.requestedAt)) throw new TypeError("Pending goal steering is invalid.");
+    if (value.pendingSteer.interruptedRunId !== undefined && (typeof value.pendingSteer.interruptedRunId !== "string" || !value.pendingSteer.interruptedRunId)) throw new TypeError("Pending goal steering run ID is invalid.");
+    if (value.pendingSteer.usageRunFingerprints !== undefined && (!Array.isArray(value.pendingSteer.usageRunFingerprints) || !value.pendingSteer.usageRunFingerprints.every((fingerprint) => typeof fingerprint === "string" && Boolean(fingerprint)))) throw new TypeError("Pending goal steering usage fingerprints are invalid.");
   }
 
   if (value.lease !== undefined) {

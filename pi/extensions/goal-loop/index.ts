@@ -7,6 +7,7 @@ import {
   acquireGoalLease,
   createGoal,
   createPendingRun,
+  consumeGoalSteer,
   editGoalObjective,
   expireStalePendingRun,
   goalKey,
@@ -15,9 +16,11 @@ import {
   normalizeGoalState,
   normalizeGoalUsage,
   recordEvidence,
+  recordGoalSteer,
   recordProviderUsageLimit,
   recordRunCandidate,
   recordRunUsage,
+  recordSteeredRunUsage,
   releaseGoalLease,
   resumeGoal,
   settlePendingRun,
@@ -240,6 +243,12 @@ function usageBudgetText(goal: GoalState): string {
   return `Usage: ${tokens} tokens (input ${usage?.input ?? 0}, output ${usage?.output ?? 0}, cache read ${usage?.cacheRead ?? 0}, cache write ${usage?.cacheWrite ?? 0}, cost $${cost.toFixed(6)}); token budget: ${budget}`;
 }
 
+function steeringText(goal: GoalState): string {
+  return goal.steering.length
+    ? goal.steering.slice(-5).map((entry) => `- r${entry.goalRevision}: ${entry.text}`).join("\n")
+    : "- No follow-up steering.";
+}
+
 export function buildContinuationPrompt(goal: GoalState): string {
   const commands = goal.verification.commands.length
     ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
@@ -253,6 +262,8 @@ export function buildContinuationPrompt(goal: GoalState): string {
     `GOAL_LOOP_CONTINUATION_RUN: ${goal.pendingRun?.runId ?? "none"}`,
     "Continue working toward this active goal.",
     `Goal: ${goal.objective}`,
+    "Follow-up steering:",
+    steeringText(goal),
     `Loop turn: ${goal.turns + 1}/${goal.maxTurns}`,
     usageBudgetText(goal),
     "Verification commands:",
@@ -305,6 +316,8 @@ export function buildGoalSystemPrompt(goal: GoalState, autonomous = true): strin
     "Active Pi goal loop:",
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
+    "Follow-up steering:",
+    steeringText(goal),
     `Loop budget: ${goal.turns}/${goal.maxTurns}`,
     usageBudgetText(goal),
     "Model-authored terminal status is only a proposal; the coordinator decides it after the run settles.",
@@ -935,9 +948,17 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     // retain chain identity until agent_end can isolate pre-follow-up usage.
     clearContinuationAuthority();
     clearProviderLimit();
+    const readResult = readGoal(storage, projectRoot, ctx);
+    if (!readResult.ok || !readResult.goal || !ownsFreshPendingRun(readResult.goal, owner, now())) return;
+    const timestamp = now();
+    const steered = recordGoalSteer(readResult.goal, owner, contentText(record.content), timestamp);
+    if (steered === readResult.goal) return;
+    const persisted = persistGoal(storage, steered, auditEvent("goal_steered", "User steered the active goal.", ctx, timestamp), ctx);
+    if (!persisted) return;
+    status.sync(ctx);
     autonomousInterruption = {
       ...autonomousChain,
-      reason: "Autonomous goal run was interrupted by a queued user follow-up; later work was not treated as autonomous.",
+      reason: "Autonomous goal run was steered by a queued user follow-up; later work was not treated as autonomous.",
     };
   });
 
@@ -976,28 +997,27 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       status.sync(ctx);
       return;
     }
-    if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
     const messages = event.messages as unknown[];
-    const runId = goal.pendingRun.runId;
-    const chainCorrelated = matchesRun(autonomousChain, projectRoot, owner, runId);
-    if (interruption && matchesRun(interruption, projectRoot, owner, runId)) {
-      const followUpIndex = firstNonContinuationUserIndex(messages, runId);
+    if (
+      interruption &&
+      matchesRun(interruption, projectRoot, owner, interruption.runId) &&
+      goal.pendingSteer?.sessionId === owner &&
+      goal.pendingSteer.interruptedRunId === interruption.runId
+    ) {
+      const followUpIndex = firstNonContinuationUserIndex(messages, interruption.runId);
       const autonomousMessages = followUpIndex >= 0 ? messages.slice(0, followUpIndex) : [];
       let updated: GoalState = goal;
       if (autonomousMessages.some((message) => messageRecord(message)?.role === "assistant")) {
-        updated = recordRunUsage(updated, sumAssistantUsage(autonomousMessages), timestamp, autonomousRunFingerprint(autonomousMessages));
+        updated = recordSteeredRunUsage(updated, owner, sumAssistantUsage(autonomousMessages), autonomousRunFingerprint(autonomousMessages), timestamp);
       }
-      const candidate = {
-        protocol: "malformed" as const,
-        reason: interruption.reason,
-      };
-      updated = recordRunCandidate(updated, candidate, timestamp);
-      updated = recordProviderUsageLimit(updated, undefined, timestamp);
       if (updated === goal) return;
-      persistGoal(storage, updated, auditEvent("run_candidate_recorded", interruption.reason, ctx, timestamp), ctx);
+      persistGoal(storage, updated, auditEvent("steered_run_usage_recorded", interruption.reason, ctx, timestamp), ctx);
       status.sync(ctx);
       return;
     }
+    if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
+    const runId = goal.pendingRun.runId;
+    const chainCorrelated = matchesRun(autonomousChain, projectRoot, owner, runId);
     // Pi's agent.continue() retries emit only the new low-level messages, so
     // the original continuation marker is absent. A queued user/follow-up run
     // always introduces a user message and must not inherit chain authority.
@@ -1026,7 +1046,6 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    const interruption = autonomousInterruption;
     clearContinuationAuthority();
     clearAutonomousTracking();
     const projectRoot = ctx.cwd || process.cwd();
@@ -1042,13 +1061,26 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       status.sync(ctx);
       return;
     }
-    if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
-    let settlementGoal: GoalState = goal;
-    if (interruption && matchesRun(interruption, projectRoot, owner, goal.pendingRun.runId)) {
-      settlementGoal = recordRunCandidate(settlementGoal, { protocol: "malformed", reason: interruption.reason }, timestamp);
-      settlementGoal = recordProviderUsageLimit(settlementGoal, undefined, timestamp);
+    if (goal.status === "active" && goal.pendingSteer?.sessionId === owner) {
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        notify(ctx, "Goal steering was saved; resume when Pi is idle.", "warning");
+        return;
+      }
+      const consumed = consumeGoalSteer(goal, owner, timestamp);
+      const prepared = prepareDispatch(consumed, owner, timestamp, randomId);
+      if (!prepared.goal) {
+        notify(ctx, `Goal steering could not resume: ${prepared.reason}`, "warning");
+        return;
+      }
+      const persisted = persistGoal(storage, prepared.goal, auditEvent("goal_steering_resumed", "Coordinator resumed after user steering.", ctx, timestamp), ctx);
+      if (persisted) {
+        status.sync(ctx);
+        sendPrepared(pi, ctx, persisted);
+      }
+      return;
     }
-    const settled = settlePendingRun(settlementGoal, timestamp);
+    if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
+    const settled = settlePendingRun(goal, timestamp);
     if (settled.action === "none") return;
     let persisted = persistGoal(storage, settled.goal, auditEvent("run_settled", settled.reason ?? "Settled goal run.", ctx, timestamp), ctx);
     if (!persisted) return;

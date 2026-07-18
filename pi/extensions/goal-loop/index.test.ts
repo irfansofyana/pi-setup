@@ -787,7 +787,7 @@ test("a markerless successful Pi retry replaces the 429 error candidate and coun
   harness.cleanup();
 });
 
-test("a queued follow-up interrupts one combined Pi run and revokes autonomous tool authority", async () => {
+test("a queued follow-up steers one combined Pi run, revokes authority, and preserves autonomous usage", async () => {
   const harness = createHarness();
   await harness.commands.get("goal").handler("Ship safely", harness.ctx);
   await acceptContinuation(harness);
@@ -800,26 +800,59 @@ test("a queued follow-up interrupts one combined Pi run and revokes autonomous t
   const followUp = { role: "user", content: "Explain that result.", timestamp: 2 };
   await harness.handlers.get("message_start")({ message: followUp }, harness.ctx);
   const rejected = await harness.tools.get("update_goal").execute("call", { evidence: "follow-up mutation" }, undefined, undefined, harness.ctx);
-  assert.deepEqual(rejected.details, { error: "no_continuation_authority" });
+  assert.deepEqual(rejected.details, { error: "no_pending_run" });
 
   const autonomousOutput = { ...workerMessages(goal, "continue", RUN_USAGE)[1], timestamp: 1 };
   const laterOutput = { ...workerMessages(goal, "blocked", ERROR_USAGE)[1], timestamp: 3 };
   await harness.handlers.get("agent_end")({ messages: [marker, autonomousOutput, followUp, laterOutput] }, harness.ctx);
 
   const interrupted = harness.storage.read(harness.ctx.cwd)!;
-  assert.equal(interrupted.pendingRun?.candidate?.protocol, "malformed");
-  assert.match(interrupted.pendingRun?.candidate?.reason ?? "", /interrupted by a queued user follow-up/i);
+  assert.equal(interrupted.pendingRun, undefined);
+  assert.equal(interrupted.pendingSteer?.sessionId, "session-a");
+  assert.equal(interrupted.steering.at(-1)?.text, "Explain that result.");
   assert.equal(interrupted.usage?.totalTokens, 37);
   assert.equal(interrupted.evidence.some((entry: any) => entry.summary === "follow-up mutation"), false);
 
   await harness.handlers.get("agent_settled")({}, harness.ctx);
   const settled = harness.storage.read(harness.ctx.cwd)!;
-  assert.equal(settled.status, "needs_user");
-  assert.equal(settled.pendingRun, undefined);
-  assert.equal(settled.lease, undefined);
+  assert.equal(settled.status, "active");
+  assert.ok(settled.pendingRun);
+  assert.equal(settled.pendingSteer, undefined);
+  assert.equal(settled.lease?.sessionId, "session-a");
   assert.equal(settled.usage?.totalTokens, 37);
-  assert.equal(harness.sent.length, 1);
-  assert.match(settled.lastEvaluation?.reason ?? "", /interrupted by a queued user follow-up/i);
+  assert.equal(harness.sent.length, 2);
+  assert.match(harness.sent[1], /Explain that result\./);
+  harness.cleanup();
+});
+
+test("queued user follow-up steers and resumes instead of stopping needs_user", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+
+  await harness.handlers.get("before_agent_start")({
+    prompt: harness.sent[0],
+    systemPrompt: "base",
+    systemPromptOptions: { cwd: harness.ctx.cwd },
+  }, harness.ctx);
+  await harness.handlers.get("message_start")({
+    message: { role: "user", content: "Keep the public API unchanged" },
+  }, harness.ctx);
+
+  const steered = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(steered.goalRevision, initial.goalRevision + 1);
+  assert.equal(steered.pendingRun, undefined);
+  assert.equal(steered.pendingSteer?.sessionId, "session-a");
+
+  await harness.handlers.get("agent_end")({ messages: [] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const resumed = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(resumed.status, "active");
+  assert.equal(resumed.pendingSteer, undefined);
+  assert.ok(resumed.pendingRun);
+  assert.equal(harness.sent.length, 2);
+  assert.match(harness.sent[1], /Keep the public API unchanged/);
   harness.cleanup();
 });
 
