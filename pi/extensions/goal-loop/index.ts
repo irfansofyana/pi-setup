@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   acquireGoalLease,
@@ -12,12 +12,16 @@ import {
   goalKey,
   goalStatusText,
   normalizeGoalState,
+  normalizeGoalUsage,
   recordEvidence,
+  recordProviderUsageLimit,
   recordRunCandidate,
+  recordRunUsage,
   releaseGoalLease,
   resumeGoal,
   settlePendingRun,
   shouldAutoContinue,
+  tokenBudgetAllowsResume,
   type GoalCommand,
   type GoalDecision,
   type GoalEvaluation,
@@ -25,6 +29,7 @@ import {
   type GoalEvidenceKind,
   type GoalEvidenceOutcome,
   type GoalState,
+  type GoalUsage,
 } from "./state.ts";
 import { parseCurrentRunCandidate } from "./evaluation.ts";
 import {
@@ -84,7 +89,7 @@ const OPTIONAL_SCHEMA = Symbol("optional-schema");
 type JsonSchema = Record<string, unknown> & { [OPTIONAL_SCHEMA]?: true };
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "goal-loop", "config.json");
 const DEFAULT_CONFIG: GoalLoopConfig = { allowModelCreateGoal: false };
-const COMMANDS = new Set<GoalCommand>(["status", "pause", "resume", "clear", "edit", "verify"]);
+const COMMANDS = new Set<GoalCommand>(["status", "list", "pause", "resume", "clear", "edit", "verify", "budget"]);
 
 const Schema = {
   Object(properties: Record<string, JsonSchema>): JsonSchema {
@@ -129,10 +134,52 @@ function readGoalLoopConfig(): GoalLoopConfig {
   }
 }
 
-function messageRecord(message: unknown): { role?: unknown; stopReason?: unknown; message?: unknown; content?: unknown } | undefined {
+function messageRecord(message: unknown): { role?: unknown; stopReason?: unknown; message?: unknown; content?: unknown; usage?: unknown; timestamp?: unknown } | undefined {
   if (!message || typeof message !== "object") return undefined;
-  const record = message as { role?: unknown; stopReason?: unknown; message?: unknown; content?: unknown };
+  const record = message as { role?: unknown; stopReason?: unknown; message?: unknown; content?: unknown; usage?: unknown; timestamp?: unknown };
   return record.message && typeof record.message === "object" ? record.message as typeof record : record;
+}
+
+export function sumAssistantUsage(messages: unknown[]): GoalUsage {
+  let total: GoalUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } };
+  for (const item of messages) {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant" || !record.usage || typeof record.usage !== "object") continue;
+    const raw = record.usage as Record<string, unknown>;
+    const cost = raw.cost && typeof raw.cost === "object" ? raw.cost as Record<string, unknown> : {};
+    const usage = normalizeGoalUsage({
+      input: raw.input,
+      output: raw.output,
+      cacheRead: raw.cacheRead,
+      cacheWrite: raw.cacheWrite,
+      totalTokens: raw.totalTokens,
+      cost: { total: cost.total },
+    });
+    if (!usage) continue;
+    total = {
+      input: total.input + usage.input,
+      output: total.output + usage.output,
+      cacheRead: total.cacheRead + usage.cacheRead,
+      cacheWrite: total.cacheWrite + usage.cacheWrite,
+      totalTokens: total.totalTokens + usage.totalTokens,
+      cost: { total: total.cost.total + usage.cost.total },
+    };
+  }
+  return total;
+}
+
+function autonomousRunFingerprint(messages: unknown[]): string {
+  const finalized = messages.map((item) => {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant") return undefined;
+    return {
+      timestamp: record.timestamp,
+      stopReason: record.stopReason,
+      usage: record.usage,
+      content: record.content,
+    };
+  }).filter(Boolean);
+  return createHash("sha256").update(JSON.stringify(finalized)).digest("hex");
 }
 
 function assistantStopReason(messages: unknown[]): "aborted" | "error" | undefined {
@@ -181,6 +228,14 @@ function workerInstructions(goal: GoalState): string {
   ].join("\n");
 }
 
+function usageBudgetText(goal: GoalState): string {
+  const usage = goal.usage;
+  const tokens = usage?.totalTokens ?? 0;
+  const cost = usage?.cost.total ?? 0;
+  const budget = goal.tokenBudget === undefined ? "off" : `${tokens}/${goal.tokenBudget} tokens`;
+  return `Usage: ${tokens} tokens (input ${usage?.input ?? 0}, output ${usage?.output ?? 0}, cache read ${usage?.cacheRead ?? 0}, cache write ${usage?.cacheWrite ?? 0}, cost $${cost.toFixed(6)}); token budget: ${budget}`;
+}
+
 export function buildContinuationPrompt(goal: GoalState): string {
   const commands = goal.verification.commands.length
     ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
@@ -195,6 +250,7 @@ export function buildContinuationPrompt(goal: GoalState): string {
     "Continue working toward this active goal.",
     `Goal: ${goal.objective}`,
     `Loop turn: ${goal.turns + 1}/${goal.maxTurns}`,
+    usageBudgetText(goal),
     "Verification commands:",
     commands,
     "Recent evidence:",
@@ -229,12 +285,24 @@ function isCurrentContinuation(messages: unknown[], runId: string): boolean {
   return false;
 }
 
+function containsUserMessage(messages: unknown[]): boolean {
+  return messages.some((message) => messageRecord(message)?.role === "user");
+}
+
+function firstNonContinuationUserIndex(messages: unknown[], runId: string): number {
+  return messages.findIndex((message) => {
+    const record = messageRecord(message);
+    return record?.role === "user" && continuationRunId(contentText(record.content)) !== runId;
+  });
+}
+
 export function buildGoalSystemPrompt(goal: GoalState, autonomous = true): string {
   const common = [
     "Active Pi goal loop:",
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
     `Loop budget: ${goal.turns}/${goal.maxTurns}`,
+    usageBudgetText(goal),
     "Model-authored terminal status is only a proposal; the coordinator decides it after the run settles.",
   ];
   if (!autonomous) {
@@ -248,17 +316,40 @@ export function buildGoalSystemPrompt(goal: GoalState, autonomous = true): strin
   ].join("\n\n");
 }
 
-function formatStatus(goal: GoalState | undefined): string {
-  if (!goal) return "No active goal for this project.";
+function formatAchievement(goal: GoalState): string {
+  return [
+    `Goal: ${goal.objective}`,
+    `Completed: ${goal.updatedAt}`,
+    usageBudgetText(goal),
+    goal.lastEvaluation ? `Receipt: ${goal.lastEvaluation.reason}` : "Receipt: completed",
+  ].join("\n");
+}
+
+function formatStatus(goal: GoalState | undefined, latestAchievement?: GoalState): string {
+  if (!goal) {
+    return latestAchievement
+      ? `No active goal for this working root. Latest achievement (read-only):\n${formatAchievement(latestAchievement)}`
+      : "No active goal for this working root. No archived achievement found.";
+  }
   const latest = goal.evidence.at(-1);
   return [
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
     `Loops used: ${goal.turns}/${goal.maxTurns}`,
+    usageBudgetText(goal),
     `Revision: ${goal.goalRevision}`,
     `Verification: ${goal.verification.commands.length ? goal.verification.commands.join(", ") : "none"}`,
     latest ? `Latest evidence: ${latest.kind} - ${latest.summary}` : "Latest evidence: none",
     goal.lastEvaluation ? `Last check: ${goal.lastEvaluation.decision} - ${goal.lastEvaluation.reason}` : "Last check: none",
+    goal.limitDetail ? `Limit: ${goal.limitDetail.reason}${goal.limitDetail.retryAfter ? ` (retry-after: ${goal.limitDetail.retryAfter})` : ""}` : undefined,
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function formatGoalList(goals: GoalState[]): string {
+  if (!goals.length) return "No active goals across stored working roots.";
+  return [
+    "Active goals across stored working roots:",
+    ...goals.map((goal) => `- ${goal.projectRoot} [${goal.status}] ${goal.turns}/${goal.maxTurns} — ${goal.objective}`),
   ].join("\n");
 }
 
@@ -299,6 +390,26 @@ function readGoal(storage: GoalStorage, projectRoot: string, ctx: ExtensionConte
       return { ok: true, goal: error.committedState };
     }
     return { ok: false };
+  }
+}
+
+function readLatestAchievement(storage: GoalStorage, projectRoot: string, ctx: ExtensionContext): GoalState | undefined {
+  try {
+    return storage.readLatestCompleted(projectRoot);
+  } catch (error) {
+    storageError(ctx, error);
+    return undefined;
+  }
+}
+
+function archiveCompletedGoal(storage: GoalStorage, goal: GoalState, ctx: ExtensionContext): boolean {
+  try {
+    storage.archive(goal);
+    return true;
+  } catch (error) {
+    storageError(ctx, error);
+    notify(ctx, "The completed goal remains in the active slot because its archive receipt could not be persisted.", "warning");
+    return false;
   }
 }
 
@@ -413,28 +524,41 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? randomUUID;
   const status = createGoalStatusAnimator(storage);
-  // This is intentionally process-local.  A matching marker only gains tool
-  // authority after Pi has accepted it as the active continuation turn; a
-  // normal user turn cannot inherit an older run's capability.
-  let activeContinuation: { projectRoot: string; sessionId: string; runId: string } | undefined;
+  // Tool authority belongs only to the accepted top-level continuation attempt
+  // and is revoked at its first agent_end or first non-marker user message.
+  // Chain identity survives Pi's markerless low-level retries until
+  // agent_settled, but never grants tools.
+  type AutonomousRunIdentity = { projectRoot: string; sessionId: string; runId: string };
+  type AutonomousRunInterruption = AutonomousRunIdentity & { reason: string };
+  let activeContinuation: AutonomousRunIdentity | undefined;
+  let autonomousChain: AutonomousRunIdentity | undefined;
+  let autonomousInterruption: AutonomousRunInterruption | undefined;
+  let providerLimit: AutonomousRunIdentity & { retryAfter?: string } | undefined;
   const clearContinuationAuthority = (): void => { activeContinuation = undefined; };
+  const clearProviderLimit = (): void => { providerLimit = undefined; };
+  const clearAutonomousTracking = (): void => {
+    autonomousChain = undefined;
+    autonomousInterruption = undefined;
+    providerLimit = undefined;
+  };
+  const matchesRun = (identity: AutonomousRunIdentity | undefined, projectRoot: string, sessionId: string, runId: string): boolean =>
+    identity?.projectRoot === projectRoot && identity.sessionId === sessionId && identity.runId === runId;
   const hasContinuationAuthority = (projectRoot: string, sessionId: string, runId: string): boolean =>
-    activeContinuation?.projectRoot === projectRoot &&
-    activeContinuation.sessionId === sessionId &&
-    activeContinuation.runId === runId;
+    matchesRun(activeContinuation, projectRoot, sessionId, runId);
 
   pi.registerTool({
     name: "get_goal",
     label: "Get Goal",
-    description: "Inspect the current project goal, status, verification commands, and evidence.",
-    promptSnippet: "Inspect the current project goal loop state.",
+    description: "Inspect the current working-root goal, status, verification commands, and evidence.",
+    promptSnippet: "Inspect the current working-root goal loop state.",
     parameters: Schema.Object({}) as any,
     async execute(_id, _params, _signal, _update, ctx) {
       const result = readGoal(storage, ctx.cwd || process.cwd(), ctx);
       if (!result.ok) {
         return { content: [{ type: "text", text: "Goal state is unavailable because storage could not be read." }], details: { error: "storage_error" } };
       }
-      return { content: [{ type: "text", text: formatStatus(result.goal) }], details: { goal: result.goal } };
+      const latestAchievement = result.goal ? undefined : readLatestAchievement(storage, ctx.cwd || process.cwd(), ctx);
+      return { content: [{ type: "text", text: formatStatus(result.goal, latestAchievement) }], details: { goal: result.goal, latestAchievement } };
     },
   });
 
@@ -442,7 +566,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     pi.registerTool({
       name: "create_goal",
       label: "Create Goal",
-      description: "Create or replace the current project goal loop objective when model creation is explicitly enabled.",
+      description: "Create or replace the current working-root goal loop objective when model creation is explicitly enabled.",
       promptSnippet: "Create a goal only when the user has enabled model goal creation.",
       parameters: Schema.Object({ objective: Schema.String({ description: "Goal objective.", minLength: 1 }) }) as any,
       executionMode: "sequential",
@@ -460,6 +584,9 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
           if (conflict) {
             notifyLeaseConflict(ctx, conflict);
             return { content: [{ type: "text", text: "Goal creation refused because another session owns the goal lease." }], details: { error: "lease_conflict" } };
+          }
+          if (existing.status === "complete" && !archiveCompletedGoal(storage, existing, ctx)) {
+            return { content: [{ type: "text", text: "Goal creation refused until the completed receipt can be archived." }], details: { error: "archive_error" } };
           }
         }
         const input = params as CreateGoalToolParams;
@@ -501,7 +628,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       const readResult = readGoal(storage, projectRoot, ctx);
       if (!readResult.ok) return { content: [{ type: "text", text: "Goal update refused because storage could not be read safely." }], details: { error: "storage_error" } };
       const currentGoal = readResult.goal;
-      if (!currentGoal) return { content: [{ type: "text", text: "No active goal for this project. Use /goal <objective> first." }], details: { error: "missing_goal" } };
+      if (!currentGoal) return { content: [{ type: "text", text: "No active goal for this working root. Use /goal <objective> first." }], details: { error: "missing_goal" } };
       const owner = ctx.sessionManager.getSessionId();
       const timestamp = now();
       if (!ownsFreshPendingRun(currentGoal, owner, timestamp)) {
@@ -553,18 +680,28 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
   });
 
   pi.registerCommand("goal", {
-    description: "Set or manage a bounded project goal loop",
+    description: "Set or manage a bounded working-root goal loop",
     async handler(args, ctx: ExtensionCommandContext) {
       const parsed = parseGoalArgs(args);
       const projectRoot = ctx.cwd || process.cwd();
       const timestamp = now();
       const owner = ctx.sessionManager.getSessionId();
+
+      if (parsed.command === "list") {
+        try {
+          notify(ctx, formatGoalList(storage.listActive()));
+        } catch (error) {
+          storageError(ctx, error);
+        }
+        return;
+      }
+
       const readResult = readGoal(storage, projectRoot, ctx);
       if (!readResult.ok) return;
       const existing = readResult.goal;
 
       if (parsed.command === "status") {
-        notify(ctx, formatStatus(existing));
+        notify(ctx, formatStatus(existing, existing ? undefined : readLatestAchievement(storage, projectRoot, ctx)));
         return;
       }
 
@@ -579,6 +716,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
             notifyLeaseConflict(ctx, conflict);
             return;
           }
+          if (existing.status === "complete" && !archiveCompletedGoal(storage, existing, ctx)) return;
         }
         let goal = { ...createGoal(projectRoot, parsed.value, timestamp, randomId()), storageRevision: existing?.storageRevision ?? 0 };
         const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
@@ -600,7 +738,11 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       }
 
       if (!existing) {
-        notify(ctx, "No active goal for this project.", "warning");
+        notify(ctx, "No active goal for this working root.", "warning");
+        return;
+      }
+      if (existing.status === "complete" && parsed.command !== "clear") {
+        notify(ctx, "This retained completion receipt cannot be edited or otherwise mutated; it is immutable. Inspect it with /goal, remove it with /goal clear, or start a new goal to archive it safely.", "warning");
         return;
       }
       const conflict = leaseConflict(existing, owner, timestamp);
@@ -619,6 +761,10 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       }
 
       if (parsed.command === "resume") {
+        if (!tokenBudgetAllowsResume(existing)) {
+          notify(ctx, `Goal cannot resume until its token budget is raised above ${existing.usage?.totalTokens ?? 0} or disabled with /goal budget off.`, "warning");
+          return;
+        }
         let goal = resumeGoal({ ...existing, pendingRun: undefined }, timestamp);
         const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
         const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
@@ -669,6 +815,21 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
         return;
       }
 
+      if (parsed.command === "budget") {
+        const value = parsed.value.toLowerCase();
+        const tokenBudget = value === "off" ? undefined : /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
+        if (tokenBudget === null) {
+          notify(ctx, "Usage: /goal budget <positive-integer|off>", "warning");
+          return;
+        }
+        const goal = { ...existing, tokenBudget, updatedAt: timestamp.toISOString() };
+        const persisted = persistGoal(storage, goal, auditEvent("token_budget_changed", tokenBudget === undefined ? "Human disabled token budget." : `Human set token budget to ${tokenBudget}.`, ctx, timestamp), ctx);
+        if (!persisted) return;
+        status.sync(ctx);
+        notify(ctx, tokenBudget === undefined ? "Goal token budget disabled." : `Goal token budget set to ${tokenBudget} tokens.`);
+        return;
+      }
+
       if (parsed.command === "verify") {
         if (!parsed.value) {
           notify(ctx, "Usage: /goal verify <command>", "warning");
@@ -691,6 +852,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
 
   pi.on("session_shutdown", (_event, ctx) => {
     clearContinuationAuthority();
+    clearAutonomousTracking();
     const projectRoot = ctx.cwd || process.cwd();
     const readResult = readGoal(storage, projectRoot, ctx);
     if (!readResult.ok) {
@@ -711,6 +873,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     const readResult = readGoal(storage, projectRoot, ctx);
     if (!readResult.ok) return;
     clearContinuationAuthority();
+    clearAutonomousTracking();
     let goal = readResult.goal;
     if (!goal || goal.status !== "active") return;
     const owner = ctx.sessionManager.getSessionId();
@@ -734,12 +897,55 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     const autonomous = Boolean(runId && goal.pendingRun?.runId === runId && goal.pendingRun.sessionId === owner);
     const persisted = persistGoal(storage, goal, auditEvent("lease_renewed", autonomous ? "Agent continuation turn started." : "Normal agent turn started for active goal.", ctx, timestamp), ctx);
     if (!persisted) return;
-    if (autonomous && runId) activeContinuation = { projectRoot, sessionId: owner, runId };
+    if (autonomous && runId) {
+      activeContinuation = { projectRoot, sessionId: owner, runId };
+      autonomousChain = { projectRoot, sessionId: owner, runId };
+    }
     return { systemPrompt: [event.systemPrompt, buildGoalSystemPrompt(persisted, autonomous)].filter(Boolean).join("\n\n") };
   });
 
-  pi.on("agent_end", (event, ctx) => {
+  pi.on("message_start", (event, ctx) => {
+    if (!autonomousChain) return;
+    const record = messageRecord(event.message);
+    if (record?.role !== "user") return;
+    const projectRoot = ctx.cwd || process.cwd();
+    const owner = ctx.sessionManager.getSessionId();
+    if (!matchesRun(autonomousChain, projectRoot, owner, autonomousChain.runId)) return;
+    if (continuationRunId(contentText(record.content)) === autonomousChain.runId) return;
+
+    // Pi drains queued follow-ups inside the same low-level agent run. Revoke
+    // tool authority before the follow-up model turn can call update_goal, but
+    // retain chain identity until agent_end can isolate pre-follow-up usage.
     clearContinuationAuthority();
+    clearProviderLimit();
+    autonomousInterruption = {
+      ...autonomousChain,
+      reason: "Autonomous goal run was interrupted by a queued user follow-up; later work was not treated as autonomous.",
+    };
+  });
+
+  pi.on("after_provider_response", (event, ctx) => {
+    if (!autonomousChain) return;
+    const projectRoot = ctx.cwd || process.cwd();
+    const owner = ctx.sessionManager.getSessionId();
+    if (matchesRun(autonomousInterruption, projectRoot, owner, autonomousChain.runId)) return;
+    if (event.status !== 429) {
+      // Every observed response is authoritative for the current attempt.
+      clearProviderLimit();
+      return;
+    }
+    const retryAfterEntry = Object.entries(event.headers).find(([name]) => name.toLowerCase() === "retry-after");
+    providerLimit = {
+      ...autonomousChain,
+      retryAfter: typeof retryAfterEntry?.[1] === "string" ? retryAfterEntry[1] : undefined,
+    };
+  });
+
+  pi.on("agent_end", (event, ctx) => {
+    const correlatedProviderLimit = providerLimit;
+    const interruption = autonomousInterruption;
+    clearContinuationAuthority();
+    clearProviderLimit();
     const projectRoot = ctx.cwd || process.cwd();
     const readResult = readGoal(storage, projectRoot, ctx);
     if (!readResult.ok) return;
@@ -755,27 +961,61 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     }
     if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
     const messages = event.messages as unknown[];
-    if (!isCurrentContinuation(messages, goal.pendingRun.runId)) return;
+    const runId = goal.pendingRun.runId;
+    const chainCorrelated = matchesRun(autonomousChain, projectRoot, owner, runId);
+    if (interruption && matchesRun(interruption, projectRoot, owner, runId)) {
+      const followUpIndex = firstNonContinuationUserIndex(messages, runId);
+      const autonomousMessages = followUpIndex >= 0 ? messages.slice(0, followUpIndex) : [];
+      let updated: GoalState = goal;
+      if (autonomousMessages.some((message) => messageRecord(message)?.role === "assistant")) {
+        updated = recordRunUsage(updated, sumAssistantUsage(autonomousMessages), timestamp, autonomousRunFingerprint(autonomousMessages));
+      }
+      const candidate = {
+        protocol: "malformed" as const,
+        reason: interruption.reason,
+      };
+      updated = recordRunCandidate(updated, candidate, timestamp);
+      updated = recordProviderUsageLimit(updated, undefined, timestamp);
+      if (updated === goal) return;
+      persistGoal(storage, updated, auditEvent("run_candidate_recorded", interruption.reason, ctx, timestamp), ctx);
+      status.sync(ctx);
+      return;
+    }
+    // Pi's agent.continue() retries emit only the new low-level messages, so
+    // the original continuation marker is absent. A queued user/follow-up run
+    // always introduces a user message and must not inherit chain authority.
+    if (!isCurrentContinuation(messages, runId) && !(chainCorrelated && !containsUserMessage(messages))) return;
     const stopReason = assistantStopReason(messages);
+    let updated: GoalState = recordRunUsage(goal, sumAssistantUsage(messages), timestamp, autonomousRunFingerprint(messages));
+    const terminalUsageLimit = stopReason !== undefined &&
+      correlatedProviderLimit !== undefined &&
+      correlatedProviderLimit.projectRoot === projectRoot &&
+      correlatedProviderLimit.sessionId === owner &&
+      correlatedProviderLimit.runId === runId;
     const candidate = stopReason
       ? { protocol: "malformed" as const, source: "assistant_stop" as const, reason: `Assistant turn ended with ${stopReason}.` }
       : parseCurrentRunCandidate(messages, {
           goalId: goal.goalId,
           goalRevision: goal.pendingRun.goalRevision,
-          runId: goal.pendingRun.runId,
+          runId,
           evaluationRequestId: goal.pendingRun.evaluationRequestId,
         });
-    const updated = recordRunCandidate(goal, candidate, timestamp);
-    persistGoal(storage, updated, auditEvent("run_candidate_recorded", candidate.protocol === "valid" ? "Recorded current-run decision." : candidate.reason, ctx, timestamp), ctx);
+    updated = recordRunCandidate(updated, candidate, timestamp);
+    const providerReason = terminalUsageLimit ? `Provider usage limit ended the autonomous run with ${stopReason}.` : undefined;
+    updated = recordProviderUsageLimit(updated, providerReason ? { reason: providerReason, retryAfter: correlatedProviderLimit?.retryAfter } : undefined, timestamp);
+    if (updated === goal) return;
+    persistGoal(storage, updated, auditEvent("run_candidate_recorded", providerReason ?? (candidate.protocol === "valid" ? "Recorded current-run decision and usage." : candidate.reason), ctx, timestamp), ctx);
     status.sync(ctx);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    const interruption = autonomousInterruption;
     clearContinuationAuthority();
+    clearAutonomousTracking();
     const projectRoot = ctx.cwd || process.cwd();
     const readResult = readGoal(storage, projectRoot, ctx);
     if (!readResult.ok) return;
-    const goal = readResult.goal;
+    let goal = readResult.goal;
     const owner = ctx.sessionManager.getSessionId();
     const timestamp = now();
     if (!goal) return;
@@ -786,13 +1026,29 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       return;
     }
     if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
-    const settled = settlePendingRun(goal, timestamp);
+    let settlementGoal: GoalState = goal;
+    if (interruption && matchesRun(interruption, projectRoot, owner, goal.pendingRun.runId)) {
+      settlementGoal = recordRunCandidate(settlementGoal, { protocol: "malformed", reason: interruption.reason }, timestamp);
+      settlementGoal = recordProviderUsageLimit(settlementGoal, undefined, timestamp);
+    }
+    const settled = settlePendingRun(settlementGoal, timestamp);
     if (settled.action === "none") return;
     let persisted = persistGoal(storage, settled.goal, auditEvent("run_settled", settled.reason ?? "Settled goal run.", ctx, timestamp), ctx);
     if (!persisted) return;
     status.sync(ctx);
+    if (settled.action === "complete") {
+      if (!archiveCompletedGoal(storage, persisted, ctx)) {
+        notify(ctx, `Goal complete, but its active receipt was retained: ${settled.reason}`, "warning");
+        return;
+      }
+      const cleared = clearGoal(storage, projectRoot, persisted.storageRevision, auditEvent("goal_completed_archived", "Completed goal archived and active slot cleared.", ctx, timestamp), ctx);
+      if (cleared) status.clear(ctx);
+      else status.sync(ctx);
+      notify(ctx, cleared ? `Goal complete: ${settled.reason}` : `Goal complete and archived, but its active slot was retained: ${settled.reason}`, cleared ? "info" : "warning");
+      return;
+    }
     if (settled.action !== "dispatch") {
-      notify(ctx, settled.action === "complete" ? `Goal complete: ${settled.reason}` : `Goal stopped (${settled.action}): ${settled.reason}`, settled.action === "complete" ? "info" : "warning");
+      notify(ctx, `Goal stopped (${settled.action}): ${settled.reason}`, "warning");
       return;
     }
     if (!ctx.isIdle() || ctx.hasPendingMessages()) {

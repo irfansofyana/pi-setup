@@ -17,6 +17,7 @@ import {
   recordEvidence,
   resumeGoal,
   shouldAutoContinue,
+  sumAssistantUsage,
 } from "./index.ts";
 import { createGoalStorage } from "./storage.ts";
 
@@ -29,6 +30,7 @@ function createHarness(session = "session-a") {
     legacyStatePath: join(root, "legacy", "state.json"),
     auditRoot: join(root, "logs"),
     corruptRoot: join(root, "corrupt"),
+    archiveRoot: join(root, "archive"),
     getProcessStartToken: () => "test-process-start",
   });
   const tools = new Map<string, any>();
@@ -71,13 +73,35 @@ function createHarness(session = "session-a") {
   };
 }
 
-function workerMessages(goal: any, decision: "complete" | "continue" | "blocked" | "needs_user" = "continue") {
+const RUN_USAGE = {
+  input: 10,
+  output: 20,
+  cacheRead: 3,
+  cacheWrite: 4,
+  reasoning: 7,
+  totalTokens: 37,
+  cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 },
+};
+
+const ERROR_USAGE = {
+  input: 2,
+  output: 1,
+  cacheRead: 0,
+  cacheWrite: 0,
+  reasoning: 0,
+  totalTokens: 3,
+  cost: { input: 0.002, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+};
+
+function workerMessages(goal: any, decision: "complete" | "continue" | "blocked" | "needs_user" = "continue", usage: any = RUN_USAGE) {
   const pending = goal.pendingRun;
   return [{
     role: "user",
     content: `GOAL_LOOP_CONTINUATION_RUN: ${pending.runId}`,
   }, {
     role: "assistant",
+    usage,
+    stopReason: "stop",
     content: [{
       type: "text",
       text: `GOAL_WORKER_DECISION: ${JSON.stringify({
@@ -92,6 +116,47 @@ function workerMessages(goal: any, decision: "complete" | "continue" | "blocked"
   }];
 }
 
+function completionMessages(goal: any, usage: any = RUN_USAGE) {
+  const pending = goal.pendingRun;
+  return [{
+    role: "user",
+    content: `GOAL_LOOP_CONTINUATION_RUN: ${pending.runId}`,
+  }, {
+    role: "assistant",
+    content: [{
+      type: "toolCall",
+      id: "call-eval",
+      name: "Agent",
+      arguments: { description: "Evaluate goal status", prompt: `Evaluation request: ${pending.evaluationRequestId}` },
+    }],
+  }, {
+    role: "toolResult",
+    toolName: "Agent",
+    toolCallId: "call-eval",
+    content: [{ type: "text", text: `GOAL_EVALUATOR_DECISION: ${JSON.stringify({
+      goalId: goal.goalId,
+      goalRevision: goal.goalRevision,
+      runId: pending.runId,
+      evaluationRequestId: pending.evaluationRequestId,
+      decision: "complete",
+      reason: "verified complete",
+      confidence: "high",
+    })}` }],
+  }, {
+    role: "assistant",
+    usage,
+    stopReason: "stop",
+    content: [{ type: "text", text: `GOAL_WORKER_DECISION: ${JSON.stringify({
+      goalId: goal.goalId,
+      goalRevision: goal.goalRevision,
+      runId: pending.runId,
+      evaluationRequestId: pending.evaluationRequestId,
+      decision: "complete",
+      reason: "verified complete",
+    })}` }],
+  }];
+}
+
 async function acceptContinuation(harness: ReturnType<typeof createHarness>) {
   const continuation = harness.sent.at(-1)!;
   return harness.handlers.get("before_agent_start")({
@@ -101,10 +166,27 @@ async function acceptContinuation(harness: ReturnType<typeof createHarness>) {
   }, harness.ctx);
 }
 
-test("parseGoalArgs handles objectives and subcommands", () => {
+async function completeCurrentGoal(harness: ReturnType<typeof createHarness>) {
+  await acceptContinuation(harness);
+  await harness.tools.get("update_goal").execute("call", {
+    evidence: "verification passed",
+    evidenceKind: "verification",
+    outcome: "passed",
+  }, undefined, undefined, harness.ctx);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: completionMessages(goal) }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  return goal.goalId;
+}
+
+test("parseGoalArgs treats bare /goal as status and keeps the status alias", () => {
+  assert.deepEqual(parseGoalArgs(""), { command: "status", value: "" });
+  assert.deepEqual(parseGoalArgs("status"), { command: "status", value: "" });
   assert.deepEqual(parseGoalArgs("ship the README update"), { command: "start", value: "ship the README update" });
   assert.deepEqual(parseGoalArgs("verify npm test"), { command: "verify", value: "npm test" });
   assert.deepEqual(parseGoalArgs("pause"), { command: "pause", value: "" });
+  assert.deepEqual(parseGoalArgs("list"), { command: "list", value: "" });
+  assert.deepEqual(parseGoalArgs("budget 1000"), { command: "budget", value: "1000" });
 });
 
 test("goal state compatibility helpers retain user-visible defaults", () => {
@@ -148,7 +230,7 @@ test("prompts carry structured current-run authority", () => {
       sessionId: "session-a",
       dispatchedAt: NOW.toISOString(),
     },
-    verification: { commands: ["npm test"] },
+    verification: { commands: ["npm test"], proofs: [] },
   };
   const continuation = buildContinuationPrompt(goal);
   const system = buildGoalSystemPrompt(goal);
@@ -416,10 +498,427 @@ test("aborted runs block at settlement without retry", async () => {
   const harness = createHarness();
   await harness.commands.get("goal").handler("Ship safely", harness.ctx);
   const pending = harness.storage.read(harness.ctx.cwd)!;
-  await harness.handlers.get("agent_end")({ messages: [{ role: "user", content: `GOAL_LOOP_CONTINUATION_RUN: ${pending.pendingRun.runId}` }, { role: "assistant", stopReason: "aborted", content: [] }] }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: [{ role: "user", content: `GOAL_LOOP_CONTINUATION_RUN: ${pending.pendingRun!.runId}` }, { role: "assistant", stopReason: "aborted", content: [] }] }, harness.ctx);
   await harness.handlers.get("agent_settled")({}, harness.ctx);
   assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "blocked");
   assert.equal(harness.sent.length, 1);
+  harness.cleanup();
+});
+
+test("sumAssistantUsage uses Pi totals without double-counting reasoning", () => {
+  const usage = sumAssistantUsage([{
+    role: "assistant",
+    usage: RUN_USAGE,
+    content: [],
+  }]);
+  assert.deepEqual(usage, {
+    input: 10,
+    output: 20,
+    cacheRead: 3,
+    cacheWrite: 4,
+    totalTokens: 37,
+    cost: { total: 0.037 },
+  });
+});
+
+test("bare /goal reports local status and latest archived achievement", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("", harness.ctx);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /No active goal/);
+
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const goalId = await completeCurrentGoal(harness);
+
+  assert.equal(harness.storage.read(harness.ctx.cwd), undefined);
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.goalId, goalId);
+  await harness.commands.get("goal").handler("", harness.ctx);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /Latest achievement \(read-only\)/);
+
+  const inspected = await harness.tools.get("get_goal").execute("call", {}, undefined, undefined, harness.ctx);
+  assert.equal(inspected.details.goal, undefined);
+  assert.equal(inspected.details.latestAchievement.goalId, goalId);
+  assert.match(inspected.content[0].text, /No active goal/);
+  const mutation = await harness.tools.get("update_goal").execute("call", { evidence: "must not mutate archive" }, undefined, undefined, harness.ctx);
+  assert.deepEqual(mutation.details, { error: "missing_goal" });
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.evidence.some((entry: any) => entry.summary === "must not mutate archive"), false);
+  harness.cleanup();
+});
+
+test("archive failure retains an immutable completion receipt until archival is confirmed", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  await harness.tools.get("update_goal").execute("call", { evidence: "passed", evidenceKind: "verification", outcome: "passed" }, undefined, undefined, harness.ctx);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: completionMessages(goal) }, harness.ctx);
+  const originalArchive = harness.storage.archive.bind(harness.storage);
+  harness.storage.archive = () => { throw new Error("synthetic archive failure"); };
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const retained = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(retained.status, "complete");
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd), undefined);
+  for (const command of ["pause", "resume", "edit Mutated receipt", "budget 1", "verify npm test"]) {
+    await harness.commands.get("goal").handler(command, harness.ctx);
+    assert.deepEqual(harness.storage.read(harness.ctx.cwd), retained, command);
+  }
+
+  await harness.commands.get("goal").handler("Replacement before archive", harness.ctx);
+  assert.deepEqual(harness.storage.read(harness.ctx.cwd), retained);
+  assert.equal(harness.sent.length, 1);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /archive receipt could not be persisted|completed receipt can be archived/i);
+
+  harness.storage.archive = originalArchive;
+  await harness.commands.get("goal").handler("Replacement after archive", harness.ctx);
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.goalId, retained.goalId);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "Replacement after archive");
+  harness.cleanup();
+});
+
+test("clear failure keeps the archived completion receipt immutable until safe replacement", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  await harness.tools.get("update_goal").execute("call", { evidence: "passed", evidenceKind: "verification", outcome: "passed" }, undefined, undefined, harness.ctx);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: completionMessages(goal) }, harness.ctx);
+  harness.storage.clear = () => { throw new Error("synthetic clear failure"); };
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const retained = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(retained.status, "complete");
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.goalId, goal.goalId);
+  for (const command of ["pause", "resume", "edit Mutated receipt", "budget 1", "verify npm test"]) {
+    await harness.commands.get("goal").handler(command, harness.ctx);
+    assert.deepEqual(harness.storage.read(harness.ctx.cwd), retained, command);
+  }
+
+  await harness.commands.get("goal").handler("Replacement objective", harness.ctx);
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.goalId, retained.goalId);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "Replacement objective");
+  harness.cleanup();
+});
+
+test("partial completion cleanup rejects edit and archives the retained receipt before starting over", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Original objective", harness.ctx);
+  await acceptContinuation(harness);
+  await harness.tools.get("update_goal").execute("call", { evidence: "passed", evidenceKind: "verification", outcome: "passed" }, undefined, undefined, harness.ctx);
+  const completing = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: completionMessages(completing) }, harness.ctx);
+  const originalClear = harness.storage.clear.bind(harness.storage);
+  harness.storage.clear = () => { throw new Error("synthetic clear failure"); };
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const retained = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(retained.status, "complete");
+  await harness.commands.get("goal").handler("edit Mutated receipt", harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "Original objective");
+  assert.match(harness.notifications.at(-1)?.message ?? "", /cannot be edited.*start a new goal/i);
+
+  harness.storage.clear = originalClear;
+  const originalArchive = harness.storage.archive.bind(harness.storage);
+  let archiveCalls = 0;
+  let archivedBeforeReplacement = false;
+  harness.storage.archive = (goal: any) => {
+    archiveCalls += 1;
+    archivedBeforeReplacement = harness.storage.read(harness.ctx.cwd)?.goalId === retained.goalId;
+    return originalArchive(goal);
+  };
+  await harness.commands.get("goal").handler("Replacement objective", harness.ctx);
+
+  assert.equal(archiveCalls, 1);
+  assert.equal(archivedBeforeReplacement, true);
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.goalId, retained.goalId);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "Replacement objective");
+  harness.cleanup();
+});
+
+test("starting over archives a leftover completed active state before replacement", async () => {
+  const harness = createHarness();
+  const complete = harness.storage.write({ ...createGoal(harness.ctx.cwd, "Old achievement", NOW, "old-goal"), status: "complete" }, 0, { type: "test_complete", at: NOW.toISOString() });
+  const originalArchive = harness.storage.archive.bind(harness.storage);
+  let archivedBeforeWrite = false;
+  harness.storage.archive = (goal: any) => {
+    archivedBeforeWrite = harness.storage.read(harness.ctx.cwd)?.goalId === complete.goalId;
+    return originalArchive(goal);
+  };
+
+  await harness.commands.get("goal").handler("New objective", harness.ctx);
+
+  assert.equal(archivedBeforeWrite, true);
+  assert.equal(harness.storage.readLatestCompleted(harness.ctx.cwd)?.goalId, "old-goal");
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "New objective");
+  harness.cleanup();
+});
+
+test("/goal list discovers independent goals in distinct worktree roots", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("First worktree goal", harness.ctx);
+  harness.ctx.cwd = "/repo/app-worktree-two";
+  await harness.commands.get("goal").handler("Second worktree goal", harness.ctx);
+
+  assert.equal(harness.storage.listActive().length, 2);
+  await harness.commands.get("goal").handler("list", harness.ctx);
+  const message = harness.notifications.at(-1)?.message ?? "";
+  assert.match(message, /\/repo\/app \[active\]/);
+  assert.match(message, /\/repo\/app-worktree-two \[active\]/);
+  harness.cleanup();
+});
+
+test("token budgets stop continuation, gate resume, and remain human-owned", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship within budget", harness.ctx);
+  await harness.commands.get("goal").handler("budget 37", harness.ctx);
+  await acceptContinuation(harness);
+  const active = harness.storage.read(harness.ctx.cwd)!;
+  const system = await harness.handlers.get("before_agent_start")({ prompt: "normal", systemPrompt: "base", systemPromptOptions: { cwd: harness.ctx.cwd } }, harness.ctx);
+  assert.match(system.systemPrompt, /token budget: 0\/37 tokens/i);
+  await acceptContinuation(harness);
+  await harness.handlers.get("agent_end")({ messages: workerMessages(active) }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const limited = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(limited.status, "token_budget_limited");
+  assert.equal(limited.usage?.totalTokens, 37);
+  assert.equal(limited.pendingRun, undefined);
+  assert.equal(limited.lease, undefined);
+  assert.equal(harness.sent.length, 1);
+
+  await harness.commands.get("goal").handler("resume", harness.ctx);
+  assert.equal(harness.sent.length, 1);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /cannot resume/i);
+  await harness.commands.get("goal").handler("budget 38", harness.ctx);
+  await harness.commands.get("goal").handler("resume", harness.ctx);
+  assert.equal(harness.sent.length, 2);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "active");
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.limitDetail, undefined);
+  await harness.commands.get("goal").handler("budget off", harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.tokenBudget, undefined);
+  harness.cleanup();
+});
+
+test("normal user turns never count toward autonomous goal usage", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await harness.handlers.get("before_agent_start")({ prompt: "Explain status", systemPrompt: "base", systemPromptOptions: { cwd: harness.ctx.cwd } }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: [{ role: "user", content: "Explain status" }, { role: "assistant", usage: RUN_USAGE, stopReason: "stop", content: [] }] }, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.usage, undefined);
+  harness.cleanup();
+});
+
+test("agent_end accounts autonomous usage once and settlement stays exactly once", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  const messages = workerMessages(goal);
+
+  await harness.handlers.get("agent_end")({ messages }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages }, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.usage?.totalTokens, 37);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  assert.equal(harness.sent.length, 2);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.usage?.totalTokens, 37);
+  harness.cleanup();
+});
+
+test("a markerless successful Pi retry replaces the 429 error candidate and counts chain usage once", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  const runId = goal.pendingRun!.runId;
+  await harness.handlers.get("after_provider_response")({ status: 429, headers: { "retry-after": "2" } }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: [{
+    role: "user",
+    content: `GOAL_LOOP_CONTINUATION_RUN: ${runId}`,
+  }, {
+    role: "assistant",
+    usage: ERROR_USAGE,
+    stopReason: "error",
+    errorMessage: "429 Too Many Requests",
+    timestamp: 1,
+    content: [],
+  }] }, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.pendingRun?.candidate?.source, "assistant_stop");
+  assert.ok(harness.storage.read(harness.ctx.cwd)?.pendingRun?.providerUsageLimit);
+
+  await harness.handlers.get("after_provider_response")({ status: 200, headers: {} }, harness.ctx);
+  const retryMessages = workerMessages(goal).slice(1).map((message: any) => ({ ...message, timestamp: 2 }));
+  await harness.handlers.get("agent_end")({ messages: retryMessages }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: retryMessages }, harness.ctx);
+
+  const recovered = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(recovered.pendingRun?.candidate?.protocol, "valid");
+  assert.equal(recovered.pendingRun?.providerUsageLimit, undefined);
+  assert.equal(recovered.usage?.totalTokens, 40);
+  assert.equal(recovered.usage?.cost.total, 0.04);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "active");
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.usage?.totalTokens, 40);
+  assert.equal(harness.sent.length, 2);
+  harness.cleanup();
+});
+
+test("a queued follow-up interrupts one combined Pi run and revokes autonomous tool authority", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  const marker = workerMessages(goal)[0];
+  await harness.handlers.get("message_start")({ message: marker }, harness.ctx);
+  const accepted = await harness.tools.get("update_goal").execute("call", { evidence: "autonomous evidence" }, undefined, undefined, harness.ctx);
+  assert.equal(accepted.details.goal.evidence.at(-1)?.summary, "autonomous evidence");
+
+  const followUp = { role: "user", content: "Explain that result.", timestamp: 2 };
+  await harness.handlers.get("message_start")({ message: followUp }, harness.ctx);
+  const rejected = await harness.tools.get("update_goal").execute("call", { evidence: "follow-up mutation" }, undefined, undefined, harness.ctx);
+  assert.deepEqual(rejected.details, { error: "no_continuation_authority" });
+
+  const autonomousOutput = { ...workerMessages(goal, "continue", RUN_USAGE)[1], timestamp: 1 };
+  const laterOutput = { ...workerMessages(goal, "blocked", ERROR_USAGE)[1], timestamp: 3 };
+  await harness.handlers.get("agent_end")({ messages: [marker, autonomousOutput, followUp, laterOutput] }, harness.ctx);
+
+  const interrupted = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(interrupted.pendingRun?.candidate?.protocol, "malformed");
+  assert.match(interrupted.pendingRun?.candidate?.reason ?? "", /interrupted by a queued user follow-up/i);
+  assert.equal(interrupted.usage?.totalTokens, 37);
+  assert.equal(interrupted.evidence.some((entry: any) => entry.summary === "follow-up mutation"), false);
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  const settled = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(settled.status, "needs_user");
+  assert.equal(settled.pendingRun, undefined);
+  assert.equal(settled.lease, undefined);
+  assert.equal(settled.usage?.totalTokens, 37);
+  assert.equal(harness.sent.length, 1);
+  assert.match(settled.lastEvaluation?.reason ?? "", /interrupted by a queued user follow-up/i);
+  harness.cleanup();
+});
+
+test("a transient correlated 429 followed by a successful run continues", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("after_provider_response")({ status: 429, headers: { "retry-after": "2" } }, harness.ctx);
+  await harness.handlers.get("after_provider_response")({ status: 200, headers: {} }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: workerMessages(goal) }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "active");
+  assert.equal(harness.sent.length, 2);
+  harness.cleanup();
+});
+
+test("a recovered 429 does not taint a later unrelated assistant error", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("after_provider_response")({ status: 429, headers: { "retry-after": "2" } }, harness.ctx);
+  await harness.handlers.get("after_provider_response")({ status: 200, headers: {} }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: [{
+    role: "user",
+    content: `GOAL_LOOP_CONTINUATION_RUN: ${goal.pendingRun!.runId}`,
+  }, {
+    role: "assistant",
+    usage: ERROR_USAGE,
+    stopReason: "error",
+    errorMessage: "unrelated assistant failure",
+    timestamp: 4,
+    content: [],
+  }] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const stopped = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(stopped.status, "blocked");
+  assert.notEqual(stopped.status, "usage_limited");
+  assert.equal(stopped.limitDetail, undefined);
+  harness.cleanup();
+});
+
+for (const finalStatus of [500, 401]) {
+  test(`a ${finalStatus} response after 429 is authoritative and remains a generic error`, async () => {
+    const harness = createHarness();
+    await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+    await acceptContinuation(harness);
+    const goal = harness.storage.read(harness.ctx.cwd)!;
+    await harness.handlers.get("after_provider_response")({ status: 429, headers: { "retry-after": "2" } }, harness.ctx);
+    await harness.handlers.get("after_provider_response")({ status: finalStatus, headers: {} }, harness.ctx);
+    await harness.handlers.get("agent_end")({ messages: [{
+      role: "user",
+      content: `GOAL_LOOP_CONTINUATION_RUN: ${goal.pendingRun!.runId}`,
+    }, {
+      role: "assistant",
+      usage: ERROR_USAGE,
+      stopReason: "error",
+      errorMessage: `${finalStatus} provider error`,
+      timestamp: finalStatus,
+      content: [],
+    }] }, harness.ctx);
+    await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+    const stopped = harness.storage.read(harness.ctx.cwd)!;
+    assert.equal(stopped.status, "blocked");
+    assert.notEqual(stopped.status, "usage_limited");
+    assert.equal(stopped.limitDetail, undefined);
+    harness.cleanup();
+  });
+}
+
+test("a correlated terminal 429 becomes usage_limited and generic error handling cannot overwrite it", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("after_provider_response")({ status: 429, headers: { "Retry-After": "5" } }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: [{
+    role: "user",
+    content: `GOAL_LOOP_CONTINUATION_RUN: ${goal.pendingRun!.runId}`,
+  }, {
+    role: "assistant",
+    usage: RUN_USAGE,
+    stopReason: "error",
+    content: [],
+  }] }, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "active");
+  assert.match(harness.storage.read(harness.ctx.cwd)?.pendingRun?.providerUsageLimit?.reason ?? "", /Provider usage limit/);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const limited = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(limited.status, "usage_limited");
+  assert.equal(limited.limitDetail?.retryAfter, "5");
+  assert.equal(limited.pendingRun, undefined);
+  assert.equal(limited.lease, undefined);
+  assert.equal(limited.usage?.totalTokens, 37);
+  await harness.commands.get("goal").handler("resume", harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "active");
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.limitDetail, undefined);
+  assert.equal(harness.sent.length, 2);
+  harness.cleanup();
+});
+
+test("an uncorrelated 429 does not change generic aborted-run handling", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("after_provider_response")({ status: 429, headers: { "retry-after": "5" } }, harness.ctx);
+  await harness.handlers.get("agent_end")({ messages: [{
+    role: "user",
+    content: `GOAL_LOOP_CONTINUATION_RUN: ${goal.pendingRun!.runId}`,
+  }, {
+    role: "assistant",
+    usage: RUN_USAGE,
+    stopReason: "aborted",
+    content: [],
+  }] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "blocked");
   harness.cleanup();
 });
 
@@ -428,7 +927,15 @@ test("README documents hardened lifecycle and storage requirements", () => {
   assert.match(readme, /Pi >=0\.80\.4/);
   assert.match(readme, /agent_settled/);
   assert.match(readme, /human-owned/);
-  assert.match(readme, /state\/<project-key>\.json/);
-  assert.match(readme, /logs\/<project-key>\.jsonl/);
+  assert.match(readme, /normalized Pi working root/);
+  assert.match(readme, /state\/<root-key>\.json/);
+  assert.match(readme, /logs\/<root-key>\.jsonl/);
+  assert.match(readme, /archive\/<root-key>\/<goal-id>\.json/);
+  assert.match(readme, /distinct Git worktree root/);
+  assert.match(readme, /subdirectory.*symlink/);
+  assert.match(readme, /\/goal list/);
+  assert.match(readme, /\/goal budget/);
+  assert.match(readme, /usage_limited/);
+  assert.match(readme, /token_budget_limited/);
   assert.match(readme, /\/reload/);
 });

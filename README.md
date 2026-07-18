@@ -158,8 +158,9 @@ Run `/reload` after install.
 | `~/.pi/agent/managed-skills/` | Global Pi | Generated managed skill files |
 | `~/.pi/agent/caveman/config.json` | Global Pi | Caveman extension config |
 | `~/.pi/agent/goal-loop/config.json` | Global Pi | Goal-loop config |
-| `~/.pi/agent/goal-loop/state/<project-key>.json` | Global Pi | Per-project goal-loop state |
-| `~/.pi/agent/goal-loop/logs/<project-key>.jsonl` | Global Pi | Append-only goal-loop audit log |
+| `~/.pi/agent/goal-loop/state/<root-key>.json` | Global Pi | Per-working-root active goal state |
+| `~/.pi/agent/goal-loop/archive/<root-key>/<goal-id>.json` | Global Pi | Completed goal snapshots |
+| `~/.pi/agent/goal-loop/logs/<root-key>.jsonl` | Global Pi | Append-only goal-loop audit log |
 | `~/.config/mcp/mcp.json` | Global shared | Preferred MCP config |
 | `.mcp.json` | Project-local | Project MCP servers |
 | `~/.pi/agent/mcp.json` | Pi global | Pi-specific MCP override |
@@ -619,7 +620,7 @@ If old upstream config exists at `~/.pi/agent/caveman.json`, local extension rea
 
 ## Goal loop
 
-Purpose: project-scoped `/goal` command with persisted state, verification evidence, and auto-continue loop.
+Purpose: Pi-working-root-scoped `/goal` command with persisted state, completion receipts, usage limits, verification evidence, and auto-continue loops.
 
 Requires Pi `>=0.80.4`. The extension records run output at `agent_end` and makes one continuation decision at `agent_settled`.
 
@@ -633,13 +634,16 @@ cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
 Commands:
 
 ```text
+/goal                       # local status or latest archived achievement
+/goal status                # explicit status alias
 /goal <objective>
-/goal status
+/goal list                  # active goals across stored working roots
 /goal pause
 /goal resume
 /goal clear
 /goal edit <objective>
 /goal verify <command>
+/goal budget <tokens|off>   # opt-in cumulative assistant-token budget
 ```
 
 Tools:
@@ -665,7 +669,15 @@ Default:
 
 Keep `allowModelCreateGoal: false` unless you want model-callable goal creation.
 
-The human owns goal creation, pause/resume, objective edits, and turn budgets. Models can record evidence and propose only terminal outcomes; the coordinator verifies the current run, evaluator approval, and configured checks before changing state. Existing installations should recopy the template, then run `/reload` or restart Pi.
+The human owns goal creation, pause/resume, objective edits, turn budgets, and optional token budgets. Models can record evidence and propose only terminal outcomes; the coordinator verifies the current run, evaluator approval, and configured checks before changing state.
+
+Identity is the normalized Pi working root (`ctx.cwd`), not a discovered Git worktree root or filesystem realpath. Parallel safety therefore requires launching each Pi session from a distinct Git worktree root. Launching from different subdirectories or symlink spellings creates distinct keys and is not detected as same-worktree concurrency. Each exact root key has one active goal and one session-owned execution lease.
+
+Completion writes an idempotent snapshot under `~/.pi/agent/goal-loop/archive/` before clearing the active slot, so bare `/goal` can show the latest achievement.
+
+Only finalized assistant usage from accepted autonomous runs is accumulated (`input`, `output`, cache fields, `totalTokens`, and `cost.total`). Reasoning is already included in output and is not added twice; ordinary user turns do not count. Reaching an opt-in token budget produces `token_budget_limited`. A correlated terminal HTTP 429 produces `usage_limited`, while a successful retry remains transient.
+
+Existing installations should recopy the template, then run `/reload` or restart Pi.
 
 ## Skills
 
@@ -774,7 +786,7 @@ ntn workers --help
 | Headroom status | `/headroom status` |
 | Hindsight diagnose | `/hindsight diagnose` |
 | Caveman status | `/caveman status` |
-| Goal status | `/goal status` |
+| Goal status | `/goal` (or `/goal status`) |
 | Update Pi | `pi update` |
 | Update extensions | `pi update --extensions` |
 | List packages | `pi list` |

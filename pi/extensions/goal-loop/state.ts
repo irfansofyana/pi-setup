@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { normalize, parse } from "node:path";
 
-export type GoalStatus = "active" | "paused" | "complete" | "blocked" | "needs_user";
+export type GoalStatus = "active" | "paused" | "complete" | "blocked" | "needs_user" | "usage_limited" | "token_budget_limited";
 export type GoalDecision = "complete" | "continue" | "blocked" | "needs_user";
-export type GoalCommand = "start" | "status" | "pause" | "resume" | "clear" | "edit" | "verify";
+export type GoalCommand = "start" | "status" | "list" | "pause" | "resume" | "clear" | "edit" | "verify" | "budget";
 export type GoalEvidenceKind = "note" | "verification" | "tool";
 export type GoalEvidenceOutcome = "passed" | "failed" | "unknown";
 
@@ -39,6 +39,25 @@ export interface GoalLease {
   expiresAt: string;
 }
 
+export interface GoalUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    total: number;
+  };
+}
+
+export interface GoalLimitDetail {
+  kind: "usage_limited" | "token_budget_limited";
+  reason: string;
+  at: string;
+  runId?: string;
+  retryAfter?: string;
+}
+
 export type GoalTerminalProposal = Exclude<GoalDecision, "continue">;
 
 export interface PendingGoalRun {
@@ -50,6 +69,13 @@ export interface PendingGoalRun {
   toolProposal?: GoalTerminalProposal;
   /** Conflicting model terminal proposals require an explicit human decision. */
   toolProposalConflict?: true;
+  /** Durable de-duplication keys for low-level autonomous-run usage. */
+  usageRunFingerprints?: string[];
+  /** Correlated terminal 429 detail for the latest low-level run. */
+  providerUsageLimit?: {
+    reason: string;
+    retryAfter?: string;
+  };
   candidate?: GoalRunCandidate;
 }
 
@@ -106,6 +132,11 @@ export interface GoalState {
     proofs: GoalEvidence[];
   };
   evidence: GoalEvidence[];
+  /** Human-owned, opt-in cumulative token ceiling. */
+  tokenBudget?: number;
+  /** Normalized cumulative Pi assistant usage from autonomous runs only. */
+  usage?: GoalUsage;
+  limitDetail?: GoalLimitDetail;
   lastEvaluation?: GoalEvaluation;
   lease?: GoalLease;
   pendingRun?: PendingGoalRun;
@@ -159,6 +190,47 @@ function normalizeEvidenceEntry(entry: unknown, fallbackGoalRevision: number): G
   };
 }
 
+function normalizeNonNegativeNumber(value: unknown, integer = false): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return integer ? Math.trunc(value) : value;
+}
+
+export function normalizeGoalUsage(usage: unknown): GoalUsage | undefined {
+  if (!isRecord(usage) || !isRecord(usage.cost)) return undefined;
+  const input = normalizeNonNegativeNumber(usage.input, true);
+  const output = normalizeNonNegativeNumber(usage.output, true);
+  const cacheRead = normalizeNonNegativeNumber(usage.cacheRead, true);
+  const cacheWrite = normalizeNonNegativeNumber(usage.cacheWrite, true);
+  const totalTokens = normalizeNonNegativeNumber(usage.totalTokens, true);
+  const totalCost = normalizeNonNegativeNumber(usage.cost.total);
+  if (input === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined || totalTokens === undefined || totalCost === undefined) return undefined;
+  return { input, output, cacheRead, cacheWrite, totalTokens, cost: { total: totalCost } };
+}
+
+function normalizeLimitDetail(detail: unknown): GoalLimitDetail | undefined {
+  if (!isRecord(detail)) return undefined;
+  if (detail.kind !== "usage_limited" && detail.kind !== "token_budget_limited") return undefined;
+  if (typeof detail.reason !== "string" || !detail.reason.trim() || typeof detail.at !== "string" || !Number.isFinite(Date.parse(detail.at))) return undefined;
+  return {
+    kind: detail.kind,
+    reason: detail.reason.trim(),
+    at: detail.at,
+    runId: typeof detail.runId === "string" && detail.runId ? detail.runId : undefined,
+    retryAfter: typeof detail.retryAfter === "string" && detail.retryAfter ? detail.retryAfter : undefined,
+  };
+}
+
+export function addGoalUsage(current: GoalUsage | undefined, added: GoalUsage): GoalUsage {
+  return {
+    input: (current?.input ?? 0) + added.input,
+    output: (current?.output ?? 0) + added.output,
+    cacheRead: (current?.cacheRead ?? 0) + added.cacheRead,
+    cacheWrite: (current?.cacheWrite ?? 0) + added.cacheWrite,
+    totalTokens: (current?.totalTokens ?? 0) + added.totalTokens,
+    cost: { total: (current?.cost.total ?? 0) + added.cost.total },
+  };
+}
+
 function normalizeEvaluation(evaluation: unknown): GoalEvaluation | undefined {
   if (!isRecord(evaluation)) return undefined;
   const decision = evaluation.decision;
@@ -186,7 +258,7 @@ export function createGoal(projectRoot: string, objective: string, now = new Dat
     maxTurns: DEFAULT_MAX_TURNS,
     maxFailedVerificationAttempts: DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS,
     consecutiveFailedVerificationAttempts: 0,
-    verification: { commands: [] },
+    verification: { commands: [], proofs: [] },
     evidence: [],
   };
 }
@@ -206,7 +278,7 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
   const verificationProofs = Array.isArray(rawVerification.proofs)
     ? rawVerification.proofs
         .map((entry) => normalizeEvidenceEntry(entry, goalRevision))
-        .filter((entry): entry is GoalEvidence => Boolean(entry) && entry.kind === "verification")
+        .filter((entry): entry is GoalEvidence => entry !== undefined && entry.kind === "verification")
     : evidence.filter((entry) => entry.kind === "verification");
 
   return {
@@ -216,7 +288,7 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
     storageRevision: typeof raw.storageRevision === "number" && Number.isFinite(raw.storageRevision) ? Math.max(0, Math.trunc(raw.storageRevision)) : 0,
     projectRoot: typeof raw.projectRoot === "string" ? canonicalProjectRoot(raw.projectRoot) : "",
     objective: typeof raw.objective === "string" ? raw.objective : "",
-    status: raw.status === "active" || raw.status === "paused" || raw.status === "complete" || raw.status === "blocked" || raw.status === "needs_user" ? raw.status : "active",
+    status: raw.status === "active" || raw.status === "paused" || raw.status === "complete" || raw.status === "blocked" || raw.status === "needs_user" || raw.status === "usage_limited" || raw.status === "token_budget_limited" ? raw.status : "active",
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
     turns: typeof raw.turns === "number" && Number.isFinite(raw.turns) ? Math.max(0, Math.trunc(raw.turns)) : 0,
@@ -235,6 +307,9 @@ export function normalizeGoalState(goal: GoalState | Record<string, unknown>): G
       proofs: verificationProofs,
     },
     evidence,
+    tokenBudget: typeof raw.tokenBudget === "number" && Number.isInteger(raw.tokenBudget) && raw.tokenBudget > 0 ? raw.tokenBudget : undefined,
+    usage: normalizeGoalUsage(raw.usage),
+    limitDetail: normalizeLimitDetail(raw.limitDetail),
     lastEvaluation: normalizeEvaluation(raw.lastEvaluation),
     lease: normalizeLease(raw.lease),
     pendingRun: normalizePendingRun(raw.pendingRun),
@@ -278,6 +353,15 @@ function normalizePendingRun(pendingRun: unknown): PendingGoalRun | undefined {
     result.toolProposal = pendingRun.toolProposal;
   }
   if (pendingRun.toolProposalConflict === true) result.toolProposalConflict = true;
+  if (Array.isArray(pendingRun.usageRunFingerprints)) {
+    result.usageRunFingerprints = [...new Set(pendingRun.usageRunFingerprints.filter((value): value is string => typeof value === "string" && Boolean(value)))];
+  }
+  if (isRecord(pendingRun.providerUsageLimit) && typeof pendingRun.providerUsageLimit.reason === "string" && pendingRun.providerUsageLimit.reason.trim()) {
+    result.providerUsageLimit = {
+      reason: pendingRun.providerUsageLimit.reason.trim(),
+      retryAfter: typeof pendingRun.providerUsageLimit.retryAfter === "string" && pendingRun.providerUsageLimit.retryAfter ? pendingRun.providerUsageLimit.retryAfter : undefined,
+    };
+  }
   if (pendingRun.candidate) {
     result.candidate = normalizeRunCandidate(pendingRun.candidate);
   }
@@ -375,6 +459,7 @@ export function editGoalObjective(goal: GoalState, objective: string, now = new 
     turns: 0,
     consecutiveFailedVerificationAttempts: 0,
     lastEvaluation: undefined,
+    limitDetail: undefined,
     pendingRun: undefined,
     evidence: [],
     verification: {
@@ -482,11 +567,51 @@ export function recordRunCandidate(goal: GoalState, candidate: GoalRunCandidate,
     return goal;
   }
 
+  if (JSON.stringify(pendingRun.candidate) === JSON.stringify(candidate)) return goal;
   return {
     ...goal,
     pendingRun: {
       ...pendingRun,
       candidate,
+    },
+    updatedAt: nowIso(now),
+  };
+}
+
+export function recordRunUsage(goal: GoalState, usage: GoalUsage, now = new Date(), fingerprint = "current-run"): GoalState {
+  const pendingRun = goal.pendingRun;
+  if (!pendingRun || pendingRun.usageRunFingerprints?.includes(fingerprint)) return goal;
+  return {
+    ...goal,
+    usage: addGoalUsage(goal.usage, usage),
+    pendingRun: { ...pendingRun, usageRunFingerprints: [...(pendingRun.usageRunFingerprints ?? []), fingerprint] },
+    updatedAt: nowIso(now),
+  };
+}
+
+export function recordProviderUsageLimit(goal: GoalState, detail: PendingGoalRun["providerUsageLimit"] | undefined, now = new Date()): GoalState {
+  const pendingRun = goal.pendingRun;
+  if (!pendingRun) return goal;
+  if (JSON.stringify(pendingRun.providerUsageLimit) === JSON.stringify(detail)) return goal;
+  return {
+    ...goal,
+    pendingRun: { ...pendingRun, providerUsageLimit: detail },
+    updatedAt: nowIso(now),
+  };
+}
+
+export function markUsageLimited(goal: GoalState, reason: string, now = new Date(), detail: { runId?: string; retryAfter?: string } = {}): GoalState {
+  return {
+    ...goal,
+    status: "usage_limited",
+    lease: undefined,
+    pendingRun: undefined,
+    limitDetail: {
+      kind: "usage_limited",
+      reason,
+      at: nowIso(now),
+      runId: detail.runId,
+      retryAfter: detail.retryAfter,
     },
     updatedAt: nowIso(now),
   };
@@ -532,7 +657,7 @@ function candidateConfidence(candidate: GoalRunCandidate | undefined): "low" | "
   return candidate.evaluator?.confidence ?? candidate.worker.confidence;
 }
 
-export type SettleAction = "none" | "dispatch" | "complete" | "blocked" | "needs_user";
+export type SettleAction = "none" | "dispatch" | "complete" | "blocked" | "needs_user" | "usage_limited" | "token_budget_limited";
 
 export interface SettleResult {
   goal: GoalState;
@@ -584,6 +709,17 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
       },
       action: "needs_user",
       reason: "Conflicting model terminal proposals were recorded for this run.",
+    };
+  }
+
+  if (pendingRun.providerUsageLimit && candidate.source === "assistant_stop" && /Assistant turn ended with (aborted|error)\./.test(candidate.reason ?? "")) {
+    return {
+      goal: markUsageLimited(goal, pendingRun.providerUsageLimit.reason, now, {
+        runId: pendingRun.runId,
+        retryAfter: pendingRun.providerUsageLimit.retryAfter,
+      }),
+      action: "usage_limited",
+      reason: pendingRun.providerUsageLimit.reason,
     };
   }
 
@@ -695,6 +831,24 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
       pendingRun: undefined,
       updatedAt: nowIso(now),
     };
+    if (nextGoal.tokenBudget !== undefined && (nextGoal.usage?.totalTokens ?? 0) >= nextGoal.tokenBudget) {
+      const reason = `Goal token budget reached (${nextGoal.usage?.totalTokens ?? 0}/${nextGoal.tokenBudget}).`;
+      return {
+        goal: {
+          ...nextGoal,
+          status: "token_budget_limited",
+          lease: undefined,
+          limitDetail: {
+            kind: "token_budget_limited",
+            reason,
+            at: nowIso(now),
+            runId: pendingRun.runId,
+          },
+        },
+        action: "token_budget_limited",
+        reason,
+      };
+    }
     if (nextGoal.turns >= nextGoal.maxTurns) {
       return {
         goal: {
@@ -825,10 +979,16 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
   };
 }
 
+export function tokenBudgetAllowsResume(goal: GoalState): boolean {
+  return goal.tokenBudget === undefined || (goal.usage?.totalTokens ?? 0) < goal.tokenBudget;
+}
+
 export function resumeGoal(goal: GoalState, now = new Date()): GoalState {
+  if (!tokenBudgetAllowsResume(goal)) return goal;
   return {
     ...goal,
     status: "active",
+    limitDetail: undefined,
     maxTurns: goal.turns >= goal.maxTurns ? goal.turns + DEFAULT_MAX_TURNS : goal.maxTurns,
     updatedAt: nowIso(now),
   };

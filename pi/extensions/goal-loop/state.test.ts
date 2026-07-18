@@ -7,17 +7,21 @@ import {
   createPendingRun,
   editGoalObjective,
   normalizeGoalState,
+  markUsageLimited,
   recordEvidence,
   recordRunCandidate,
+  recordRunUsage,
   releaseGoalLease,
   resumeGoal,
   settlePendingRun,
   shouldAutoContinue,
+  tokenBudgetAllowsResume,
 } from "./state.ts";
 
 const NOW = new Date("2026-07-12T00:00:00.000Z");
 const LATER = new Date("2026-07-12T00:05:00.000Z");
 const MUCH_LATER = new Date(NOW.getTime() + 4 * 60 * 60 * 1000 + 1);
+const USAGE = { input: 10, output: 20, cacheRead: 3, cacheWrite: 4, totalTokens: 37, cost: { total: 0.037 } };
 
 function decision(decision: "complete" | "continue" | "blocked" | "needs_user") {
   return {
@@ -87,7 +91,7 @@ test("editGoalObjective invalidates proof and pending work", () => {
         runId: "run-1",
       },
     ],
-    verification: { commands: ["npm test"], lastResult: "passed: passed" },
+    verification: { commands: ["npm test"], lastResult: "passed: passed", proofs: [] },
   };
 
   const edited = editGoalObjective(goal, "New objective", LATER);
@@ -244,7 +248,7 @@ test("completion rejects zero-command goals without current-run verification evi
 test("completion rejects a command whose latest current-run result failed", () => {
   let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
   goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
-  goal = { ...goal, verification: { commands: ["npm test"] } };
+  goal = { ...goal, verification: { commands: ["npm test"], proofs: [] } };
   goal = recordEvidence(goal, {
     kind: "verification",
     summary: "initial pass",
@@ -358,6 +362,95 @@ test("resumeGoal extends spent turn budgets", () => {
   assert.equal(resumed.status, "active");
   assert.equal(resumed.turns, 10);
   assert.equal(resumed.maxTurns, 20);
+});
+
+test("old schema-v2 states normalize without additive usage fields", () => {
+  const goal = normalizeGoalState({
+    schemaVersion: 2,
+    goalId: "old-goal",
+    goalRevision: 1,
+    storageRevision: 1,
+    projectRoot: "/repo/app",
+    objective: "Old state",
+    status: "active",
+    createdAt: NOW.toISOString(),
+    updatedAt: NOW.toISOString(),
+    turns: 0,
+    maxTurns: 10,
+    maxFailedVerificationAttempts: 3,
+    consecutiveFailedVerificationAttempts: 0,
+    verification: { commands: [] },
+    evidence: [],
+  });
+
+  assert.equal(goal.schemaVersion, 2);
+  assert.equal(goal.tokenBudget, undefined);
+  assert.equal(goal.usage, undefined);
+  assert.equal(goal.limitDetail, undefined);
+});
+
+test("autonomous usage is cumulative and recorded once per pending run", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  const once = recordRunUsage(goal, USAGE, LATER, "low-level-run-1");
+  const twice = recordRunUsage(once, USAGE, LATER, "low-level-run-1");
+
+  assert.deepEqual(once.usage, USAGE);
+  assert.deepEqual(once.pendingRun?.usageRunFingerprints, ["low-level-run-1"]);
+  assert.deepEqual(twice.usage, USAGE);
+});
+
+test("valid continue at the token budget releases run ownership and limits dispatch", () => {
+  let goal = acquireGoalLease({ ...createGoal("/repo", "Ship", NOW, "goal-1"), tokenBudget: 37 }, "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunUsage(goal, USAGE, LATER);
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("continue") }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "token_budget_limited");
+  assert.equal(settled.goal.status, "token_budget_limited");
+  assert.equal(settled.goal.pendingRun, undefined);
+  assert.equal(settled.goal.lease, undefined);
+  assert.equal(tokenBudgetAllowsResume(settled.goal), false);
+  assert.equal(resumeGoal(settled.goal, LATER).status, "token_budget_limited");
+  assert.equal(tokenBudgetAllowsResume({ ...settled.goal, tokenBudget: 38 }), true);
+  assert.equal(tokenBudgetAllowsResume({ ...settled.goal, tokenBudget: undefined }), true);
+});
+
+test("token budget resume gating applies to blocked and usage-limited states", () => {
+  const base = { ...createGoal("/repo", "Ship", NOW, "goal-1"), tokenBudget: 37, usage: USAGE };
+
+  for (const status of ["blocked", "usage_limited"] as const) {
+    const limited = { ...base, status };
+    assert.equal(tokenBudgetAllowsResume(limited), false);
+    assert.equal(tokenBudgetAllowsResume({ ...limited, tokenBudget: 36 }), false);
+    assert.equal(resumeGoal(limited, LATER).status, status);
+    assert.equal(tokenBudgetAllowsResume({ ...limited, tokenBudget: 38 }), true);
+    assert.equal(tokenBudgetAllowsResume({ ...limited, tokenBudget: undefined }), true);
+    assert.equal(resumeGoal({ ...limited, tokenBudget: 38 }, LATER).status, "active");
+    assert.equal(resumeGoal({ ...limited, tokenBudget: undefined }, LATER).status, "active");
+  }
+});
+
+test("a valid completion can complete after the configured token budget is reached", () => {
+  let goal = acquireGoalLease({ ...createGoal("/repo", "Ship", NOW, "goal-1"), tokenBudget: 37 }, "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordRunUsage(goal, USAGE, LATER);
+  goal = recordEvidence(goal, { kind: "verification", summary: "passed", outcome: "passed", goalRevision: 1, runId: "run-1" }, LATER);
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("complete"), evaluator: decision("complete") }, LATER);
+
+  const settled = settlePendingRun(goal, LATER);
+
+  assert.equal(settled.action, "complete");
+  assert.equal(settled.goal.status, "complete");
+});
+
+test("usage limit state is structured and human resume clears its detail", () => {
+  const limited = markUsageLimited(createGoal("/repo", "Ship", NOW, "goal-1"), "Provider limit.", LATER, { runId: "run-1", retryAfter: "5" });
+  assert.equal(limited.status, "usage_limited");
+  assert.equal(limited.limitDetail?.retryAfter, "5");
+  assert.equal(resumeGoal(limited, LATER).limitDetail, undefined);
 });
 
 test("shouldAutoContinue honors status and turn budget", () => {

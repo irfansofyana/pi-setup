@@ -1,6 +1,6 @@
 # goal-loop for Pi
 
-Local Pi extension template that adds a project-scoped `/goal` command inspired by Codex Goal mode and Claude Code `/goal`.
+Local Pi extension template that adds a Pi-working-root-scoped `/goal` command inspired by Codex Goal mode and Claude Code `/goal`.
 
 Requires Pi >=0.80.4. It uses `agent_end` only to record the result of a run, then uses `agent_settled` for one authoritative decision after retries, compaction, and queued follow-ups have finished.
 
@@ -22,13 +22,16 @@ Reload Pi:
 ## Commands
 
 ```text
-/goal <objective>          # create a project goal and start auto-continuing
-/goal status               # show objective, status, loop count, verification
+/goal                      # show local status or the latest archived achievement
+/goal status               # explicit status alias
+/goal <objective>          # create a working-root goal and start auto-continuing
+/goal list                 # list active goal slots across stored working roots
 /goal pause                # stop auto-continuing but keep state
-/goal resume               # resume a paused or stopped goal
-/goal clear                # remove this project's goal
+/goal resume               # resume a paused or human-released limited goal
+/goal clear                # remove this working root's active goal
 /goal edit <objective>     # replace the goal text
 /goal verify <command>     # add an explicit verification command
+/goal budget <tokens|off>  # set or disable an opt-in token budget
 ```
 
 ## Agent tools
@@ -70,9 +73,12 @@ Missing, malformed, duplicate, stale, or contradictory decisions stop safely at 
 
 ## How it works
 
-- Stores one active goal per project.
-- Persists state atomically in `~/.pi/agent/goal-loop/state/<project-key>.json` and appends audit entries to `~/.pi/agent/goal-loop/logs/<project-key>.jsonl`.
-- Reads old `~/.pi/agent/goal-loop/state.json` entries once and migrates them without changing that legacy file. A malformed project file is quarantined under `~/.pi/agent/goal-loop/corrupt/` instead of being silently discarded.
+- Keys scope by the normalized Pi working root (`ctx.cwd`), not a discovered Git worktree root or filesystem realpath. Each exact root key has one active goal and lease-exclusive execution.
+- Parallel safety requires launching each Pi session from a distinct Git worktree root. Different subdirectory launches or symlink spellings are distinct keys, so the extension does not detect them as the same worktree.
+- `/goal list` discovers active goal slots across stored working roots. Bare `/goal` remains local to the current root key.
+- Persists active state atomically in `~/.pi/agent/goal-loop/state/<root-key>.json` and appends audit entries to `~/.pi/agent/goal-loop/logs/<root-key>.jsonl`.
+- On completion, persists `complete`, writes one idempotent snapshot per goal ID at `~/.pi/agent/goal-loop/archive/<root-key>/<goal-id>.json`, then clears the active slot. A failed archive or clear leaves a recoverable completed active receipt.
+- Reads old `~/.pi/agent/goal-loop/state.json` entries once and migrates them without changing that legacy file. A malformed active state file is quarantined under `~/.pi/agent/goal-loop/corrupt/` instead of being silently discarded.
 - Keeps a renewable four-hour, session-owned lease. Another Pi session can inspect status but cannot dispatch a goal with a fresh lease.
 - Shows compact animated footer status like `goal ◐ 0/8`; the counter is auto-continue loops used, not total assistant turns.
 - Keeps the last 10 evidence entries from verification, notes, or tool observations.
@@ -81,7 +87,10 @@ Missing, malformed, duplicate, stale, or contradictory decisions stop safely at 
 - Keeps activation, pause/resume, objective edits, and budget changes human-owned. `update_goal` can only record evidence, add verification, or set `proposedStatus` (`complete`, `blocked`, or `needs_user`).
 - Records candidates at `agent_end`, then settles and (if safe) dispatches at `agent_settled` exactly once.
 - Never queues a continuation while Pi is non-idle or user messages are pending.
-- Stops when the goal is complete, blocked, needs user input, or reaches the turn budget.
+- Sums finalized Pi assistant usage (`input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, and `cost.total`) once per autonomous low-level run. Reasoning is not added separately because Pi already includes it in `output`; normal user turns are not counted.
+- Token budgets are human-owned, opt-in, and cumulative. A valid `continue` that reaches the configured budget becomes `token_budget_limited`; completion may still succeed. Raise or disable the budget before `/goal resume`.
+- A correlated provider HTTP 429 only becomes `usage_limited` when that autonomous run ends with `error` or `aborted`; successful retries remain transient. `/goal resume` from `usage_limited` is an explicit human retry.
+- Stops when the goal is complete, blocked, needs user input, reaches the turn budget, reaches its token budget, or ends on a terminal provider usage limit.
 
 ## Defaults
 
@@ -100,6 +109,7 @@ The extension does not bypass Pi permissions. Keep `pi-permission-system` enable
 - Evaluator spawning is prompt-mediated. The extension does not yet call `subagents:rpc:spawn` directly.
 - It does not schedule goals after Pi exits.
 - It does not run verification commands by itself; it tells the agent which commands to run.
+- Same-worktree detection is not automatic across subdirectory or symlink roots. For concurrent goals, create a distinct Git worktree and launch Pi from that worktree root.
 
 ## Smoke test
 

@@ -10,7 +10,7 @@ import {
   GoalStorageCorruptError,
   createGoalStorage,
 } from "./storage.ts";
-import { createGoal } from "./state.ts";
+import { createGoal, type GoalState } from "./state.ts";
 
 const NOW = new Date("2026-07-12T00:00:00.000Z");
 
@@ -25,6 +25,7 @@ function createStorageFixture(options: {
     legacyStatePath: join(root, "legacy", "state.json"),
     auditRoot: join(root, "logs"),
     corruptRoot: join(root, "corrupt"),
+    archiveRoot: join(root, "archive"),
     isProcessAlive: options.isProcessAlive ?? (() => false),
     getProcessStartToken: options.getProcessStartToken ?? (() => "test-process-start"),
     onLockAcquired: options.onLockAcquired,
@@ -257,12 +258,13 @@ test("clear cannot resurrect a legacy goal when audit append fails", () => {
     legacyStatePath,
     auditRoot: auditBlocker,
     corruptRoot: join(root, "corrupt"),
+    archiveRoot: join(root, "archive"),
     getProcessStartToken: () => "test-process-start",
   });
   writeFileSync(auditBlocker, "not a directory", "utf8");
   writeFileSync(legacyStatePath, JSON.stringify({ goals: { legacy: createGoal("/repo/app", "Legacy", NOW, "legacy-goal") } }), "utf8");
 
-  let committed;
+  let committed: GoalState | undefined;
   try {
     storage.write(createGoal("/repo/app", "Current", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() });
     assert.fail("write should report the audit failure");
@@ -270,12 +272,90 @@ test("clear cannot resurrect a legacy goal when audit append fails", () => {
     assert.ok(error instanceof GoalStorageAuditError);
     committed = error.committedState;
   }
-  assert.ok(committed);
+  if (!committed) assert.fail("state commit should be observable after the audit failure");
   assert.throws(
-    () => storage.clear("/repo/app", committed.storageRevision, { type: "goal_cleared", at: NOW.toISOString() }),
+    () => storage.clear("/repo/app", committed!.storageRevision, { type: "goal_cleared", at: NOW.toISOString() }),
     (error: unknown) => error instanceof GoalStorageAuditError && error.cleared,
   );
   assert.equal(storage.read("/repo/app"), undefined);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("archive snapshots are atomic, idempotent, private, and expose the latest completion", () => {
+  const { root, storage } = createStorageFixture();
+  const first = { ...createGoal("/repo/app", "First", NOW, "goal/one"), status: "complete" as const, storageRevision: 3 };
+  const laterAt = new Date(NOW.getTime() + 1_000).toISOString();
+  const second = { ...createGoal("/repo/app", "Second", NOW, "goal-two"), status: "complete" as const, storageRevision: 5, updatedAt: laterAt };
+
+  assert.equal(storage.archive(first).goalId, "goal/one");
+  assert.equal(storage.archive(first).goalId, "goal/one");
+  assert.equal(storage.archive({ ...first, storageRevision: 99 }).storageRevision, 3);
+  storage.archive(second);
+
+  assert.equal(storage.readLatestCompleted("/repo/app")?.goalId, "goal-two");
+  assert.equal(statSync(storage.archivePathFor("/repo/app", "goal/one")).mode & 0o777, 0o600);
+  assert.deepEqual(storage.listTemporaryFiles(), []);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("archive rejects conflicting normalized completion snapshots with the same goal ID", () => {
+  const { root, storage } = createStorageFixture();
+  const receipt = {
+    ...createGoal("/repo/app", "Original objective", NOW, "goal-one"),
+    status: "complete" as const,
+    storageRevision: 3,
+    lastEvaluation: { decision: "complete" as const, reason: "verified original", confidence: "high" as const },
+  };
+  storage.archive(receipt);
+
+  assert.throws(() => storage.archive({ ...receipt, objective: "Different objective" }), GoalStorageConflictError);
+  assert.throws(() => storage.archive({ ...receipt, goalRevision: 2 }), GoalStorageConflictError);
+  assert.throws(() => storage.archive({
+    ...receipt,
+    lastEvaluation: { ...receipt.lastEvaluation, reason: "different completion receipt" },
+  }), GoalStorageConflictError);
+  assert.equal(storage.readLatestCompleted("/repo/app")?.lastEvaluation?.reason, "verified original");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("listActive validates independent worktree state files and ignores lock, temp, and history files", () => {
+  const { root, storage } = createStorageFixture();
+  storage.write(createGoal("/repo/worktree-a", "A", NOW, "goal-a"), 0, { type: "created", at: NOW.toISOString() });
+  storage.write(createGoal("/repo/worktree-b", "B", NOW, "goal-b"), 0, { type: "created", at: NOW.toISOString() });
+  writeFileSync(join(root, "state", ".unrelated.lock"), "not-json", "utf8");
+  writeFileSync(join(root, "state", ".unrelated.tmp"), "not-json", "utf8");
+  writeFileSync(join(root, "state", ".unrelated.history"), "not-json", "utf8");
+
+  const listed = storage.listActive();
+
+  assert.deepEqual(listed.map((goal) => goal.projectRoot), ["/repo/worktree-a", "/repo/worktree-b"]);
+  assert.equal(storage.corruptFiles().length, 0);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("listActive quarantines a malformed active JSON file without touching unrelated files", () => {
+  const { root, storage } = createStorageFixture();
+  const unrelated = join(root, "state", ".unrelated.lock");
+  writeFileSync(unrelated, "not-json", "utf8");
+  writeFileSync(storage.statePathFor("/repo/bad"), "{not-json", "utf8");
+
+  assert.throws(() => storage.listActive(), GoalStorageCorruptError);
+  assert.equal(existsSync(unrelated), true);
+  assert.equal(storage.corruptFiles().length, 1);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("read accepts old schema-v2 active files without additive budget or usage fields", () => {
+  const { root, storage } = createStorageFixture();
+  const old = createGoal("/repo/app", "Old compatible goal", NOW, "old-goal");
+  const { tokenBudget: _budget, usage: _usage, limitDetail: _limit, ...persisted } = old;
+  writeFileSync(storage.statePathFor("/repo/app"), JSON.stringify({ ...persisted, storageRevision: 1 }), "utf8");
+
+  const read = storage.read("/repo/app");
+
+  assert.equal(read?.goalId, "old-goal");
+  assert.equal(read?.tokenBudget, undefined);
+  assert.equal(read?.usage, undefined);
   rmSync(root, { recursive: true, force: true });
 });
 
