@@ -21,10 +21,33 @@ import {
   sumAssistantUsage,
 } from "./index.ts";
 import { createGoalStorage } from "./storage.ts";
+import type { GoalEvaluator, GoalEvaluatorInput } from "./evaluator.ts";
 
 const NOW = new Date("2026-07-12T00:00:00.000Z");
 
-function createHarness(session = "session-a") {
+function evaluatorDecision(
+  input: GoalEvaluatorInput,
+  decision: "complete" | "continue" | "blocked" | "needs_user",
+  reason: string,
+) {
+  return {
+    goalId: input.goalId,
+    goalRevision: input.goalRevision,
+    runId: input.runId,
+    evaluationRequestId: input.evaluationRequestId,
+    decision,
+    reason,
+    confidence: "high" as const,
+  };
+}
+
+const passthroughEvaluator: GoalEvaluator = {
+  async evaluate(input) {
+    return { ok: true, record: evaluatorDecision(input, input.worker.decision, input.worker.reason) };
+  },
+};
+
+function createHarness(session = "session-a", evaluator: GoalEvaluator = passthroughEvaluator) {
   const root = mkdtempSync(join(tmpdir(), "goal-loop-index-"));
   const storage = createGoalStorage({
     storageRoot: join(root, "state"),
@@ -63,7 +86,7 @@ function createHarness(session = "session-a") {
     isIdle: () => idle,
     hasPendingMessages: () => pendingMessages,
   };
-  createGoalLoopExtension({ storage, config: { allowModelCreateGoal: false }, now: () => currentNow, randomId: () => `id-${++id}` })(api as any);
+  createGoalLoopExtension({ storage, config: { allowModelCreateGoal: false }, now: () => currentNow, randomId: () => `id-${++id}`, evaluator })(api as any);
   return {
     root, storage, tools, commands, handlers, sent, notifications, ctx,
     setIdle(value: boolean) { idle = value; },
@@ -310,6 +333,73 @@ test("agent_end records a candidate and agent_settled dispatches exactly once", 
   await harness.handlers.get("agent_settled")({}, harness.ctx);
   assert.equal(harness.sent.length, 2);
   assert.equal(harness.storage.read(harness.ctx.cwd)?.turns, 1);
+  harness.cleanup();
+});
+
+test("agent_settled invokes evaluator for a worker continue and dispatches", async () => {
+  const evaluatorCalls: GoalEvaluatorInput[] = [];
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls.push(input);
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  assert.equal(evaluatorCalls.length, 1);
+  assert.equal(evaluatorCalls[0].runId, initial.pendingRun!.runId);
+  assert.match(evaluatorCalls[0].transcriptExcerpt, /GOAL_WORKER_DECISION/);
+  assert.equal(harness.sent.length, 2);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.evaluatedRuns, 1);
+  harness.cleanup();
+});
+
+test("evaluator failure stops needs_user without dispatch", async () => {
+  const evaluator: GoalEvaluator = {
+    async evaluate() {
+      return { ok: false, reason: "Goal evaluator RPC did not respond." };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "needs_user");
+  assert.equal(harness.sent.length, 1);
+  harness.cleanup();
+});
+
+test("a stale evaluator result cannot settle an edited goal", async () => {
+  let releaseEvaluation!: () => void;
+  const evaluationGate = new Promise<void>((resolve) => { releaseEvaluation = resolve; });
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      await evaluationGate;
+      return { ok: true, record: evaluatorDecision(input, "complete", "Old revision complete.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Original objective", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+
+  const settling = harness.handlers.get("agent_settled")({}, harness.ctx);
+  await Promise.resolve();
+  await harness.commands.get("goal").handler("edit Revised objective", harness.ctx);
+  releaseEvaluation();
+  await settling;
+
+  const revised = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(revised.objective, "Revised objective");
+  assert.equal(revised.goalRevision, 2);
+  assert.equal(revised.status, "active");
+  assert.equal(revised.lastEvaluation, undefined);
   harness.cleanup();
 });
 

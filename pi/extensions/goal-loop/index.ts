@@ -19,6 +19,7 @@ import {
   recordGoalSteer,
   recordProviderUsageLimit,
   recordRunCandidate,
+  recordRunEvaluationContext,
   recordRunUsage,
   recordSteeredRunUsage,
   releaseGoalLease,
@@ -37,6 +38,7 @@ import {
   type GoalUsage,
 } from "./state.ts";
 import { parseCurrentRunCandidate } from "./evaluation.ts";
+import { createSubagentGoalEvaluator, type GoalEvaluator } from "./evaluator.ts";
 import {
   createGoalStorage,
   GoalStorageAuditError,
@@ -74,6 +76,7 @@ export interface GoalLoopExtensionOptions {
   config?: GoalLoopConfig;
   now?: () => Date;
   randomId?: () => string;
+  evaluator?: GoalEvaluator;
 }
 
 interface CreateGoalToolParams {
@@ -211,23 +214,6 @@ function decisionTemplate(goal: GoalState): string {
   });
 }
 
-export function buildEvaluatorInstructions(goal: GoalState): string {
-  const pending = goal.pendingRun;
-  const commands = goal.verification.commands.length
-    ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
-    : "- No explicit verification commands configured.";
-  if (!pending) return "No evaluator decision is needed until the coordinator dispatches a run.";
-  return [
-    "When proposing a terminal outcome, obtain an independent evaluator review if the Agent tool is available.",
-    "Call Agent with description exactly `Evaluate goal status` and include this request ID in its prompt:",
-    `Evaluation request ID: ${pending.evaluationRequestId}`,
-    "Evaluator output must be one exact JSON line and use these identifiers:",
-    `GOAL_EVALUATOR_DECISION: ${JSON.stringify({ goalId: goal.goalId, goalRevision: goal.goalRevision, runId: pending.runId, evaluationRequestId: pending.evaluationRequestId, decision: "continue", reason: "one short sentence", confidence: "high" })}`,
-    "Configured verification commands:",
-    commands,
-  ].join("\n");
-}
-
 function workerInstructions(goal: GoalState): string {
   return [
     "At the end of the response, include exactly one worker decision JSON line:",
@@ -271,7 +257,7 @@ export function buildContinuationPrompt(goal: GoalState): string {
     "Recent evidence:",
     evidence,
     "Use get_goal to inspect state. Use update_goal only to record evidence, add verification commands, or propose a terminal outcome.",
-    buildEvaluatorInstructions(goal),
+    "A separate coordinator-owned evaluator will inspect this run after it settles. Report progress honestly and emit only the worker decision record.",
     workerInstructions(goal),
   ].join("\n\n");
 }
@@ -289,6 +275,15 @@ function contentText(content: unknown): string {
     .filter((part): part is { type?: unknown; text?: unknown } => Boolean(part) && typeof part === "object")
     .map((part) => part.type === "text" && typeof part.text === "string" ? part.text : "")
     .join("\n");
+}
+
+export function buildRunEvaluationContext(messages: unknown[]): string {
+  return messages.flatMap((item) => {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant" && record?.role !== "toolResult") return [];
+    const text = contentText(record.content).trim();
+    return text ? [`[${String(record.role)}] ${text}`] : [];
+  }).join("\n\n").slice(-32_000);
 }
 
 function isCurrentContinuation(messages: unknown[], runId: string): boolean {
@@ -328,7 +323,7 @@ export function buildGoalSystemPrompt(goal: GoalState, autonomous = true): strin
   return [
     ...common,
     "Use get_goal to inspect state and update_goal to record evidence, add verification commands, or propose a terminal outcome.",
-    buildEvaluatorInstructions(goal),
+    "A separate coordinator-owned evaluator will inspect this run after it settles. Report progress honestly and emit only the worker decision record.",
     workerInstructions(goal),
   ].join("\n\n");
 }
@@ -550,6 +545,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
   const config = options.config ?? readGoalLoopConfig();
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? randomUUID;
+  const evaluator = options.evaluator ?? createSubagentGoalEvaluator(pi, { timeoutMs: 120_000 });
   const status = createGoalStatusAnimator(storage);
   // Tool authority belongs only to the accepted top-level continuation attempt
   // and is revoked at its first agent_end or first non-marker user message.
@@ -1037,6 +1033,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
           runId,
           evaluationRequestId: goal.pendingRun.evaluationRequestId,
         });
+    updated = recordRunEvaluationContext(updated, buildRunEvaluationContext(messages), timestamp);
     updated = recordRunCandidate(updated, candidate, timestamp);
     const providerReason = terminalUsageLimit ? `Provider usage limit ended the autonomous run with ${stopReason}.` : undefined;
     updated = recordProviderUsageLimit(updated, providerReason ? { reason: providerReason, retryAfter: correlatedProviderLimit?.retryAfter } : undefined, timestamp);
@@ -1045,7 +1042,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     status.sync(ctx);
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", async (_event, ctx) => {
     clearContinuationAuthority();
     clearAutonomousTracking();
     const projectRoot = ctx.cwd || process.cwd();
@@ -1080,6 +1077,40 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       return;
     }
     if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
+    const pending = goal.pendingRun;
+    const candidate = pending?.candidate;
+    if (pending && candidate?.protocol === "valid") {
+      const evaluation = await evaluator.evaluate({
+        goalId: goal.goalId,
+        goalRevision: pending.goalRevision,
+        runId: pending.runId,
+        evaluationRequestId: pending.evaluationRequestId,
+        objective: goal.objective,
+        steering: goal.steering.map((entry) => entry.text),
+        verificationCommands: [...goal.verification.commands],
+        evidence: [...goal.evidence],
+        transcriptExcerpt: pending.evaluationContext ?? "",
+        worker: candidate.worker,
+        cwd: projectRoot,
+      });
+      const evaluatedCandidate = evaluation.ok
+        ? { protocol: "valid" as const, source: candidate.source, worker: candidate.worker, evaluator: evaluation.record }
+        : { protocol: "malformed" as const, source: "assistant_message" as const, reason: evaluation.reason };
+      const evaluationTime = now();
+      const recorded = recordRunCandidate(goal, evaluatedCandidate, evaluationTime);
+      const persistedEvaluation = persistGoal(storage, recorded, auditEvent("evaluator_recorded", evaluation.ok ? evaluation.record.reason : evaluation.reason, ctx, evaluationTime), ctx);
+      if (!persistedEvaluation) return;
+      const refreshed = readGoal(storage, projectRoot, ctx);
+      if (!refreshed.ok || !refreshed.goal) return;
+      goal = refreshed.goal;
+      if (
+        goal.goalId !== persistedEvaluation.goalId ||
+        goal.goalRevision !== pending.goalRevision ||
+        goal.pendingRun?.runId !== pending.runId ||
+        goal.pendingRun.evaluationRequestId !== pending.evaluationRequestId ||
+        !ownsFreshPendingRun(goal, owner, now())
+      ) return;
+    }
     const settled = settlePendingRun(goal, timestamp);
     if (settled.action === "none") return;
     let persisted = persistGoal(storage, settled.goal, auditEvent("run_settled", settled.reason ?? "Settled goal run.", ctx, timestamp), ctx);

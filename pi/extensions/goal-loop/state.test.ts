@@ -12,6 +12,7 @@ import {
   recordEvidence,
   recordGoalSteer,
   recordRunCandidate,
+  recordRunEvaluationContext,
   recordRunUsage,
   releaseGoalLease,
   resumeGoal,
@@ -197,13 +198,25 @@ test("pending runs are recorded and settled exactly once", () => {
   goal = recordRunCandidate(goal, {
     protocol: "valid",
     worker: decision("continue"),
+    evaluator: decision("continue"),
   }, LATER);
 
   const settled = settlePendingRun(goal, LATER);
   assert.equal(settled.action, "dispatch");
   assert.equal(settled.goal.turns, 1);
+  assert.equal(settled.goal.evaluatedRuns, 1);
   assert.equal(settled.goal.pendingRun, undefined);
   assert.equal(settlePendingRun(settled.goal, LATER).action, "none");
+});
+
+test("run evaluation context is bounded to the latest transcript text", () => {
+  let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
+  goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+
+  goal = recordRunEvaluationContext(goal, `old-${"x".repeat(32_000)}-latest`, LATER);
+
+  assert.equal(goal.pendingRun?.evaluationContext?.length, 32_000);
+  assert.equal(goal.pendingRun?.evaluationContext?.endsWith("-latest"), true);
 });
 
 test("completion requires a fresh passing verification record", () => {
@@ -332,19 +345,26 @@ test("completion rejects a command whose latest current-run result failed", () =
   assert.match(settled.reason ?? "", /verification evidence is missing/i);
 });
 
-test("an evaluator terminal decision cannot override a worker continue decision", () => {
+test("evaluator complete may finish a worker continue when fresh proof exists", () => {
   let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
   goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
+  goal = recordEvidence(goal, {
+    kind: "verification",
+    summary: "npm test passed",
+    command: "npm test",
+    outcome: "passed",
+    runId: "run-1",
+  }, LATER);
   goal = recordRunCandidate(goal, {
     protocol: "valid",
     worker: decision("continue"),
-    evaluator: decision("complete"),
+    evaluator: { ...decision("complete"), reason: "All acceptance criteria hold." },
   }, LATER);
 
   const settled = settlePendingRun(goal, LATER);
 
-  assert.equal(settled.action, "needs_user");
-  assert.equal(settled.goal.status, "needs_user");
+  assert.equal(settled.action, "complete");
+  assert.equal(settled.goal.evaluatedRuns, 1);
 });
 
 test("conflicting model terminal proposals require a human at settlement", () => {
@@ -375,13 +395,15 @@ test("a matching evaluator continue overrides a worker terminal proposal", () =>
 
   assert.equal(settled.action, "dispatch");
   assert.equal(settled.goal.status, "active");
+  assert.equal(settled.goal.lastEvaluation?.reason, "continue reason");
+  assert.equal(settled.goal.evaluatedRuns, 1);
 });
 
 test("settlement blocks once structured verification failures reach the limit", () => {
   let goal = acquireGoalLease(createGoal("/repo", "Ship", NOW, "goal-1"), "session-a", NOW).goal;
   goal = { ...goal, consecutiveFailedVerificationAttempts: goal.maxFailedVerificationAttempts };
   goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
-  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("continue") }, LATER);
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("continue"), evaluator: decision("continue") }, LATER);
 
   const settled = settlePendingRun(goal, LATER);
 
@@ -459,7 +481,7 @@ test("valid continue at the token budget releases run ownership and limits dispa
   let goal = acquireGoalLease({ ...createGoal("/repo", "Ship", NOW, "goal-1"), tokenBudget: 37 }, "session-a", NOW).goal;
   goal = createPendingRun(goal, "session-a", NOW, { runId: "run-1", evaluationRequestId: "eval-1" }).goal;
   goal = recordRunUsage(goal, USAGE, LATER);
-  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("continue") }, LATER);
+  goal = recordRunCandidate(goal, { protocol: "valid", worker: decision("continue"), evaluator: decision("continue") }, LATER);
 
   const settled = settlePendingRun(goal, LATER);
 

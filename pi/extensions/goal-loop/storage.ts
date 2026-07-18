@@ -236,6 +236,7 @@ function assertStoredGoal(value: unknown, expectedProjectRoot: string): GoalStat
     if (!(value.pendingRun.toolProposalConflict === undefined || value.pendingRun.toolProposalConflict === true)) throw new TypeError("Pending goal proposal conflict is invalid.");
     if (value.pendingRun.usageRunFingerprints !== undefined && (!Array.isArray(value.pendingRun.usageRunFingerprints) || !value.pendingRun.usageRunFingerprints.every((fingerprint) => typeof fingerprint === "string" && Boolean(fingerprint)))) throw new TypeError("Pending goal usage fingerprints are invalid.");
     if (value.pendingRun.providerUsageLimit !== undefined && (!isRecord(value.pendingRun.providerUsageLimit) || typeof value.pendingRun.providerUsageLimit.reason !== "string" || !value.pendingRun.providerUsageLimit.reason.trim() || (value.pendingRun.providerUsageLimit.retryAfter !== undefined && typeof value.pendingRun.providerUsageLimit.retryAfter !== "string"))) throw new TypeError("Pending provider usage limit is invalid.");
+    if (value.pendingRun.evaluationContext !== undefined && (typeof value.pendingRun.evaluationContext !== "string" || value.pendingRun.evaluationContext.length > 32_000)) throw new TypeError("Pending goal evaluation context is invalid.");
     if (value.pendingRun.candidate !== undefined) assertRunCandidate(value.pendingRun.candidate);
   }
 

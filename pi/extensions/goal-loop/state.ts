@@ -89,6 +89,8 @@ export interface PendingGoalRun {
     reason: string;
     retryAfter?: string;
   };
+  /** Bounded assistant/tool transcript surfaced to the independent evaluator. */
+  evaluationContext?: string;
   candidate?: GoalRunCandidate;
 }
 
@@ -418,6 +420,9 @@ function normalizePendingRun(pendingRun: unknown): PendingGoalRun | undefined {
       retryAfter: typeof pendingRun.providerUsageLimit.retryAfter === "string" && pendingRun.providerUsageLimit.retryAfter ? pendingRun.providerUsageLimit.retryAfter : undefined,
     };
   }
+  if (typeof pendingRun.evaluationContext === "string") {
+    result.evaluationContext = pendingRun.evaluationContext.slice(-32_000);
+  }
   if (pendingRun.candidate) {
     result.candidate = normalizeRunCandidate(pendingRun.candidate);
   }
@@ -679,6 +684,17 @@ export function recordRunCandidate(goal: GoalState, candidate: GoalRunCandidate,
   };
 }
 
+export function recordRunEvaluationContext(goal: GoalState, context: string, now = new Date()): GoalState {
+  if (!goal.pendingRun) return goal;
+  const evaluationContext = context.slice(-32_000);
+  if (goal.pendingRun.evaluationContext === evaluationContext) return goal;
+  return {
+    ...goal,
+    pendingRun: { ...goal.pendingRun, evaluationContext },
+    updatedAt: nowIso(now),
+  };
+}
+
 export function recordRunUsage(goal: GoalState, usage: GoalUsage, now = new Date(), fingerprint = "current-run"): GoalState {
   const pendingRun = goal.pendingRun;
   if (!pendingRun || pendingRun.usageRunFingerprints?.includes(fingerprint)) return goal;
@@ -742,20 +758,32 @@ function freshVerificationEvidence(goal: GoalState, runId: string): boolean {
 }
 
 function candidateDecision(candidate: GoalRunCandidate | undefined): GoalDecision | undefined {
-  if (!candidate) return undefined;
-  if (candidate.protocol !== "valid") return candidate.protocol === "missing" || candidate.protocol === "malformed" || candidate.protocol === "stale" || candidate.protocol === "duplicate" || candidate.protocol === "conflict" ? "needs_user" : undefined;
-  return candidate.evaluator?.decision ?? candidate.worker.decision;
+  return candidate?.protocol === "valid" ? candidate.evaluator?.decision : undefined;
 }
 
 function candidateReason(candidate: GoalRunCandidate | undefined): string {
   if (!candidate) return "No candidate recorded.";
   if (candidate.protocol !== "valid") return candidate.reason;
-  return candidate.evaluator?.reason ?? candidate.worker.reason;
+  return candidate.evaluator?.reason ?? "Independent evaluator result is missing.";
 }
 
 function candidateConfidence(candidate: GoalRunCandidate | undefined): "low" | "medium" | "high" | undefined {
-  if (!candidate || candidate.protocol !== "valid") return undefined;
-  return candidate.evaluator?.confidence ?? candidate.worker.confidence;
+  return candidate?.protocol === "valid" ? candidate.evaluator?.confidence : undefined;
+}
+
+function stopForNeedsUser(goal: GoalState, reason: string, now: Date): SettleResult {
+  return {
+    goal: {
+      ...goal,
+      status: "needs_user",
+      lease: undefined,
+      pendingRun: undefined,
+      updatedAt: nowIso(now),
+      lastEvaluation: { decision: "needs_user", reason, confidence: "low" },
+    },
+    action: "needs_user",
+    reason,
+  };
 }
 
 export type SettleAction = "none" | "dispatch" | "complete" | "blocked" | "needs_user" | "usage_limited" | "token_budget_limited";
@@ -863,34 +891,17 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     };
   }
 
-  if (
-    candidate.evaluator &&
-    candidate.evaluator.decision !== candidate.worker.decision &&
-    !(candidate.worker.decision !== "continue" && candidate.evaluator.decision === "continue")
-  ) {
-    return {
-      goal: {
-        ...goal,
-        status: "needs_user",
-        lease: undefined,
-        pendingRun: undefined,
-        updatedAt: nowIso(now),
-        lastEvaluation: {
-          decision: "needs_user",
-          reason: "Worker and evaluator decisions conflict.",
-          confidence: "low",
-        },
-      },
-      action: "needs_user",
-      reason: "Worker and evaluator decisions conflict.",
-    };
+  if (!candidate.evaluator) {
+    return stopForNeedsUser(goal, "Independent evaluator result is missing.", now);
   }
+
+  const evaluatedGoal: GoalState = { ...goal, evaluatedRuns: goal.evaluatedRuns + 1 };
 
   const effectiveDecision = candidateDecision(candidate);
   if (!effectiveDecision) {
     return {
       goal: {
-        ...goal,
+        ...evaluatedGoal,
         status: "needs_user",
         lease: undefined,
         pendingRun: undefined,
@@ -901,10 +912,10 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     };
   }
 
-  if (goal.consecutiveFailedVerificationAttempts >= goal.maxFailedVerificationAttempts) {
+  if (evaluatedGoal.consecutiveFailedVerificationAttempts >= evaluatedGoal.maxFailedVerificationAttempts) {
     return {
       goal: {
-        ...goal,
+        ...evaluatedGoal,
         status: "blocked",
         lease: undefined,
         pendingRun: undefined,
@@ -922,7 +933,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
 
   if (effectiveDecision === "continue") {
     const nextGoal: GoalState = {
-      ...goal,
+      ...evaluatedGoal,
       turns: goal.turns + 1,
       lastEvaluation: {
         decision: "continue",
@@ -973,7 +984,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     if (!evaluator || evaluator.decision !== "complete" || evaluator.confidence !== "high") {
       return {
         goal: {
-          ...goal,
+          ...evaluatedGoal,
           status: "needs_user",
           lease: undefined,
           pendingRun: undefined,
@@ -991,7 +1002,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     if (!freshVerificationEvidence(goal, pendingRun.runId)) {
       return {
         goal: {
-          ...goal,
+          ...evaluatedGoal,
           status: "needs_user",
           lease: undefined,
           pendingRun: undefined,
@@ -1008,7 +1019,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     }
     return {
       goal: {
-        ...goal,
+        ...evaluatedGoal,
         status: "complete",
         lease: undefined,
         lastEvaluation: {
@@ -1029,7 +1040,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     if (!evaluator || evaluator.decision !== "blocked") {
       return {
         goal: {
-          ...goal,
+          ...evaluatedGoal,
           status: "needs_user",
           lease: undefined,
           pendingRun: undefined,
@@ -1046,7 +1057,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
     }
     return {
       goal: {
-        ...goal,
+        ...evaluatedGoal,
         status: "blocked",
         lease: undefined,
         lastEvaluation: {
@@ -1064,7 +1075,7 @@ export function settlePendingRun(goal: GoalState, now = new Date()): SettleResul
 
   return {
     goal: {
-      ...goal,
+      ...evaluatedGoal,
       status: "needs_user",
       lease: undefined,
       pendingRun: undefined,
