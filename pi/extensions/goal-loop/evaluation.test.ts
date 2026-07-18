@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseCurrentRunCandidate } from "./evaluation.ts";
+import { parseCurrentRunCandidate, parseEvaluatorDecision } from "./evaluation.ts";
 
 const EXPECTED = {
   goalId: "goal-1",
@@ -196,4 +196,43 @@ test("ignores evaluator output from unrelated Agent calls", () => {
 
   assert.equal(result.protocol, "valid");
   assert.equal(result.evaluator, undefined);
+});
+
+test("parses one exact correlated evaluator decision", () => {
+  const record = parseEvaluatorDecision(
+    `GOAL_EVALUATOR_DECISION: ${JSON.stringify({
+      ...EXPECTED,
+      decision: "continue",
+      reason: "verification is incomplete",
+      confidence: "high",
+    })}`,
+    EXPECTED,
+  );
+
+  assert.equal(record.decision, "continue");
+  assert.equal(record.confidence, "high");
+});
+
+test("rejects stale and duplicate direct evaluator decisions", () => {
+  assert.throws(
+    () => parseEvaluatorDecision(
+      `GOAL_EVALUATOR_DECISION: ${JSON.stringify({
+        ...EXPECTED,
+        runId: "run-stale",
+        decision: "continue",
+        reason: "stale",
+        confidence: "high",
+      })}`,
+      EXPECTED,
+    ),
+    /active goal run/i,
+  );
+
+  const marker = `GOAL_EVALUATOR_DECISION: ${JSON.stringify({
+    ...EXPECTED,
+    decision: "continue",
+    reason: "duplicate",
+    confidence: "high",
+  })}`;
+  assert.throws(() => parseEvaluatorDecision(`${marker}\n${marker}`, EXPECTED), /exactly one/i);
 });

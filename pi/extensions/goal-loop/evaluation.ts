@@ -126,6 +126,20 @@ function protocolError(protocol: Exclude<GoalRunCandidate["protocol"], "valid">,
   return { protocol, reason, source: "assistant_message" };
 }
 
+/** Parse one evaluator response produced outside the worker transcript. */
+export function parseEvaluatorDecision(text: string, expected: CurrentRunIds): GoalDecisionRecord {
+  const markers = markerPayloads(text, EVALUATOR_PREFIX);
+  if (markers.malformed || markers.payloads.length !== 1) {
+    throw new Error("Evaluator output must contain exactly one well-formed decision marker.");
+  }
+  const evaluator = parseRecord(markers.payloads[0], "evaluator");
+  if (!evaluator) throw new Error("Evaluator decision JSON does not match the required schema.");
+  if (!matchesCurrentRun(evaluator, expected)) {
+    throw new Error("Evaluator decision does not match the active goal run.");
+  }
+  return evaluator;
+}
+
 /** Parse only the messages supplied for the run being settled. */
 export function parseCurrentRunCandidate(messages: unknown[], expected: CurrentRunIds): GoalRunCandidate {
   const assistantTexts = messages
