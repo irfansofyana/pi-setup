@@ -34,6 +34,7 @@ interface BtwState {
 interface ResolvedModel {
   model: Model<Api>;
   auth: AuthOptions;
+  runtime?: PiModelRuntime;
 }
 
 const STATE_KEY = Symbol.for("pi-local-btw-state");
@@ -60,6 +61,7 @@ interface RuntimeAuthResult {
 
 interface PiModelRuntime {
   getAuth?: (model: Model<Api>) => Promise<RuntimeAuthResult | undefined>;
+  completeSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => Promise<AssistantMessage>;
 }
 
 function getState(): BtwState {
@@ -245,7 +247,8 @@ function cleanHeaders(headers: AuthOptions["headers"]): Record<string, string> |
 }
 
 async function authModel(ctx: ExtensionCommandContext, model: Model<Api>): Promise<ResolvedModel | undefined> {
-  const runtimeAuth = await runtimeFromContext(ctx)?.getAuth?.(model);
+  const runtime = runtimeFromContext(ctx);
+  const runtimeAuth = await runtime?.getAuth?.(model);
   if (runtimeAuth?.auth) {
     return {
       model: runtimeAuth.auth.baseUrl ? { ...model, baseUrl: runtimeAuth.auth.baseUrl } : model,
@@ -255,6 +258,7 @@ async function authModel(ctx: ExtensionCommandContext, model: Model<Api>): Promi
         env: runtimeAuth.env,
         baseUrl: runtimeAuth.auth.baseUrl,
       },
+      runtime,
     };
   }
 
@@ -291,11 +295,23 @@ function assistantText(message: AssistantMessage): string {
   return textFromContent(message.content).trim();
 }
 
+export function buildStreamOptions(auth: AuthOptions, signal: AbortSignal | undefined, thinkingLevel: ThinkingLevel | undefined): SimpleStreamOptions {
+  const options: SimpleStreamOptions = {
+    apiKey: auth.apiKey,
+    headers: auth.headers,
+    env: auth.env,
+    signal,
+  };
+  if (thinkingLevel) {
+    (options as unknown as { reasoning: ThinkingLevel }).reasoning = thinkingLevel;
+  }
+  return options;
+}
+
 async function askBtw(question: string, ctx: ExtensionCommandContext, config: BtwConfig): Promise<string> {
   const selected = await resolveModel(ctx, config);
   if (!selected) return "No available model for /btw. Configure Pi with /login or set a valid ~/.pi/agent/btw/config.json model.";
 
-  const completeSimple = await loadCompleteSimple();
   const history = getHistory(ctx);
   const conversationContext = buildConversationContext(readCompactionAwareContextItems(ctx), config.maxContextChars);
   const historyContext = buildHistoryContext(history, config.maxHistoryTurns);
@@ -304,18 +320,12 @@ async function askBtw(question: string, ctx: ExtensionCommandContext, config: Bt
     content: [{ type: "text", text: buildUserPrompt(question, conversationContext, historyContext) }],
     timestamp: Date.now(),
   };
-  const options: SimpleStreamOptions = {
-    apiKey: selected.auth.apiKey,
-    headers: selected.auth.headers,
-    env: selected.auth.env,
-    signal: ctx.signal,
-  };
-  const runtimeThinking = config.thinkingLevel;
-  if (runtimeThinking && runtimeThinking !== "off") {
-    (options as unknown as { reasoning: ThinkingLevel }).reasoning = runtimeThinking;
-  }
+  const context = { systemPrompt: SYSTEM_PROMPT, messages: [userMessage as Message], tools: [] };
+  const options = buildStreamOptions(selected.auth, ctx.signal, config.thinkingLevel);
 
-  const response = await completeSimple(selected.model, { systemPrompt: SYSTEM_PROMPT, messages: [userMessage as Message], tools: [] }, options);
+  const response = selected.runtime?.completeSimple
+    ? await selected.runtime.completeSimple(selected.model, context, options)
+    : await (await loadCompleteSimple())(selected.model, context, options);
   if (response.stopReason === "aborted") return "Cancelled.";
   if (response.stopReason === "error") return response.errorMessage ? `Error: ${response.errorMessage}` : "Error: /btw model call failed.";
   const answer = assistantText(response) || "(No answer text returned.)";

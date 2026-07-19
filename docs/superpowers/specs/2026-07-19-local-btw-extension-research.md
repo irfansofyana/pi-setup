@@ -95,6 +95,8 @@ Implementation review update:
 
 - Prefer Pi's current runtime auth resolver when available. The local extension reads `ctx.modelRegistry.runtime.getAuth(model)` via the exposed runtime object at execution time, carries resolved `apiKey`, `headers`, `env`, and `baseUrl`, and only falls back to the legacy `getApiKeyAndHeaders()` path for older Pi versions.
 - Prefer compaction-aware context. The local extension reads `buildSessionContext()` when available, then `buildContextEntries()`, and only falls back to raw branch/session entries. It serializes compaction and branch summaries explicitly so side answers keep the same retained context that the main agent has after `/compact`.
+- Prefer Pi's model runtime for the actual side request. The local extension now calls `runtime.completeSimple()` when available, so extension-registered provider transports are used instead of the standalone `pi-ai` compat registry.
+- Preserve explicit reasoning choices. The local extension passes `reasoning: "off"` when that is the inherited or configured thinking level, preventing provider default reasoning from silently re-enabling.
 
 V2 should add either:
 

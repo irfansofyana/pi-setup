@@ -55,6 +55,7 @@ Example:
 
 - This first local version has no bottom overlay and no tools.
 - It is safe for side chat because it does not call `pi.sendUserMessage()` and does not write `/btw` entries into the main session.
-- It prefers Pi's current runtime auth resolver, so custom provider headers, env, and base URLs survive better than raw API-key-only calls.
+- It prefers Pi's current model runtime for auth and completion, so extension-registered/native provider transports stay intact.
+- It passes `thinkingLevel: "off"` explicitly instead of omitting reasoning.
 - It prefers `buildSessionContext()`/`buildContextEntries()`, so compaction and branch summaries remain visible to side answers.
 - For tool-using side agents, build a later v2 that spawns a separate Pi JSON process or real sub-session.
