@@ -6,11 +6,7 @@ It makes a separate one-off model call using Pi's current auth/runtime configura
 
 ## Install
 
-```bash
-mkdir -p ~/.pi/agent/extensions
-rm -rf ~/.pi/agent/extensions/btw
-cp -r pi/extensions/btw ~/.pi/agent/extensions/
-```
+From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
 
 Then reload Pi:
 

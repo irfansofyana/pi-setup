@@ -2,9 +2,13 @@
 
 This repository documents a personal Pi coding-agent setup. Keep changes focused, practical, and easy to copy into a fresh machine.
 
-## Project shape
+## Documentation ownership
 
-- `README.md` is the source of truth for setup steps, extension installs, MCP config, skills, permissions, and troubleshooting.
+- `README.md` owns canonical nine-package npm manifest, minimal fresh-machine bootstrap, concise feature summary, configuration-scope summary, and stable topic index.
+- `docs/setup/` owns detailed setup, configuration, MCP, permissions, local-extension, skills/tools, operations, and troubleshooting guidance.
+- `skills/pi-setup/SKILL.md` references `README.md` and relevant topic docs; it must not duplicate package manifests or detailed commands.
+- Keep `README.md` between 180 and 250 lines. Move growing operational detail into existing `docs/setup/` topic files instead of adding new README sections.
+- Keep README-to-topic links and topic filenames stable. Update links deliberately when a rename is unavoidable.
 - `AGENTS.md` contains working instructions for future agent sessions in this repo.
 - Avoid adding generated artifacts, caches, secrets, or machine-specific session files.
 
@@ -31,29 +35,14 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 
 ## Current required Pi extensions
 
-Keep README install instructions aligned with these packages unless intentionally changing the setup:
-
-```bash
-pi install npm:pi-mcp-adapter
-pi install npm:@tintinweb/pi-subagents
-pi install npm:@gotgenes/pi-permission-system
-pi install npm:context-mode
-pi install npm:@juicesharp/rpiv-ask-user-question
-pi install npm:pi-markdown-preview
-pi install npm:@juicesharp/rpiv-todo
-# Headroom: install CLI with pipx/uv, then copy local template from pi/extensions/headroom
-# Hindsight: copy real local-daemon memory template from pi/extensions/hindsight
-# Managed Skills: copy OMP-style generated skills template from pi/extensions/managed-skills
-# BTW: copy local side-question extension template from pi/extensions/btw
-pi install npm:pi-9router-ext
-pi install npm:pi-stats-ext
-# Caveman: copy local terse-response extension template from pi/extensions/caveman
-```
+- Keep canonical npm package manifest only in `README.md`; change package membership and install forms there.
+- Keep topic docs and skill pointed at README manifest rather than duplicating commands.
+- Required repo-owned local templates remain Headroom, Hindsight, Managed Skills, Goal Loop, BTW, Caveman, signature UI, and `irfan-pi` theme. Detailed copy procedures belong in `docs/setup/`.
 
 ## Permission policy notes
 
 - `~/.pi/agent/extensions/pi-permission-system/config.json` is the global policy path.
-- README should include the current intended policy.
+- `docs/setup/permissions.md` should include current intended policy; README links to it.
 - Tavily, Exa, and Brave search tools should be allowed without approval.
 - Mutating/retention tools (`write`, `edit`, `manage_skill`, `learn`) and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.
 
@@ -67,5 +56,6 @@ For documentation-only changes:
 
 For real Pi config changes:
 
-- Update both the real config file and `README.md` if the change is meant to persist.
-- Tell the user to run `/reload` or restart Pi.
+- Update real config file and owning documentation (`README.md` for manifest/bootstrap/index; otherwise relevant `docs/setup/` topic) when change should persist.
+- Keep `skills/pi-setup/SKILL.md` procedural and reference owning docs instead of copying commands.
+- Tell user to run `/reload` or restart Pi.
