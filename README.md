@@ -7,7 +7,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with LLM provider login via `/login` |
-| Theme/UI | `irfan-gruvbox` theme and `pi-signature.ts` header/footer extension |
+| Theme/UI | `irfan-pi` theme and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter, Tavily, Exa, Brave Search, OAuth/bearer examples |
 | Subagents | `@tintinweb/pi-subagents` delegated-agent workflows |
 | Permissions | `@gotgenes/pi-permission-system` approval gates |
@@ -32,7 +32,8 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 ```text
 pi/
   themes/
-    irfan-gruvbox.json       # main theme
+    irfan-pi.json            # main theme
+    irfan-gruvbox.json       # alternate Gruvbox theme
     gruvbox-dark.json        # alternate/base theme
   extensions/
     pi-signature.ts          # signature header + compact footer
@@ -67,7 +68,7 @@ pi install npm:pi-stats-ext
 
 # 3) Install local templates from this repo
 mkdir -p ~/.pi/agent/themes ~/.pi/agent/extensions
-cp pi/themes/irfan-gruvbox.json ~/.pi/agent/themes/
+cp pi/themes/irfan-pi.json ~/.pi/agent/themes/
 cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
 cp -r pi/extensions/headroom ~/.pi/agent/extensions/
 cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
@@ -96,11 +97,11 @@ Inside Pi:
 /settings
 ```
 
-Set theme to `irfan-gruvbox` in `/settings`, or in Pi settings:
+Set theme to `irfan-pi` in `/settings`, or in Pi settings:
 
 ```json
 {
-  "theme": "irfan-gruvbox"
+  "theme": "irfan-pi"
 }
 ```
 
@@ -141,7 +142,7 @@ Run `/reload` after install.
 
 | Template | Copy command | Notes |
 | --- | --- | --- |
-| Theme | `cp pi/themes/irfan-gruvbox.json ~/.pi/agent/themes/` | Main Gruvbox/OMP-style theme |
+| Theme | `cp pi/themes/irfan-pi.json ~/.pi/agent/themes/` | Main blue/cobalt theme; standalone JSON with no runtime dependencies |
 | Signature UI | `cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/` | Header, spinner, compact footer |
 | Headroom | `cp -r pi/extensions/headroom ~/.pi/agent/extensions/` | Needs Headroom CLI |
 | Hindsight | `cp -r pi/extensions/hindsight ~/.pi/agent/extensions/` | Needs local daemon |
@@ -371,14 +372,15 @@ Remove or migrate legacy `~/.pi/agent/pi-permissions.jsonc` if warnings appear.
 
 Included:
 
-- `irfan-gruvbox`: Gruvbox Dark with OMP-inspired neutral tool cards, readable code output, softer greens.
-- `pi-signature.ts`: gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, compact footer statuses.
+- `irfan-pi`: Main blue/cobalt theme with inline color variables and export colors. Standalone; no runtime dependencies.
+- `irfan-gruvbox`: Alternate Gruvbox Dark theme with OMP-inspired neutral tool cards, readable code output, softer greens.
+- `pi-signature.ts`: animated gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, compact footer statuses. Header animation pauses outside live viewport to preserve terminal scrollback.
 
 Install:
 
 ```bash
 mkdir -p ~/.pi/agent/themes ~/.pi/agent/extensions
-cp pi/themes/irfan-gruvbox.json ~/.pi/agent/themes/
+cp pi/themes/irfan-pi.json ~/.pi/agent/themes/
 cp pi/extensions/pi-signature.ts ~/.pi/agent/extensions/
 ```
 
@@ -903,7 +905,8 @@ Use the notion-cli skill to list Notion API endpoints.
 | Headroom offline | Run `/headroom doctor`, then `/headroom start` |
 | Hindsight offline | Run `/hindsight diagnose`, check daemon port/config |
 | Duplicate `/caveman` | Remove old external package or local duplicate; keep only repo template |
-| Theme not applied | Confirm `irfan-gruvbox.json` copied and selected in `/settings` |
+| Transcript blinks or will not scroll | Update `pi-signature.ts`; offscreen header animation must pause to preserve scrollback |
+| Theme not applied | Confirm `irfan-pi.json` copied and selected in `/settings` |
 
 ## Maintenance
 

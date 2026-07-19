@@ -3,7 +3,7 @@ import { userInfo } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme, WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 
 const AUTHOR_CREDIT = "crafted from Irfan's Pi setup";
 const RESET = "\x1b[0m";
@@ -12,10 +12,10 @@ const BOLD = "\x1b[1m";
 type Rgb = [number, number, number];
 
 const PALETTE: Rgb[] = [
-	[254, 128, 25],
-	[250, 189, 47],
-	[251, 241, 199],
-	[250, 189, 47],
+	[79, 111, 216], // cobalt
+	[72, 167, 255], // azure
+	[86, 214, 231], // cyan
+	[123, 134, 242], // indigo
 ];
 
 const PI_LINES = [
@@ -27,6 +27,22 @@ const PI_LINES = [
 	"      ▄███        ███▄    ",
 	"     ▀▀▀▀          ▀▀▀▀   ",
 ];
+
+const ORBIT_WIDTH = 30;
+const ORBIT_HEIGHT = 9;
+const ORBIT_INTERVAL_MS = 140;
+type OrbitPoint = readonly [x: number, y: number];
+
+function buildOrbitPath(): OrbitPoint[] {
+	const path: OrbitPoint[] = [];
+	for (let x = 0; x < ORBIT_WIDTH; x++) path.push([x, 0]);
+	for (let y = 1; y < ORBIT_HEIGHT; y++) path.push([ORBIT_WIDTH - 1, y]);
+	for (let x = ORBIT_WIDTH - 2; x >= 0; x--) path.push([x, ORBIT_HEIGHT - 1]);
+	for (let y = ORBIT_HEIGHT - 2; y > 0; y--) path.push([0, y]);
+	return path;
+}
+
+const ORBIT_PATH = buildOrbitPath();
 
 const WORKING_JOKES = [
 	"Real programmers test in production.",
@@ -130,11 +146,23 @@ function center(line: string, width: number): string {
 	return truncateToWidth(`${" ".repeat(pad)}${line}`, width, "");
 }
 
-function centerPlain(line: string, width: number): string {
-	return center(truncateToWidth(line, width, ""), width);
+function orbitLogoLines(frame: number, width: number): string[] {
+	const canvas = Array.from({ length: ORBIT_HEIGHT }, () => Array<string>(ORBIT_WIDTH).fill(" "));
+
+	for (let row = 0; row < PI_LINES.length; row++) {
+		const chars = [...PI_LINES[row]!];
+		for (let column = 0; column < chars.length; column++) canvas[row + 1]![column + 2] = chars[column]!;
+	}
+
+	const primary = ORBIT_PATH[frame % ORBIT_PATH.length]!;
+	const secondary = ORBIT_PATH[(frame + Math.floor(ORBIT_PATH.length / 2)) % ORBIT_PATH.length]!;
+	canvas[primary[1]]![primary[0]] = "✦";
+	canvas[secondary[1]]![secondary[0]] = "·";
+
+	return canvas.map((row, rowIndex) => center(gradientText(row.join(""), rowIndex * 0.025), width));
 }
 
-function signatureLines(owner: string, theme: Theme, width: number): string[] {
+function signatureLines(owner: string, theme: Theme, width: number, frame = 0): string[] {
 	const title = `${BOLD}${theme.fg("accent", owner)}${RESET}`;
 	const credit = theme.fg("muted", AUTHOR_CREDIT);
 
@@ -143,20 +171,34 @@ function signatureLines(owner: string, theme: Theme, width: number): string[] {
 		return [center(`${mark} ${title}`, width), center(credit, width)];
 	}
 
-	return [
-		...PI_LINES.map((line, row) => gradientText(centerPlain(line, width), row * 0.025)),
-		center(title, width),
-		center(credit, width),
-	];
+	return [...orbitLogoLines(frame, width), center(title, width), center(credit, width)];
 }
 
 function signatureHeader(owner: string) {
-	return (_tui: unknown, theme: Theme) => ({
-		render(width: number): string[] {
-			return ["", ...signatureLines(owner, theme, width), ""];
-		},
-		invalidate() {},
-	});
+	return (tui: TUI, theme: Theme) => {
+		let frame = 0;
+		let animationVisible = true;
+		const timer = setInterval(() => {
+			const width = tui.terminal.columns;
+			// Updating an offscreen header makes Pi fully redraw and clear terminal scrollback.
+			const headerInLiveViewport = tui.render(width).length <= tui.terminal.rows;
+			if (!animationVisible || !headerInLiveViewport) return;
+
+			frame = (frame + 1) % ORBIT_PATH.length;
+			tui.requestRender();
+		}, ORBIT_INTERVAL_MS);
+
+		return {
+			render(width: number): string[] {
+				animationVisible = width >= 34;
+				return ["", ...signatureLines(owner, theme, width, frame), ""];
+			},
+			invalidate() {},
+			dispose() {
+				clearInterval(timer);
+			},
+		};
+	};
 }
 
 function shuffled<T>(items: readonly T[]): T[] {
