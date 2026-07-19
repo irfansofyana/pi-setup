@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -18,6 +18,7 @@ function createStorageFixture(options: {
   isProcessAlive?: (pid: number) => boolean;
   getProcessStartToken?: (pid: number) => string | undefined;
   onLockAcquired?: (lockPath: string) => void;
+  onStaleLockObserved?: (lockPath: string) => void;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "goal-loop-storage-"));
   const storage = createGoalStorage({
@@ -29,6 +30,7 @@ function createStorageFixture(options: {
     isProcessAlive: options.isProcessAlive ?? (() => false),
     getProcessStartToken: options.getProcessStartToken ?? (() => "test-process-start"),
     onLockAcquired: options.onLockAcquired,
+    onStaleLockObserved: options.onStaleLockObserved,
   });
   return { root, storage };
 }
@@ -109,11 +111,81 @@ test("write reclaims a crash-stale project lock", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("write reclaims a stale lock whose JSON identity is incomplete", () => {
+  const { root, storage } = createStorageFixture();
+  const statePath = storage.statePathFor("/repo/app");
+  const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
+  writeFileSync(lockPath, JSON.stringify({ pid: 1 }), "utf8");
+  utimesSync(lockPath, new Date(0), new Date(0));
+
+  const written = storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() });
+
+  assert.equal(written.storageRevision, 1);
+  assert.equal(existsSync(`${lockPath}.reclaim`), false);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("an incomplete stale lock still preserves a live PID owner", () => {
+  const livePid = 4242;
+  const { root, storage } = createStorageFixture({ isProcessAlive: (pid) => pid === livePid });
+  const statePath = storage.statePathFor("/repo/app");
+  const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
+  writeFileSync(lockPath, JSON.stringify({ pid: livePid }), "utf8");
+  utimesSync(lockPath, new Date(0), new Date(0));
+
+  assert.throws(
+    () => storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() }),
+    /locked by another live writer/i,
+  );
+  assert.equal(readFileSync(lockPath, "utf8"), JSON.stringify({ pid: livePid }));
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("write fails closed on a stale lock with no process identity", () => {
+  const { root, storage } = createStorageFixture();
+  const statePath = storage.statePathFor("/repo/app");
+  const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
+  writeFileSync(lockPath, "partial-json", "utf8");
+  utimesSync(lockPath, new Date(0), new Date(0));
+
+  assert.throws(
+    () => storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() }),
+    (error: unknown) => error instanceof GoalStorageConflictError && error.manualCleanupPath === lockPath,
+  );
+  assert.equal(readFileSync(lockPath, "utf8"), "partial-json");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("stale-lock recovery never unlinks a replacement lock inode", () => {
+  let replaced = false;
+  const { root, storage } = createStorageFixture({
+    onStaleLockObserved: (lockPath) => {
+      if (replaced) return;
+      replaced = true;
+      rmSync(lockPath);
+      writeFileSync(lockPath, JSON.stringify({ pid: 1 }), "utf8");
+      utimesSync(lockPath, new Date(0), new Date(0));
+    },
+  });
+  const statePath = storage.statePathFor("/repo/app");
+  const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
+  writeFileSync(lockPath, "stale-lock", "utf8");
+  utimesSync(lockPath, new Date(0), new Date(0));
+
+  assert.throws(() => storage.write(
+    createGoal("/repo/app", "Ship", NOW, "goal-1"),
+    0,
+    { type: "goal_created", at: NOW.toISOString() },
+  ), GoalStorageConflictError);
+  assert.equal(readFileSync(lockPath, "utf8"), JSON.stringify({ pid: 1 }));
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("stale lock is reclaimed when its PID was reused by a different process generation", () => {
   const reusedPid = 4242;
   const { root, storage } = createStorageFixture({
     isProcessAlive: (pid) => pid === reusedPid,
-    getProcessStartToken: (pid) => pid === reusedPid ? "replacement-process" : "writer-process",
+    getProcessStartToken: (pid) => pid === reusedPid ? "v1:replacement-process" : "v1:writer-process",
   });
   const statePath = storage.statePathFor("/repo/app");
   const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
@@ -121,7 +193,7 @@ test("stale lock is reclaimed when its PID was reused by a different process gen
     ownerId: "dead-writer",
     createdAt: "2026-07-11T00:00:00.000Z",
     pid: reusedPid,
-    processStartToken: "original-process",
+    processStartToken: "v1:original-process",
   }), "utf8");
 
   const written = storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() });
@@ -142,7 +214,7 @@ test("an unknown process-generation lookup preserves a live stale lock", () => {
     ownerId: "unknown-owner",
     createdAt: "2026-07-11T00:00:00.000Z",
     pid: livePid,
-    processStartToken: "original-process",
+    processStartToken: "v1:original-process",
   }), "utf8");
 
   assert.throws(
@@ -152,7 +224,29 @@ test("an unknown process-generation lookup preserves a live stale lock", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a reused PID does not keep a crashed stale-lock reclaimer authoritative", () => {
+test("a live PID with a legacy locale-sensitive token remains authoritative", () => {
+  const livePid = 4242;
+  const { root, storage } = createStorageFixture({
+    isProcessAlive: (pid) => pid === livePid,
+    getProcessStartToken: () => "v1:canonical-current-token",
+  });
+  const statePath = storage.statePathFor("/repo/app");
+  const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
+  writeFileSync(lockPath, JSON.stringify({
+    ownerId: "legacy-owner",
+    createdAt: "2026-07-11T00:00:00.000Z",
+    pid: livePid,
+    processStartToken: "locale-sensitive-legacy-token",
+  }), "utf8");
+
+  assert.throws(
+    () => storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() }),
+    /locked by another live writer/i,
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("a crashed stale-lock reclaimer remains fail-closed despite PID reuse", () => {
   const reusedPid = 4242;
   const { root, storage } = createStorageFixture({
     isProcessAlive: (pid) => pid === reusedPid,
@@ -169,13 +263,14 @@ test("a reused PID does not keep a crashed stale-lock reclaimer authoritative", 
     pid: reusedPid,
     processStartToken: "original-process",
     claimedAt: createdAt,
-    lock: { ownerId: "dead-writer", createdAt, dev: lockStat.dev, ino: lockStat.ino },
+    lock: { pid: 1, ownerId: "dead-writer", createdAt, dev: lockStat.dev, ino: lockStat.ino },
   }), "utf8");
 
-  const written = storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() });
-
-  assert.equal(written.storageRevision, 1);
-  assert.equal(existsSync(reclaimPath), false);
+  assert.throws(
+    () => storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() }),
+    /recovery is already claimed/i,
+  );
+  assert.equal(existsSync(reclaimPath), true);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -214,7 +309,7 @@ test("stale-lock recovery respects an old claim held by a live reclaimer", () =>
     ownerId: "live-reclaimer",
     pid: livePid,
     claimedAt: "2026-07-01T00:00:00.000Z",
-    lock: { ownerId: "dead-writer", createdAt: "2026-07-11T00:00:00.000Z", dev: lockStat.dev, ino: lockStat.ino },
+    lock: { pid: 1, ownerId: "dead-writer", createdAt: "2026-07-11T00:00:00.000Z", dev: lockStat.dev, ino: lockStat.ino },
   }), "utf8");
 
   assert.throws(
@@ -226,7 +321,7 @@ test("stale-lock recovery respects an old claim held by a live reclaimer", () =>
   rmSync(root, { recursive: true, force: true });
 });
 
-test("stale-lock recovery reclaims a dead recovery claimant", () => {
+test("stale-lock recovery preserves a dead recovery claimant for manual cleanup", () => {
   const { root, storage } = createStorageFixture();
   const statePath = storage.statePathFor("/repo/app");
   const lockPath = join(root, "state", `.${basename(statePath, ".json")}.lock`);
@@ -238,14 +333,14 @@ test("stale-lock recovery reclaims a dead recovery claimant", () => {
     ownerId: "crashed-reclaimer",
     pid: 4242,
     claimedAt: createdAt,
-    lock: { ownerId: "dead-writer", createdAt, dev: lockStat.dev, ino: lockStat.ino },
+    lock: { pid: 1, ownerId: "dead-writer", createdAt, dev: lockStat.dev, ino: lockStat.ino },
   }), "utf8");
 
-  const written = storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() });
-
-  assert.equal(written.storageRevision, 1);
-  assert.equal(storage.read("/repo/app")?.goalId, "goal-1");
-  assert.equal(existsSync(reclaimPath), false);
+  assert.throws(
+    () => storage.write(createGoal("/repo/app", "Ship", NOW, "goal-1"), 0, { type: "goal_created", at: NOW.toISOString() }),
+    /recovery is already claimed/i,
+  );
+  assert.equal(existsSync(reclaimPath), true);
   rmSync(root, { recursive: true, force: true });
 });
 

@@ -12,7 +12,10 @@ import {
   expireStalePendingRun,
   goalKey,
   goalStatusText,
+  MAX_GOAL_EVIDENCE_SUMMARY_CHARS,
   MAX_GOAL_OBJECTIVE_CHARS,
+  MAX_VERIFICATION_COMMAND_CHARS,
+  MAX_VERIFICATION_COMMANDS,
   normalizeGoalState,
   normalizeGoalUsage,
   recordEvidence,
@@ -38,7 +41,7 @@ import {
   type GoalUsage,
 } from "./state.ts";
 import { parseCurrentRunCandidate } from "./evaluation.ts";
-import { createSubagentGoalEvaluator, type GoalEvaluator } from "./evaluator.ts";
+import { createSubagentGoalEvaluator, type GoalEvaluator, type GoalEvaluatorInput } from "./evaluator.ts";
 import {
   createGoalStorage,
   GoalStorageAuditError,
@@ -286,6 +289,62 @@ export function buildRunEvaluationContext(messages: unknown[]): string {
   }).join("\n\n").slice(-32_000);
 }
 
+function buildGoalEvaluatorInput(
+  goal: GoalState & { pendingRun: NonNullable<GoalState["pendingRun"]> },
+  projectRoot: string,
+): GoalEvaluatorInput | undefined {
+  const pending = goal.pendingRun;
+  const candidate = pending.candidate;
+  if (candidate?.protocol !== "valid") return undefined;
+  return {
+    goalId: goal.goalId,
+    goalRevision: pending.goalRevision,
+    runId: pending.runId,
+    evaluationRequestId: pending.evaluationRequestId,
+    objective: goal.objective,
+    steering: goal.steering.map((entry) => entry.text),
+    verificationCommands: [...goal.verification.commands],
+    verificationProofs: goal.verification.proofs.filter((proof) =>
+      proof.goalRevision === pending.goalRevision && proof.runId === pending.runId
+    ),
+    evidence: [...goal.evidence],
+    transcriptExcerpt: pending.evaluationContext ?? "",
+    worker: candidate.worker,
+    cwd: projectRoot,
+  };
+}
+
+function evaluatorInputKey(input: GoalEvaluatorInput): string {
+  return JSON.stringify(input);
+}
+
+function evaluatorInputLimitReason(input: GoalEvaluatorInput): string | undefined {
+  if (input.objective.length > MAX_GOAL_OBJECTIVE_CHARS) {
+    return "Persisted goal objective exceeds evaluator input limits.";
+  }
+  if (input.verificationCommands.length > MAX_VERIFICATION_COMMANDS ||
+    input.verificationCommands.some((command) => command.length > MAX_VERIFICATION_COMMAND_CHARS)) {
+    return "Persisted verification commands exceed evaluator input limits.";
+  }
+  if (input.verificationProofs.length > MAX_VERIFICATION_COMMANDS + 1 || input.verificationProofs.some((proof) =>
+    proof.summary.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS ||
+    (proof.command?.length ?? 0) > MAX_VERIFICATION_COMMAND_CHARS
+  )) {
+    return "Persisted verification proofs exceed evaluator input limits.";
+  }
+  if (input.evidence.some((entry) =>
+    entry.summary.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS ||
+    (entry.command?.length ?? 0) > MAX_VERIFICATION_COMMAND_CHARS
+  )) {
+    return "Persisted goal evidence exceeds evaluator input limits.";
+  }
+  if (input.steering.some((entry) => entry.length > MAX_GOAL_OBJECTIVE_CHARS) ||
+    input.worker.reason.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS) {
+    return "Persisted goal context exceeds evaluator input limits.";
+  }
+  return undefined;
+}
+
 function isCurrentContinuation(messages: unknown[], runId: string): boolean {
   for (const message of [...messages].reverse()) {
     const record = messageRecord(message);
@@ -385,6 +444,10 @@ function storageError(ctx: ExtensionContext, error: unknown): void {
     return;
   }
   if (error instanceof GoalStorageConflictError) {
+    if (error.manualCleanupPath) {
+      notify(ctx, `Goal loop storage is blocked by an orphaned lock. After verifying no Pi process is using this goal, remove: ${error.manualCleanupPath}`, "error");
+      return;
+    }
     notify(ctx, "Goal loop state changed in another session. Reload status and retry; no continuation was sent.", "warning");
     return;
   }
@@ -639,12 +702,12 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     ],
     parameters: Schema.Object({
       proposedStatus: Schema.Optional(Schema.Enum(["complete", "blocked", "needs_user"] as const)),
-      reason: Schema.Optional(Schema.String()),
-      evidence: Schema.Optional(Schema.String()),
+      reason: Schema.Optional(Schema.String({ maxLength: MAX_GOAL_EVIDENCE_SUMMARY_CHARS })),
+      evidence: Schema.Optional(Schema.String({ maxLength: MAX_GOAL_EVIDENCE_SUMMARY_CHARS })),
       evidenceKind: Schema.Optional(Schema.Enum(["note", "verification", "tool"] as const)),
-      command: Schema.Optional(Schema.String()),
+      command: Schema.Optional(Schema.String({ maxLength: MAX_VERIFICATION_COMMAND_CHARS })),
       outcome: Schema.Optional(Schema.Enum(["passed", "failed", "unknown"] as const)),
-      verificationCommand: Schema.Optional(Schema.String()),
+      verificationCommand: Schema.Optional(Schema.String({ maxLength: MAX_VERIFICATION_COMMAND_CHARS })),
     }) as any,
     executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) {
@@ -668,14 +731,30 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       if (input.verificationCommand !== undefined && !verificationCommand) {
         return { content: [{ type: "text", text: "Verification command must not be empty." }], details: { error: "invalid_verification_command" } };
       }
+      if (verificationCommand && verificationCommand.length > MAX_VERIFICATION_COMMAND_CHARS) {
+        return { content: [{ type: "text", text: `Verification command must be ${MAX_VERIFICATION_COMMAND_CHARS} characters or fewer.` }], details: { error: "invalid_verification_command" } };
+      }
+      if (verificationCommand && !goal.verification.commands.includes(verificationCommand) && goal.verification.commands.length >= MAX_VERIFICATION_COMMANDS) {
+        return { content: [{ type: "text", text: `A goal may configure at most ${MAX_VERIFICATION_COMMANDS} verification commands.` }], details: { error: "too_many_verification_commands" } };
+      }
       if (verificationCommand) {
         goal = { ...goal, verification: { ...goal.verification, commands: [...new Set([...goal.verification.commands, verificationCommand])] }, updatedAt: timestamp.toISOString() };
       }
       const evidenceCommand = typeof input.command === "string" ? input.command.trim() || undefined : undefined;
+      if (evidenceCommand && evidenceCommand.length > MAX_VERIFICATION_COMMAND_CHARS) {
+        return { content: [{ type: "text", text: `Evidence command must be ${MAX_VERIFICATION_COMMAND_CHARS} characters or fewer.` }], details: { error: "invalid_evidence_command" } };
+      }
+      if (evidenceCommand && !goal.verification.commands.includes(evidenceCommand)) {
+        return { content: [{ type: "text", text: "Verification evidence must reference a configured verification command." }], details: { error: "unconfigured_evidence_command" } };
+      }
       if (input.evidence || evidenceCommand || input.outcome) {
+        const summary = input.evidence ?? input.reason ?? "Goal evidence recorded.";
+        if (summary.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS) {
+          return { content: [{ type: "text", text: `Evidence summary must be ${MAX_GOAL_EVIDENCE_SUMMARY_CHARS} characters or fewer.` }], details: { error: "invalid_evidence" } };
+        }
         goal = recordEvidence(goal, {
           kind: input.evidenceKind ?? (evidenceCommand ? "verification" : "note"),
-          summary: input.evidence ?? input.reason ?? "Goal evidence recorded.",
+          summary,
           command: evidenceCommand,
           outcome: input.outcome,
           goalRevision: goal.goalRevision,
@@ -790,7 +869,7 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
           notify(ctx, `Goal cannot resume until its token budget is raised above ${existing.usage?.totalTokens ?? 0} or disabled with /goal budget off.`, "warning");
           return;
         }
-        let goal = resumeGoal({ ...existing, pendingRun: undefined }, timestamp);
+        let goal = resumeGoal({ ...existing, pendingRun: undefined, pendingSteer: undefined }, timestamp);
         const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
         const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
         if (prepared?.goal) goal = prepared.goal;
@@ -859,6 +938,14 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       if (parsed.command === "verify") {
         if (!parsed.value) {
           notify(ctx, "Usage: /goal verify <command>", "warning");
+          return;
+        }
+        if (parsed.value.length > MAX_VERIFICATION_COMMAND_CHARS) {
+          notify(ctx, `Verification command must be ${MAX_VERIFICATION_COMMAND_CHARS} characters or fewer.`, "warning");
+          return;
+        }
+        if (!existing.verification.commands.includes(parsed.value) && existing.verification.commands.length >= MAX_VERIFICATION_COMMANDS) {
+          notify(ctx, `A goal may configure at most ${MAX_VERIFICATION_COMMANDS} verification commands.`, "warning");
           return;
         }
         const goal = {
@@ -1078,38 +1165,108 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     }
     if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
     const pending = goal.pendingRun;
-    const candidate = pending?.candidate;
-    if (pending && candidate?.protocol === "valid") {
-      const evaluation = await evaluator.evaluate({
+    if (pending?.candidate?.protocol === "valid") {
+      const expected = {
         goalId: goal.goalId,
         goalRevision: pending.goalRevision,
         runId: pending.runId,
         evaluationRequestId: pending.evaluationRequestId,
-        objective: goal.objective,
-        steering: goal.steering.map((entry) => entry.text),
-        verificationCommands: [...goal.verification.commands],
-        evidence: [...goal.evidence],
-        transcriptExcerpt: pending.evaluationContext ?? "",
-        worker: candidate.worker,
-        cwd: projectRoot,
-      });
-      const evaluatedCandidate = evaluation.ok
-        ? { protocol: "valid" as const, source: candidate.source, worker: candidate.worker, evaluator: evaluation.record }
-        : { protocol: "malformed" as const, source: "assistant_message" as const, reason: evaluation.reason };
-      const evaluationTime = now();
-      const recorded = recordRunCandidate(goal, evaluatedCandidate, evaluationTime);
-      const persistedEvaluation = persistGoal(storage, recorded, auditEvent("evaluator_recorded", evaluation.ok ? evaluation.record.reason : evaluation.reason, ctx, evaluationTime), ctx);
-      if (!persistedEvaluation) return;
-      const refreshed = readGoal(storage, projectRoot, ctx);
-      if (!refreshed.ok || !refreshed.goal) return;
-      goal = refreshed.goal;
-      if (
-        goal.goalId !== persistedEvaluation.goalId ||
-        goal.goalRevision !== pending.goalRevision ||
-        goal.pendingRun?.runId !== pending.runId ||
-        goal.pendingRun.evaluationRequestId !== pending.evaluationRequestId ||
-        !ownsFreshPendingRun(goal, owner, now())
-      ) return;
+      };
+      let evaluatorRecorded = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (!ownsFreshPendingRun(goal, owner, now())) return;
+        const input = buildGoalEvaluatorInput(goal, projectRoot);
+        if (!input) return;
+        const inputLimitReason = evaluatorInputLimitReason(input);
+        if (inputLimitReason) {
+          const evaluationTime = now();
+          const stopped = settlePendingRun(recordRunCandidate(goal, {
+            protocol: "malformed",
+            source: "assistant_message",
+            reason: inputLimitReason,
+          }, evaluationTime), evaluationTime);
+          const persistedStop = persistGoal(storage, stopped.goal, auditEvent("evaluator_input_rejected", inputLimitReason, ctx, evaluationTime), ctx);
+          if (persistedStop) {
+            status.sync(ctx);
+            notify(ctx, `Goal stopped (needs_user): ${inputLimitReason}`, "warning");
+          }
+          return;
+        }
+        const evaluation = await evaluator.evaluate(input);
+        const refreshed = readGoal(storage, projectRoot, ctx);
+        if (!refreshed.ok || !refreshed.goal) return;
+        goal = refreshed.goal;
+        if (
+          goal.goalId !== expected.goalId ||
+          goal.goalRevision !== expected.goalRevision ||
+          goal.pendingRun?.runId !== expected.runId ||
+          goal.pendingRun.evaluationRequestId !== expected.evaluationRequestId ||
+          !ownsFreshPendingRun(goal, owner, now())
+        ) return;
+
+        const refreshedInput = buildGoalEvaluatorInput(goal, projectRoot);
+        if (!refreshedInput) return;
+        const refreshedInputLimitReason = evaluatorInputLimitReason(refreshedInput);
+        if (refreshedInputLimitReason) {
+          const evaluationTime = now();
+          const stopped = settlePendingRun(recordRunCandidate(goal, {
+            protocol: "malformed",
+            source: "assistant_message",
+            reason: refreshedInputLimitReason,
+          }, evaluationTime), evaluationTime);
+          const persistedStop = persistGoal(storage, stopped.goal, auditEvent("evaluator_input_rejected", refreshedInputLimitReason, ctx, evaluationTime), ctx);
+          if (persistedStop) {
+            status.sync(ctx);
+            notify(ctx, `Goal stopped (needs_user): ${refreshedInputLimitReason}`, "warning");
+          }
+          return;
+        }
+        if (evaluatorInputKey(refreshedInput) !== evaluatorInputKey(input)) {
+          if (attempt === 2) {
+            const evaluationTime = now();
+            let stopGoal = goal;
+            let persistedStop: GoalState | undefined;
+            for (let stopAttempt = 0; stopAttempt < 3 && !persistedStop; stopAttempt += 1) {
+              const interrupted = recordRunCandidate(stopGoal, {
+                protocol: "malformed",
+                source: "assistant_message",
+                reason: "Goal changed repeatedly while independent evaluation was running.",
+              }, evaluationTime);
+              const stopped = settlePendingRun(interrupted, evaluationTime);
+              persistedStop = persistGoal(storage, stopped.goal, auditEvent("evaluator_retry_exhausted", stopped.reason ?? "Evaluator retry limit reached.", ctx, evaluationTime), ctx);
+              if (persistedStop) break;
+              const latest = readGoal(storage, projectRoot, ctx);
+              if (!latest.ok || !latest.goal ||
+                latest.goal.goalId !== expected.goalId ||
+                latest.goal.goalRevision !== expected.goalRevision ||
+                latest.goal.pendingRun?.runId !== expected.runId ||
+                latest.goal.pendingRun.evaluationRequestId !== expected.evaluationRequestId ||
+                !ownsFreshPendingRun(latest.goal, owner, now())) return;
+              stopGoal = latest.goal;
+            }
+            if (persistedStop) {
+              status.sync(ctx);
+              notify(ctx, "Goal stopped (needs_user) because it changed repeatedly during evaluation.", "warning");
+            }
+            return;
+          }
+          continue;
+        }
+
+        const candidate = goal.pendingRun.candidate;
+        if (candidate?.protocol !== "valid") return;
+        const evaluatedCandidate = evaluation.ok
+          ? { protocol: "valid" as const, source: candidate.source, worker: candidate.worker, evaluator: evaluation.record }
+          : { protocol: "malformed" as const, source: "assistant_message" as const, reason: evaluation.reason };
+        const evaluationTime = now();
+        const recorded = recordRunCandidate(goal, evaluatedCandidate, evaluationTime);
+        const persistedEvaluation = persistGoal(storage, recorded, auditEvent("evaluator_recorded", evaluation.ok ? evaluation.record.reason : evaluation.reason, ctx, evaluationTime), ctx);
+        if (!persistedEvaluation) return;
+        goal = persistedEvaluation;
+        evaluatorRecorded = true;
+        break;
+      }
+      if (!evaluatorRecorded) return;
     }
     const settled = settlePendingRun(goal, timestamp);
     if (settled.action === "none") return;

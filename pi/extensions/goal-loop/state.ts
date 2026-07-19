@@ -165,8 +165,12 @@ export const DEFAULT_MAX_TURNS = 10;
 export const DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS = 3;
 export const GOAL_LEASE_MS = 4 * 60 * 60 * 1000;
 export const MAX_GOAL_OBJECTIVE_CHARS = 4_000;
+export const MAX_VERIFICATION_COMMANDS = 50;
+export const MAX_VERIFICATION_COMMAND_CHARS = 500;
+export const MAX_GOAL_EVIDENCE_SUMMARY_CHARS = 2_000;
 
 const MAX_EVIDENCE_ENTRIES = 10;
+const MAX_STORED_VERIFICATION_PROOFS = 500;
 const GOAL_STATUS_FRAMES = ["◐", "◓", "◑", "◒"] as const;
 
 export type GoalObjectiveValidation =
@@ -490,7 +494,14 @@ export function recordEvidence(goal: GoalState, evidence: GoalEvidenceInput, now
     ? {
         ...goal.verification,
         lastResult: `${entry.outcome ?? "unknown"}: ${entry.summary}`,
-        proofs: [...(goal.verification.proofs ?? []), entry],
+        proofs: [
+          ...(goal.verification.proofs ?? []).filter((proof) => !(
+            proof.goalRevision === entry.goalRevision &&
+            proof.runId === entry.runId &&
+            proof.command === entry.command
+          )),
+          entry,
+        ].slice(-MAX_STORED_VERIFICATION_PROOFS),
       }
     : goal.verification;
 
@@ -534,8 +545,7 @@ export function editGoalObjective(goal: GoalState, objective: string, now = new 
 }
 
 export function recordGoalSteer(goal: GoalState, sessionId: string, text: string, now = new Date()): GoalState {
-  const normalized = text.trim();
-  if (!normalized) return goal;
+  const normalized = (text.trim() || "User supplied a non-text follow-up.").slice(0, MAX_GOAL_OBJECTIVE_CHARS);
   const goalRevision = goal.goalRevision + 1;
   return {
     ...goal,

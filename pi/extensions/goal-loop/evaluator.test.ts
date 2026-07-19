@@ -28,6 +28,7 @@ const input: GoalEvaluatorInput = {
   objective: "Ship a verified goal loop",
   steering: [],
   verificationCommands: ["npm test"],
+  verificationProofs: [],
   evidence: [],
   transcriptExcerpt: "Worker reports that the focused tests pass.",
   worker: {

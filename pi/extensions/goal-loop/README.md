@@ -89,6 +89,7 @@ The coordinator evaluates every settled autonomous run, including worker `contin
 - Injects goal instructions into each agent turn.
 - Tells the agent to call `get_goal` and `update_goal` when it needs persisted goal state.
 - Keeps activation, pause/resume, objective edits, and budget changes human-owned. `update_goal` can only record evidence, add verification, or set `proposedStatus` (`complete`, `blocked`, or `needs_user`).
+- Bounds evaluator input to 50 verification commands, 500 characters per command, and 2,000 characters per evidence summary. Verification evidence with a command must reference a configured command.
 - Records worker candidates and bounded transcript context at `agent_end`, evaluates independently, then settles and (if safe) dispatches at `agent_settled` exactly once.
 - Never queues a continuation while Pi is non-idle or user messages are pending.
 - Sums finalized Pi assistant usage (`input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, and `cost.total`) once per autonomous low-level run. Reasoning is not added separately because Pi already includes it in `output`; normal user turns are not counted.
@@ -111,6 +112,7 @@ The extension does not bypass Pi permissions. Pi permissions remain authoritativ
 ## Limitations
 
 - Independent evaluation requires the `@tintinweb/pi-subagents` RPC protocol version 2. If it is unavailable, the run stops at `needs_user`.
+- Stale writer locks with a confirmed dead process are recovered automatically. Malformed locks without process identity and orphaned recovery claims fail closed; the error notification gives the exact file to remove after confirming no Pi process is using that goal.
 - It does not schedule goals after Pi exits.
 - It does not run verification commands by itself; it tells the agent which commands to run.
 - Same-worktree detection is not automatic across subdirectory or symlink roots. For concurrent goals, create a distinct Git worktree and launch Pi from that worktree root.

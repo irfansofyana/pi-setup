@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   buildContinuationPrompt,
@@ -20,7 +20,7 @@ import {
   shouldAutoContinue,
   sumAssistantUsage,
 } from "./index.ts";
-import { createGoalStorage } from "./storage.ts";
+import { createGoalStorage, GoalStorageConflictError } from "./storage.ts";
 import type { GoalEvaluator, GoalEvaluatorInput } from "./evaluator.ts";
 
 const NOW = new Date("2026-07-12T00:00:00.000Z");
@@ -306,6 +306,34 @@ test("model tool schema cannot activate, pause, or change budgets", () => {
   harness.cleanup();
 });
 
+test("verification commands and proof fields are bounded at the model boundary", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const tool = harness.tools.get("update_goal");
+
+  const longEvidence = await tool.execute("call", { evidence: "x".repeat(2_001) }, undefined, undefined, harness.ctx);
+  assert.deepEqual(longEvidence.details, { error: "invalid_evidence" });
+  const longCommand = await tool.execute("call", { verificationCommand: "x".repeat(501) }, undefined, undefined, harness.ctx);
+  assert.deepEqual(longCommand.details, { error: "invalid_verification_command" });
+  const unconfiguredProof = await tool.execute("call", {
+    evidence: "passed",
+    evidenceKind: "verification",
+    command: "not-configured",
+    outcome: "passed",
+  }, undefined, undefined, harness.ctx);
+  assert.deepEqual(unconfiguredProof.details, { error: "unconfigured_evidence_command" });
+
+  for (let index = 1; index <= 50; index += 1) {
+    const result = await tool.execute("call", { verificationCommand: `check-${index}` }, undefined, undefined, harness.ctx);
+    assert.equal(result.details.goal.verification.commands.length, index);
+  }
+  const overflow = await tool.execute("call", { verificationCommand: "check-51" }, undefined, undefined, harness.ctx);
+  assert.deepEqual(overflow.details, { error: "too_many_verification_commands" });
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.verification.commands.length, 50);
+  harness.cleanup();
+});
+
 test("start stops after quarantining corrupt state instead of replacing it", async () => {
   const harness = createHarness();
   writeFileSync(harness.storage.statePathFor(harness.ctx.cwd), "{not-json", "utf8");
@@ -316,6 +344,28 @@ test("start stops after quarantining corrupt state instead of replacing it", asy
   assert.equal(harness.storage.corruptFiles().length, 1);
   assert.equal(harness.sent.length, 0);
   assert.match(harness.notifications.at(-1)?.message ?? "", /state was corrupt/i);
+  harness.cleanup();
+});
+
+test("orphaned recovery claims surface an actionable cleanup path", async () => {
+  const harness = createHarness();
+  const statePath = harness.storage.statePathFor(harness.ctx.cwd);
+  const lockPath = join(statePath, "..", `.${basename(statePath, ".json")}.lock`);
+  const reclaimPath = `${lockPath}.reclaim`;
+  const createdAt = "2026-07-11T00:00:00.000Z";
+  writeFileSync(lockPath, JSON.stringify({ ownerId: "dead", createdAt, pid: 999_999 }), "utf8");
+  const lockStat = statSync(lockPath);
+  writeFileSync(reclaimPath, JSON.stringify({
+    ownerId: "orphaned-reclaimer",
+    pid: 999_998,
+    claimedAt: createdAt,
+    lock: { pid: 999_999, ownerId: "dead", createdAt, dev: lockStat.dev, ino: lockStat.ino },
+  }), "utf8");
+
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+
+  assert.equal(harness.storage.read(harness.ctx.cwd), undefined);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /After verifying no Pi process.*\.lock\.reclaim/i);
   harness.cleanup();
 });
 
@@ -400,6 +450,124 @@ test("a stale evaluator result cannot settle an edited goal", async () => {
   assert.equal(revised.goalRevision, 2);
   assert.equal(revised.status, "active");
   assert.equal(revised.lastEvaluation, undefined);
+  harness.cleanup();
+});
+
+test("a token budget change during evaluation settles against refreshed state", async () => {
+  let releaseEvaluation!: () => void;
+  const evaluationGate = new Promise<void>((resolve) => { releaseEvaluation = resolve; });
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      await evaluationGate;
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+
+  const settling = harness.handlers.get("agent_settled")({}, harness.ctx);
+  await Promise.resolve();
+  await harness.commands.get("goal").handler("budget 1000", harness.ctx);
+  releaseEvaluation();
+  await settling;
+
+  const settled = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(settled.tokenBudget, 1000);
+  assert.equal(settled.evaluatedRuns, 1);
+  assert.ok(settled.pendingRun);
+  assert.equal(harness.sent.length, 2);
+  harness.cleanup();
+});
+
+test("verification changes during evaluation trigger a fresh evaluation", async () => {
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const evaluatorCalls: GoalEvaluatorInput[] = [];
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls.push(input);
+      if (evaluatorCalls.length === 1) await firstGate;
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+
+  const settling = harness.handlers.get("agent_settled")({}, harness.ctx);
+  await Promise.resolve();
+  await harness.commands.get("goal").handler("verify npm test", harness.ctx);
+  releaseFirst();
+  await settling;
+
+  assert.equal(evaluatorCalls.length, 2);
+  assert.deepEqual(evaluatorCalls[1].verificationCommands, ["npm test"]);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.evaluatedRuns, 1);
+  assert.equal(harness.sent.length, 2);
+  harness.cleanup();
+});
+
+test("repeated verification changes during evaluation stop without a pending run", async () => {
+  let harness: ReturnType<typeof createHarness>;
+  let evaluatorCalls = 0;
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls += 1;
+      await harness.commands.get("goal").handler(`verify check-${evaluatorCalls}`, harness.ctx);
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const stopped = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(evaluatorCalls, 3);
+  assert.equal(stopped.status, "needs_user");
+  assert.equal(stopped.pendingRun, undefined);
+  assert.equal(stopped.lease, undefined);
+  assert.equal(harness.sent.length, 1);
+  harness.cleanup();
+});
+
+test("retry exhaustion retries its needs_user transition after a storage conflict", async () => {
+  let harness: ReturnType<typeof createHarness>;
+  let evaluatorCalls = 0;
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls += 1;
+      await harness.commands.get("goal").handler(`verify check-${evaluatorCalls}`, harness.ctx);
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  harness = createHarness("session-a", evaluator);
+  const originalWrite = harness.storage.write.bind(harness.storage);
+  let conflictInjected = false;
+  harness.storage.write = (goal: any, revision: number, event: any) => {
+    if (event.type === "evaluator_retry_exhausted" && !conflictInjected) {
+      conflictInjected = true;
+      throw new GoalStorageConflictError();
+    }
+    return originalWrite(goal, revision, event);
+  };
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const stopped = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(conflictInjected, true);
+  assert.equal(stopped.status, "needs_user");
+  assert.equal(stopped.pendingRun, undefined);
+  assert.equal(stopped.lease, undefined);
+  assert.match(harness.notifications.at(-1)?.message ?? "", /stopped \(needs_user\)/i);
   harness.cleanup();
 });
 
@@ -943,6 +1111,149 @@ test("queued user follow-up steers and resumes instead of stopping needs_user", 
   assert.ok(resumed.pendingRun);
   assert.equal(harness.sent.length, 2);
   assert.match(harness.sent[1], /Keep the public API unchanged/);
+  harness.cleanup();
+});
+
+test("a non-text queued follow-up durably interrupts and resumes the goal", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await acceptContinuation(harness);
+  const followUp = { role: "user", content: [{ type: "image", data: "attachment" }] };
+
+  await harness.handlers.get("message_start")({ message: followUp }, harness.ctx);
+
+  const steered = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(steered.goalRevision, initial.goalRevision + 1);
+  assert.equal(steered.pendingRun, undefined);
+  assert.equal(steered.pendingSteer?.interruptedRunId, initial.pendingRun?.runId);
+  assert.equal(steered.steering.at(-1)?.text, "User supplied a non-text follow-up.");
+
+  await harness.handlers.get("agent_end")({ messages: [followUp] }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const resumed = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(resumed.status, "active");
+  assert.ok(resumed.pendingRun);
+  assert.equal(resumed.pendingSteer, undefined);
+  assert.equal(harness.sent.length, 2);
+  assert.match(harness.sent[1], /User supplied a non-text follow-up\./);
+  harness.cleanup();
+});
+
+test("manual resume consumes steering left pending while Pi was busy", async () => {
+  const harness = createHarness();
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  await harness.handlers.get("message_start")({ message: { role: "user", content: "Keep headings unchanged" } }, harness.ctx);
+  harness.setPendingMessages(true);
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+  assert.ok(harness.storage.read(harness.ctx.cwd)?.pendingSteer);
+
+  harness.setPendingMessages(false);
+  await harness.commands.get("goal").handler("resume", harness.ctx);
+  const resumed = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(resumed.pendingSteer, undefined);
+  assert.ok(resumed.pendingRun);
+  await acceptContinuation(harness);
+  await harness.handlers.get("agent_end")({ messages: workerMessages(resumed, "continue") }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.status, "active");
+  assert.equal(harness.sent.length, 3);
+  harness.cleanup();
+});
+
+test("independent evaluator receives every current-run verification proof", async () => {
+  const evaluatorCalls: GoalEvaluatorInput[] = [];
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls.push(input);
+      return { ok: true, record: evaluatorDecision(input, "complete", "All checks passed.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  await acceptContinuation(harness);
+  const commands = Array.from({ length: 11 }, (_, index) => `check-${index + 1}`);
+  for (const command of commands) {
+    await harness.tools.get("update_goal").execute("call", {
+      verificationCommand: command,
+      evidence: `${command} passed`,
+      evidenceKind: "verification",
+      command,
+      outcome: "passed",
+    }, undefined, undefined, harness.ctx);
+  }
+  const goal = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(goal, "complete") }, harness.ctx);
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  assert.equal(evaluatorCalls.length, 1);
+  assert.equal(evaluatorCalls[0].evidence.length, 10);
+  assert.equal(evaluatorCalls[0].verificationProofs.length, 11);
+  assert.deepEqual(evaluatorCalls[0].verificationProofs.map((proof) => proof.command), commands);
+  harness.cleanup();
+});
+
+test("oversized persisted verification state fails closed before evaluator RPC", async () => {
+  let evaluatorCalls = 0;
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls += 1;
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+  const candidate = harness.storage.read(harness.ctx.cwd)!;
+  harness.storage.write({
+    ...candidate,
+    verification: {
+      ...candidate.verification,
+      commands: Array.from({ length: 51 }, (_, index) => `legacy-check-${index + 1}`),
+    },
+  }, candidate.storageRevision, { type: "legacy_oversized_fixture", at: NOW.toISOString() });
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const stopped = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(evaluatorCalls, 0);
+  assert.equal(stopped.status, "needs_user");
+  assert.equal(stopped.pendingRun, undefined);
+  assert.equal(stopped.lease, undefined);
+  assert.match(stopped.lastEvaluation?.reason ?? "", /exceed evaluator input limits/i);
+  harness.cleanup();
+});
+
+test("oversized persisted objective fails closed before evaluator RPC", async () => {
+  let evaluatorCalls = 0;
+  const evaluator: GoalEvaluator = {
+    async evaluate(input) {
+      evaluatorCalls += 1;
+      return { ok: true, record: evaluatorDecision(input, "continue", "More work remains.") };
+    },
+  };
+  const harness = createHarness("session-a", evaluator);
+  await harness.commands.get("goal").handler("Ship safely", harness.ctx);
+  const initial = harness.storage.read(harness.ctx.cwd)!;
+  await harness.handlers.get("agent_end")({ messages: workerMessages(initial, "continue") }, harness.ctx);
+  const candidate = harness.storage.read(harness.ctx.cwd)!;
+  harness.storage.write({ ...candidate, objective: "x".repeat(4_001) }, candidate.storageRevision, {
+    type: "legacy_oversized_objective_fixture",
+    at: NOW.toISOString(),
+  });
+
+  await harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  const stopped = harness.storage.read(harness.ctx.cwd)!;
+  assert.equal(evaluatorCalls, 0);
+  assert.equal(stopped.status, "needs_user");
+  assert.equal(stopped.pendingRun, undefined);
+  assert.match(stopped.lastEvaluation?.reason ?? "", /objective exceeds evaluator input limits/i);
   harness.cleanup();
 });
 

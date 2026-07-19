@@ -12,6 +12,7 @@ export interface GoalEvaluatorInput extends CurrentRunIds {
   objective: string;
   steering: string[];
   verificationCommands: string[];
+  verificationProofs: GoalEvidence[];
   evidence: GoalEvidence[];
   transcriptExcerpt: string;
   worker: GoalDecisionRecord;
@@ -52,6 +53,7 @@ function evaluationPrompt(input: GoalEvaluatorInput): string {
     objective: input.objective,
     steering: input.steering,
     verificationCommands: input.verificationCommands,
+    verificationProofs: input.verificationProofs,
     evidence: input.evidence,
     transcriptExcerpt: input.transcriptExcerpt,
     workerDecision: input.worker,

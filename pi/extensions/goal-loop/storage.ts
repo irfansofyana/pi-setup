@@ -37,6 +37,8 @@ export interface GoalStorageOptions {
   getProcessStartToken?: (pid: number) => string | undefined;
   /** Test seam invoked only after a fully initialized lock record is published. */
   onLockAcquired?: (lockPath: string) => void;
+  /** Test seam invoked after a contended lock inode is captured for recovery. */
+  onStaleLockObserved?: (lockPath: string) => void;
 }
 
 const LOCK_STALE_MS = 15 * 60 * 1000;
@@ -54,8 +56,9 @@ interface LockReclaimRecord {
   processStartToken?: string;
   claimedAt: string;
   lock: {
-    ownerId: string;
-    createdAt: string;
+    pid: number;
+    ownerId?: string;
+    createdAt?: string;
     processStartToken?: string;
     dev: number;
     ino: number;
@@ -75,9 +78,12 @@ export class GoalStorageCorruptError extends Error {
 }
 
 export class GoalStorageConflictError extends Error {
-  constructor(message = "Stale storage revision; reload goal state before writing.") {
+  readonly manualCleanupPath?: string;
+
+  constructor(message = "Stale storage revision; reload goal state before writing.", options: { manualCleanupPath?: string } = {}) {
     super(message);
     this.name = "GoalStorageConflictError";
+    this.manualCleanupPath = options.manualCleanupPath;
   }
 }
 
@@ -129,9 +135,9 @@ function isTimestamp(value: unknown): value is string {
 function isLockReclaimRecord(value: unknown): value is LockReclaimRecord {
   if (!isRecord(value) || typeof value.ownerId !== "string" || !value.ownerId || !isIntegerAtLeast(value.pid, 1) || !isTimestamp(value.claimedAt) || !isRecord(value.lock)) return false;
   return (value.processStartToken === undefined || typeof value.processStartToken === "string") &&
-    typeof value.lock.ownerId === "string" &&
-    Boolean(value.lock.ownerId) &&
-    isTimestamp(value.lock.createdAt) &&
+    (value.lock.ownerId === undefined || (typeof value.lock.ownerId === "string" && Boolean(value.lock.ownerId))) &&
+    (value.lock.createdAt === undefined || isTimestamp(value.lock.createdAt)) &&
+    isIntegerAtLeast(value.lock.pid, 1) &&
     typeof value.lock.dev === "number" &&
     Number.isInteger(value.lock.dev) &&
     typeof value.lock.ino === "number" &&
@@ -164,8 +170,9 @@ function getProcessStartToken(pid: number): string | undefined {
     const token = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, TZ: "UTC", LC_ALL: "C", LANG: "C" },
     }).trim();
-    return token || undefined;
+    return token ? `v1:${token}` : undefined;
   } catch {
     return undefined;
   }
@@ -369,6 +376,9 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
     // Legacy records did not include a generation token. A currently-live
     // PID remains authoritative rather than risking deletion of a real lock.
     if (!recordedStartToken) return true;
+    // Tokens written before canonical v1 formatting may vary by timezone or
+    // locale. A live PID with such a token remains authoritative.
+    if (!recordedStartToken.startsWith("v1:")) return true;
     let currentStartToken: string | undefined;
     try {
       currentStartToken = processStartToken(pid);
@@ -407,22 +417,33 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
         let staleCreatedAt: string | undefined;
         let stalePid: number | undefined;
         let staleProcessStartToken: string | undefined;
-        let createdAt: number | undefined;
+        let createdAt: number;
+        let staleDev: number;
+        let staleIno: number;
+        try {
+          const observed = statSync(lockPath);
+          staleDev = observed.dev;
+          staleIno = observed.ino;
+          createdAt = observed.mtimeMs;
+          options.onStaleLockObserved?.(lockPath);
+        } catch {
+          continue;
+        }
         try {
           const raw = readJson(lockPath);
-          if (isRecord(raw) && isTimestamp(raw.createdAt) && typeof raw.ownerId === "string") {
-            staleOwnerId = raw.ownerId;
-            staleCreatedAt = raw.createdAt;
+          if (isRecord(raw)) {
+            staleOwnerId = typeof raw.ownerId === "string" && raw.ownerId ? raw.ownerId : undefined;
+            staleCreatedAt = isTimestamp(raw.createdAt) ? raw.createdAt : undefined;
             stalePid = isIntegerAtLeast(raw.pid, 1) ? raw.pid : undefined;
             staleProcessStartToken = typeof raw.processStartToken === "string" && raw.processStartToken ? raw.processStartToken : undefined;
-            createdAt = Date.parse(raw.createdAt);
+            if (staleCreatedAt !== undefined) createdAt = Date.parse(staleCreatedAt);
           }
         } catch {}
-        if (createdAt === undefined) {
-          try { createdAt = statSync(lockPath).mtimeMs; } catch {}
-        }
-        if (createdAt === undefined || Date.now() - createdAt <= LOCK_STALE_MS) {
+        if (Date.now() - createdAt <= LOCK_STALE_MS) {
           throw new GoalStorageConflictError("Goal state is locked by another writer.");
+        }
+        if (stalePid === undefined) {
+          throw new GoalStorageConflictError(`Stale goal lock has no process identity; remove it manually after verifying no writer is active: ${lockPath}`, { manualCleanupPath: lockPath });
         }
         // A slow but still-live writer must never be reclaimed solely because
         // its timestamp is old. Existing pre-PID/malformed locks retain the
@@ -430,16 +451,6 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
         if (stalePid !== undefined && isLiveOwner(stalePid, staleProcessStartToken)) {
           throw new GoalStorageConflictError("Goal state is locked by another live writer.");
         }
-        let staleDev: number | undefined;
-        let staleIno: number | undefined;
-        try {
-          const staleStat = statSync(lockPath);
-          staleDev = staleStat.dev;
-          staleIno = staleStat.ino;
-        } catch {
-          continue;
-        }
-
         // The recovery marker is an independently timestamped, exclusive
         // claim.  Unlike a hard link to the stale lock, it can be reclaimed
         // after the claimant crashes.  The recorded inode and lock identity
@@ -452,7 +463,7 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
             pid: process.pid,
             processStartToken: ownProcessStartToken,
             claimedAt: new Date().toISOString(),
-            lock: { ownerId: staleOwnerId ?? "", createdAt: staleCreatedAt ?? "", processStartToken: staleProcessStartToken, dev: staleDev, ino: staleIno },
+            lock: { pid: stalePid, ownerId: staleOwnerId, createdAt: staleCreatedAt, processStartToken: staleProcessStartToken, dev: staleDev, ino: staleIno },
           };
           publishExclusiveRecord(reclaimPath, claim);
         } catch (claimError) {
@@ -460,44 +471,34 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
             const code = (claimError as { code?: unknown }).code;
             if (code === "ENOENT") continue;
             if (code === "EEXIST") {
-              let reclaimableClaim = false;
-              try {
-                const existingClaim = readJson(reclaimPath);
-                // Reclaim markers are ownership, not leases. An old marker
-                // from a live process remains authoritative indefinitely;
-                // only a dead claimant (or an unreadable/malformed marker)
-                // may be recovered.
-                reclaimableClaim = !isLockReclaimRecord(existingClaim) || !isLiveOwner(existingClaim.pid, existingClaim.processStartToken);
-              } catch {
-                continue;
-              }
-              if (reclaimableClaim) {
-                try {
-                  unlinkSync(reclaimPath);
-                  syncDirectory(storageRoot);
-                  continue;
-                } catch {
-                  continue;
-                }
-              }
+              // Never reclaim another recovery marker automatically. A
+              // read/check/unlink sequence has an ABA race that can delete a
+              // replacement claimant and permit overlapping writers. A crash
+              // in this tiny window therefore fails closed for manual cleanup.
+              throw new GoalStorageConflictError(`Goal state stale-lock recovery is already claimed; remove the orphaned recovery marker manually after verifying its owner is gone: ${reclaimPath}`, { manualCleanupPath: reclaimPath });
             }
           }
           throw new GoalStorageConflictError("Goal state stale-lock recovery is already in progress.");
         }
         try {
           const claimed = readJson(reclaimPath);
-          if (!isLockReclaimRecord(claimed) || claimed.ownerId !== reclaimOwnerId || claimed.processStartToken !== ownProcessStartToken || claimed.lock.ownerId !== staleOwnerId || claimed.lock.createdAt !== staleCreatedAt || claimed.lock.processStartToken !== staleProcessStartToken || claimed.lock.dev !== staleDev || claimed.lock.ino !== staleIno) {
+          if (!isLockReclaimRecord(claimed) || claimed.ownerId !== reclaimOwnerId || claimed.processStartToken !== ownProcessStartToken || claimed.lock.pid !== stalePid || claimed.lock.ownerId !== staleOwnerId || claimed.lock.createdAt !== staleCreatedAt || claimed.lock.processStartToken !== staleProcessStartToken || claimed.lock.dev !== staleDev || claimed.lock.ino !== staleIno) {
             throw new GoalStorageConflictError("Goal state lock changed while stale-lock recovery was claimed.");
           }
           let original;
           let currentRecord: unknown;
           try {
             original = statSync(lockPath);
-            currentRecord = readJson(lockPath);
           } catch {
             continue;
           }
-          if (!isRecord(currentRecord) || currentRecord.ownerId !== staleOwnerId || currentRecord.createdAt !== staleCreatedAt || currentRecord.processStartToken !== staleProcessStartToken || original.ino !== staleIno || original.dev !== staleDev) {
+          try { currentRecord = readJson(lockPath); } catch {}
+          const parsedIdentityChanged = !isRecord(currentRecord) ||
+            currentRecord.pid !== stalePid ||
+            currentRecord.ownerId !== staleOwnerId ||
+            currentRecord.createdAt !== staleCreatedAt ||
+            currentRecord.processStartToken !== staleProcessStartToken;
+          if (parsedIdentityChanged || original.ino !== staleIno || original.dev !== staleDev) {
             throw new GoalStorageConflictError("Goal state lock changed during stale-lock recovery.");
           }
           unlinkSync(lockPath);

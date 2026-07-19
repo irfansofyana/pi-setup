@@ -674,6 +674,8 @@ Keep `allowModelCreateGoal: false` unless you want model-callable goal creation.
 
 The human owns goal creation, pause/resume, objective edits, turn budgets, and optional token budgets. Models can record evidence and propose outcomes, but a coordinator-owned read-only `Explore` evaluator decides every settled autonomous run through `subagents:rpc:spawn`. Missing, malformed, failed, or stale evaluator results fail closed at `needs_user`; completion also requires fresh passed verification evidence.
 
+Evaluator input is bounded to 50 verification commands, 500 characters per command, and 2,000 characters per evidence summary. Command-specific verification evidence must reference a configured command. Stale writer locks are recovered only when their process identity proves the owner is gone; malformed locks and orphaned recovery claims fail closed with an actionable cleanup path.
+
 A normal user follow-up during an active run is saved as durable steering. It increments the goal revision, invalidates proof from the interrupted run, and resumes automatically with the new direction after the user turn settles.
 
 Identity is the normalized Pi working root (`ctx.cwd`), not a discovered Git worktree root or filesystem realpath. Parallel safety therefore requires launching each Pi session from a distinct Git worktree root. Launching from different subdirectories or symlink spellings creates distinct keys and is not detected as same-worktree concurrency. Each exact root key has one active goal and one session-owned execution lease.
