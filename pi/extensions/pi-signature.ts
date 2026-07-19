@@ -174,14 +174,23 @@ function signatureLines(owner: string, theme: Theme, width: number, frame = 0): 
 	return [...orbitLogoLines(frame, width), center(title, width), center(credit, width)];
 }
 
+function cachedRenderedLineCount(tui: TUI): number | undefined {
+	// Pi TUI stores the last normal render here. Reading it is O(1); rendering
+	// from the animation timer would walk every mounted component every 140 ms.
+	const renderedLines = (tui as unknown as { previousLines?: unknown }).previousLines;
+	return Array.isArray(renderedLines) ? renderedLines.length : undefined;
+}
+
 function signatureHeader(owner: string) {
 	return (tui: TUI, theme: Theme) => {
 		let frame = 0;
 		let animationVisible = true;
 		const timer = setInterval(() => {
-			const width = tui.terminal.columns;
+			const renderedLineCount = cachedRenderedLineCount(tui);
 			// Updating an offscreen header makes Pi fully redraw and clear terminal scrollback.
-			const headerInLiveViewport = tui.render(width).length <= tui.terminal.rows;
+			// Fail closed if Pi TUI stops exposing cached render lines; disabling animation is
+			// safer than bringing back full offscreen redraws on an unsupported version.
+			const headerInLiveViewport = renderedLineCount !== undefined && renderedLineCount <= tui.terminal.rows;
 			if (!animationVisible || !headerInLiveViewport) return;
 
 			frame = (frame + 1) % ORBIT_PATH.length;

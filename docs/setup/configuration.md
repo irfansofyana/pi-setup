@@ -67,7 +67,7 @@ Included:
 
 - `irfan-pi`: main blue/cobalt theme with inline color variables and export colors; standalone with no runtime dependencies.
 - `irfan-gruvbox`: alternate Gruvbox Dark theme with OMP-inspired neutral tool cards, readable code output, and softer greens.
-- `pi-signature.ts`: animated gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, and compact footer statuses. Header animation pauses outside live viewport to preserve terminal scrollback.
+- `pi-signature.ts`: animated gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, and compact footer statuses. Header animation uses cached normal-render line count to pause outside live viewport without polling full TUI tree, preserving terminal scrollback and idle performance.
 
 Install theme and signature with private backup-and-replace procedure in [Installation](installation.md#install-local-templates). Do not overwrite existing targets with raw `cp`.
 
