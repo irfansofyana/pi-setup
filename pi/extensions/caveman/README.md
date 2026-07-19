@@ -6,13 +6,7 @@ Purpose: terse Pi answers on demand, with local config and no external Git packa
 
 ## Install
 
-From repo root:
-
-```bash
-mkdir -p ~/.pi/agent/extensions
-rm -rf ~/.pi/agent/extensions/caveman
-cp -r pi/extensions/caveman ~/.pi/agent/extensions/
-```
+From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
 
 Then reload Pi:
 

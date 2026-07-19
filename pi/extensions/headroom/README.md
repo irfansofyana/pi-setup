@@ -38,10 +38,7 @@ headroom --version
 
 ## Install this Pi extension
 
-```bash
-mkdir -p ~/.pi/agent/extensions
-cp -r pi/extensions/headroom ~/.pi/agent/extensions/
-```
+From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
 
 Reload Pi:
 
