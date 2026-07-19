@@ -149,6 +149,7 @@ function messageText(message: Record<string, unknown>): string {
     return `compaction_summary: ${message.summary}`;
   }
   if (role === "bashExecution") {
+    if (message.excludeFromContext === true) return "";
     const command = typeof message.command === "string" ? message.command : "";
     const output = typeof message.output === "string" ? message.output : "";
     return `bash: ${command}\n${output}`.trim();

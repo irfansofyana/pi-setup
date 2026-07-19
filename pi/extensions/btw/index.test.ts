@@ -71,6 +71,18 @@ test("buildConversationContext handles already-built session context messages", 
   assert.match(context, /assistant: fresh answer/);
 });
 
+test("buildConversationContext skips excluded bash executions", () => {
+  const context = buildConversationContext([
+    { role: "bashExecution", command: "cat secret.txt", output: "SECRET", excludeFromContext: true },
+    { role: "bashExecution", command: "npm test", output: "ok", excludeFromContext: false },
+  ], 10_000);
+
+  assert.doesNotMatch(context, /SECRET/);
+  assert.doesNotMatch(context, /cat secret\.txt/);
+  assert.match(context, /npm test/);
+  assert.match(context, /ok/);
+});
+
 test("buildHistoryContext preserves latest side-thread turns", () => {
   const history: BtwTurn[] = [
     { question: "q1", answer: "a1", timestamp: 1 },

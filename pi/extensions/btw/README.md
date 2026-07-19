@@ -58,4 +58,5 @@ Example:
 - It prefers Pi's current model runtime for auth and completion, so extension-registered/native provider transports stay intact.
 - It passes `thinkingLevel: "off"` explicitly instead of omitting reasoning.
 - It prefers `buildSessionContext()`/`buildContextEntries()`, so compaction and branch summaries remain visible to side answers.
+- It skips `bashExecution` messages marked `excludeFromContext`, matching Pi's intent for `!!` commands.
 - For tool-using side agents, build a later v2 that spawns a separate Pi JSON process or real sub-session.
