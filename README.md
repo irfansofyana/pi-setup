@@ -16,6 +16,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Hindsight | Local Hindsight memory adapter template backed by `hindsight-embed` daemon |
 | Managed skills | Local generated reusable skills template with Hindsight-backed `learn` |
 | Goal loop | Local `/goal` command template for persisted goal loops |
+| BTW | Local `/btw` side-question extension template |
 | Ask user | Structured `ask_user_question` UI helper |
 | Preview | Markdown preview/export helper |
 | Todo | `rpiv-todo` task tracking extension |
@@ -39,6 +40,7 @@ pi/
     hindsight/               # local Hindsight adapter template
     managed-skills/          # local managed generated skills template
     goal-loop/               # local /goal extension template
+    btw/                     # local /btw side-question extension template
     caveman/                 # local /caveman extension template
 ```
 
@@ -71,6 +73,8 @@ cp -r pi/extensions/headroom ~/.pi/agent/extensions/
 cp -r pi/extensions/hindsight ~/.pi/agent/extensions/
 cp -r pi/extensions/managed-skills ~/.pi/agent/extensions/
 cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/
+rm -rf ~/.pi/agent/extensions/btw
+cp -r pi/extensions/btw ~/.pi/agent/extensions/
 rm -rf ~/.pi/agent/extensions/caveman
 cp -r pi/extensions/caveman ~/.pi/agent/extensions/
 
@@ -143,6 +147,7 @@ Run `/reload` after install.
 | Hindsight | `cp -r pi/extensions/hindsight ~/.pi/agent/extensions/` | Needs local daemon |
 | Managed skills | `cp -r pi/extensions/managed-skills ~/.pi/agent/extensions/` | Adds `manage_skill`, `learn`, `/managed-skills` |
 | Goal loop | `cp -r pi/extensions/goal-loop ~/.pi/agent/extensions/` | Adds `/goal` |
+| BTW | `rm -rf ~/.pi/agent/extensions/btw && cp -r pi/extensions/btw ~/.pi/agent/extensions/` | Adds local `/btw` |
 | Caveman | `rm -rf ~/.pi/agent/extensions/caveman && cp -r pi/extensions/caveman ~/.pi/agent/extensions/` | Adds local `/caveman` |
 
 ## Configuration paths
@@ -157,6 +162,7 @@ Run `/reload` after install.
 | `~/.pi/agent/managed-skills/config.json` | Global Pi | Managed skills config |
 | `~/.pi/agent/managed-skills/` | Global Pi | Generated managed skill files |
 | `~/.pi/agent/caveman/config.json` | Global Pi | Caveman extension config |
+| `~/.pi/agent/btw/config.json` | Global Pi | BTW side-question config |
 | `~/.pi/agent/goal-loop/config.json` | Global Pi | Goal-loop config |
 | `~/.pi/agent/goal-loop/state/<root-key>.json` | Global Pi | Per-working-root active goal state |
 | `~/.pi/agent/goal-loop/archive/<root-key>/<goal-id>.json` | Global Pi | Completed goal snapshots |
@@ -622,6 +628,54 @@ Config path:
 
 If old upstream config exists at `~/.pi/agent/caveman.json`, local extension reads it when new config is absent. Do not keep both old Git package and local template active: both register `/caveman`.
 
+## BTW extension
+
+Purpose: local `/btw` side-question channel for asking quick questions while the main Pi agent keeps working.
+
+Install:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+rm -rf ~/.pi/agent/extensions/btw
+cp -r pi/extensions/btw ~/.pi/agent/extensions/
+```
+
+Commands:
+
+```text
+/btw <side question>
+/btw status
+/btw clear
+```
+
+Optional config:
+
+```text
+~/.pi/agent/btw/config.json
+```
+
+Example:
+
+```json
+{
+  "model": "openrouter/openai/gpt-5-mini",
+  "thinkingLevel": "low",
+  "maxContextChars": 40000,
+  "maxHistoryTurns": 8
+}
+```
+
+Design notes:
+
+- uses the current Pi model by default, or `provider/model-id` from config
+- inherits current thinking level unless config overrides it
+- copies compaction-aware main-session context and hidden `/btw` history into a separate model call
+- uses Pi model runtime when available, preserving extension provider transports and configured auth
+- omits `reasoning` when `thinkingLevel` is `off`, matching Pi's own simple-call behavior
+- skips `bashExecution.excludeFromContext` entries, preserving the intent of `!!` shell commands
+- does not call `pi.sendUserMessage()` and does not append side answers to the main session
+- first version has no tools and no bottom overlay; use it for quick context-aware chat, not parallel editing
+
 ## Goal loop
 
 Purpose: Pi-working-root-scoped `/goal` command with persisted state, completion receipts, usage limits, verification evidence, and auto-continue loops.
@@ -799,6 +853,7 @@ ntn workers --help
 | Headroom status | `/headroom status` |
 | Hindsight diagnose | `/hindsight diagnose` |
 | Caveman status | `/caveman status` |
+| BTW status | `/btw status` |
 | Goal status | `/goal` (or `/goal status`) |
 | Update Pi | `pi update` |
 | Update extensions | `pi update --extensions` |
