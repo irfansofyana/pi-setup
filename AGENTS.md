@@ -44,6 +44,7 @@ pi install npm:@juicesharp/rpiv-todo
 # Headroom: install CLI with pipx/uv, then copy local template from pi/extensions/headroom
 # Hindsight: copy real local-daemon memory template from pi/extensions/hindsight
 # Managed Skills: copy OMP-style generated skills template from pi/extensions/managed-skills
+# BTW: copy local side-question extension template from pi/extensions/btw
 pi install npm:pi-9router-ext
 pi install npm:pi-stats-ext
 # Caveman: copy local terse-response extension template from pi/extensions/caveman

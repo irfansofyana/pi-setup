@@ -1,0 +1,11 @@
+{
+  "name": "pi-local-btw",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "test": "node --test \"*.test.ts\""
+  }
+}
