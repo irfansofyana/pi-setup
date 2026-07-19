@@ -156,7 +156,7 @@ test("write fails closed on a stale lock with no process identity", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("stale-lock recovery never unlinks a replacement lock inode", () => {
+test("stale-lock recovery fails closed when the lock path changes during inspection", () => {
   let replaced = false;
   const { root, storage } = createStorageFixture({
     onStaleLockObserved: (lockPath) => {
@@ -176,7 +176,7 @@ test("stale-lock recovery never unlinks a replacement lock inode", () => {
     createGoal("/repo/app", "Ship", NOW, "goal-1"),
     0,
     { type: "goal_created", at: NOW.toISOString() },
-  ), GoalStorageConflictError);
+  ), /changed while it was being inspected/i);
   assert.equal(readFileSync(lockPath, "utf8"), JSON.stringify({ pid: 1 }));
   rmSync(root, { recursive: true, force: true });
 });

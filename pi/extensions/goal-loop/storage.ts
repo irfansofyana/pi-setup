@@ -1,6 +1,7 @@
 import {
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   mkdirSync,
@@ -277,6 +278,23 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+/** Read one immutable file while proving its pathname still names that inode. */
+function readStableText(path: string, onObserved?: () => void): { text: string; dev: number; ino: number; mtimeMs: number } {
+  const descriptor = openSync(path, "r");
+  try {
+    const observed = fstatSync(descriptor);
+    onObserved?.();
+    const text = readFileSync(descriptor, "utf8");
+    const current = statSync(path);
+    if (current.dev !== observed.dev || current.ino !== observed.ino) {
+      throw new GoalStorageConflictError("Goal state lock changed while it was being inspected.");
+    }
+    return { text, dev: observed.dev, ino: observed.ino, mtimeMs: observed.mtimeMs };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 function stableJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableJsonValue);
   if (!isRecord(value)) return value;
@@ -421,24 +439,24 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
         let staleDev: number;
         let staleIno: number;
         try {
-          const observed = statSync(lockPath);
+          const observed = readStableText(lockPath, () => options.onStaleLockObserved?.(lockPath));
           staleDev = observed.dev;
           staleIno = observed.ino;
           createdAt = observed.mtimeMs;
-          options.onStaleLockObserved?.(lockPath);
-        } catch {
+          try {
+            const raw: unknown = JSON.parse(observed.text);
+            if (isRecord(raw)) {
+              staleOwnerId = typeof raw.ownerId === "string" && raw.ownerId ? raw.ownerId : undefined;
+              staleCreatedAt = isTimestamp(raw.createdAt) ? raw.createdAt : undefined;
+              stalePid = isIntegerAtLeast(raw.pid, 1) ? raw.pid : undefined;
+              staleProcessStartToken = typeof raw.processStartToken === "string" && raw.processStartToken ? raw.processStartToken : undefined;
+              if (staleCreatedAt !== undefined) createdAt = Date.parse(staleCreatedAt);
+            }
+          } catch {}
+        } catch (inspectionError) {
+          if (inspectionError instanceof GoalStorageConflictError) throw inspectionError;
           continue;
         }
-        try {
-          const raw = readJson(lockPath);
-          if (isRecord(raw)) {
-            staleOwnerId = typeof raw.ownerId === "string" && raw.ownerId ? raw.ownerId : undefined;
-            staleCreatedAt = isTimestamp(raw.createdAt) ? raw.createdAt : undefined;
-            stalePid = isIntegerAtLeast(raw.pid, 1) ? raw.pid : undefined;
-            staleProcessStartToken = typeof raw.processStartToken === "string" && raw.processStartToken ? raw.processStartToken : undefined;
-            if (staleCreatedAt !== undefined) createdAt = Date.parse(staleCreatedAt);
-          }
-        } catch {}
         if (Date.now() - createdAt <= LOCK_STALE_MS) {
           throw new GoalStorageConflictError("Goal state is locked by another writer.");
         }
@@ -485,14 +503,15 @@ export function createGoalStorage(options: GoalStorageOptions = {}): GoalStorage
           if (!isLockReclaimRecord(claimed) || claimed.ownerId !== reclaimOwnerId || claimed.processStartToken !== ownProcessStartToken || claimed.lock.pid !== stalePid || claimed.lock.ownerId !== staleOwnerId || claimed.lock.createdAt !== staleCreatedAt || claimed.lock.processStartToken !== staleProcessStartToken || claimed.lock.dev !== staleDev || claimed.lock.ino !== staleIno) {
             throw new GoalStorageConflictError("Goal state lock changed while stale-lock recovery was claimed.");
           }
-          let original;
+          let original: { dev: number; ino: number; text: string };
           let currentRecord: unknown;
           try {
-            original = statSync(lockPath);
-          } catch {
+            original = readStableText(lockPath);
+          } catch (inspectionError) {
+            if (inspectionError instanceof GoalStorageConflictError) throw inspectionError;
             continue;
           }
-          try { currentRecord = readJson(lockPath); } catch {}
+          try { currentRecord = JSON.parse(original.text); } catch {}
           const parsedIdentityChanged = !isRecord(currentRecord) ||
             currentRecord.pid !== stalePid ||
             currentRecord.ownerId !== staleOwnerId ||
