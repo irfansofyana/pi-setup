@@ -1,5 +1,8 @@
 {
   "name": "goal-loop-pi-extension",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "engines": {
+    "pi": ">=0.80.4"
+  }
 }

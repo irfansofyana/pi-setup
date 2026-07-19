@@ -1,119 +1,141 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createHash, randomUUID } from "node:crypto";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  acquireGoalLease,
+  createGoal,
+  createPendingRun,
+  consumeGoalSteer,
+  editGoalObjective,
+  expireStalePendingRun,
+  goalKey,
+  goalStatusText,
+  MAX_GOAL_EVIDENCE_SUMMARY_CHARS,
+  MAX_GOAL_OBJECTIVE_CHARS,
+  MAX_VERIFICATION_COMMAND_CHARS,
+  MAX_VERIFICATION_COMMANDS,
+  normalizeGoalState,
+  normalizeGoalUsage,
+  recordEvidence,
+  recordGoalSteer,
+  recordProviderUsageLimit,
+  recordRunCandidate,
+  recordRunEvaluationContext,
+  recordRunUsage,
+  recordSteeredRunUsage,
+  releaseGoalLease,
+  resumeGoal,
+  settlePendingRun,
+  shouldAutoContinue,
+  tokenBudgetAllowsResume,
+  validateGoalObjective,
+  type GoalCommand,
+  type GoalDecision,
+  type GoalEvaluation,
+  type GoalEvidenceInput,
+  type GoalEvidenceKind,
+  type GoalEvidenceOutcome,
+  type GoalState,
+  type GoalUsage,
+} from "./state.ts";
+import { parseCurrentRunCandidate } from "./evaluation.ts";
+import { createSubagentGoalEvaluator, type GoalEvaluator, type GoalEvaluatorInput } from "./evaluator.ts";
+import {
+  createGoalStorage,
+  GoalStorageAuditError,
+  GoalStorageConflictError,
+  GoalStorageCorruptError,
+  type GoalAuditEvent,
+  type GoalStorage,
+} from "./storage.ts";
 
-export type GoalStatus = "active" | "paused" | "complete" | "blocked" | "needs_user";
-export type GoalDecision = "complete" | "continue" | "blocked" | "needs_user";
-export type GoalCommand = "start" | "status" | "pause" | "resume" | "clear" | "edit" | "verify";
-
-export interface GoalEvaluation {
-  decision: GoalDecision;
-  reason: string;
-  confidence: "low" | "medium" | "high";
-}
-
-export type GoalEvidenceKind = "note" | "verification" | "tool";
-export type GoalEvidenceOutcome = "passed" | "failed" | "unknown";
-
-export interface GoalEvidence {
-  at: string;
-  kind: GoalEvidenceKind;
-  summary: string;
-  command?: string;
-  outcome?: GoalEvidenceOutcome;
-}
-
-export interface GoalEvidenceInput {
-  kind: GoalEvidenceKind;
-  summary: string;
-  command?: string;
-  outcome?: GoalEvidenceOutcome;
-}
-
-export interface GoalState {
-  projectRoot: string;
-  objective: string;
-  status: GoalStatus;
-  createdAt: string;
-  updatedAt: string;
-  turns: number;
-  maxTurns: number;
-  maxFailedVerificationAttempts: number;
-  consecutiveFailedVerificationAttempts: number;
-  lastEvaluation?: GoalEvaluation;
-  verification: {
-    commands: string[];
-    lastResult?: string;
-  };
-  evidence: GoalEvidence[];
-}
-
-interface GoalStore {
-  goals: Record<string, GoalState>;
-}
+export type {
+  GoalCommand,
+  GoalDecision,
+  GoalEvaluation,
+  GoalEvidenceInput,
+  GoalEvidenceKind,
+  GoalEvidenceOutcome,
+  GoalState,
+} from "./state.ts";
+export {
+  createGoal,
+  goalKey,
+  goalStatusText,
+  normalizeGoalState,
+  recordEvidence,
+  resumeGoal,
+  shouldAutoContinue,
+} from "./state.ts";
 
 export interface GoalLoopConfig {
   allowModelCreateGoal: boolean;
 }
 
+export interface GoalLoopExtensionOptions {
+  storage?: GoalStorage;
+  config?: GoalLoopConfig;
+  now?: () => Date;
+  randomId?: () => string;
+  evaluator?: GoalEvaluator;
+}
+
+interface CreateGoalToolParams {
+  objective?: unknown;
+}
+
+interface UpdateGoalToolParams {
+  proposedStatus?: "complete" | "blocked" | "needs_user";
+  reason?: string;
+  evidence?: string;
+  evidenceKind?: GoalEvidenceKind;
+  command?: string;
+  outcome?: GoalEvidenceOutcome;
+  verificationCommand?: string;
+}
+
 const OPTIONAL_SCHEMA = Symbol("optional-schema");
 type JsonSchema = Record<string, unknown> & { [OPTIONAL_SCHEMA]?: true };
+const CONFIG_PATH = join(homedir(), ".pi", "agent", "goal-loop", "config.json");
+const DEFAULT_CONFIG: GoalLoopConfig = { allowModelCreateGoal: false };
+const COMMANDS = new Set<GoalCommand>(["status", "list", "pause", "resume", "clear", "edit", "verify", "budget"]);
+const CLEAR_ALIASES = new Set(["stop", "off", "reset", "none", "cancel"]);
+
+const Schema = {
+  Object(properties: Record<string, JsonSchema>): JsonSchema {
+    const required = Object.entries(properties).filter(([, schema]) => !schema[OPTIONAL_SCHEMA]).map(([name]) => name);
+    const cleaned = Object.fromEntries(Object.entries(properties).map(([name, schema]) => {
+      const { [OPTIONAL_SCHEMA]: _optional, ...plain } = schema;
+      return [name, plain];
+    }));
+    return { type: "object", additionalProperties: false, ...(required.length ? { required } : {}), properties: cleaned };
+  },
+  String(options: Record<string, unknown> = {}): JsonSchema { return { type: "string", ...options }; },
+  Enum(values: readonly string[]): JsonSchema { return { type: "string", enum: [...values] }; },
+  Optional(schema: JsonSchema): JsonSchema { return { ...schema, [OPTIONAL_SCHEMA]: true }; },
+};
 
 export interface ParsedGoalArgs {
   command: GoalCommand;
   value: string;
 }
 
-const DEFAULT_MAX_TURNS = 10;
-const DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS = 3;
-const MAX_EVIDENCE_ENTRIES = 10;
-const GOAL_STATUS_FRAMES = ["◐", "◓", "◑", "◒"] as const;
-const STATE_PATH = join(homedir(), ".pi", "agent", "goal-loop", "state.json");
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "goal-loop", "config.json");
-const DEFAULT_CONFIG: GoalLoopConfig = { allowModelCreateGoal: false };
-
-const COMMANDS = new Set<GoalCommand>(["status", "pause", "resume", "clear", "edit", "verify"]);
-const Schema = {
-  Object(properties: Record<string, JsonSchema>): JsonSchema {
-    const required = Object.entries(properties)
-      .filter(([, schema]) => !schema[OPTIONAL_SCHEMA])
-      .map(([name]) => name);
-    const cleanProperties = Object.fromEntries(
-      Object.entries(properties).map(([name, schema]) => {
-        const { [OPTIONAL_SCHEMA]: _optional, ...cleanSchema } = schema;
-        return [name, cleanSchema];
-      }),
-    );
-    return {
-      type: "object",
-      ...(required.length ? { required } : {}),
-      properties: cleanProperties,
-    };
-  },
-  String(options: Record<string, unknown> = {}): JsonSchema {
-    return { type: "string", ...options };
-  },
-  Number(options: Record<string, unknown> = {}): JsonSchema {
-    return { type: "number", ...options };
-  },
-  Array(items: JsonSchema): JsonSchema {
-    return { type: "array", items };
-  },
-  Enum(values: readonly string[]): JsonSchema {
-    return { type: "string", enum: [...values] };
-  },
-  Optional(schema: JsonSchema): JsonSchema {
-    return { ...schema, [OPTIONAL_SCHEMA]: true };
-  },
-};
+export function parseGoalArgs(args: string): ParsedGoalArgs {
+  const trimmed = args.trim();
+  if (!trimmed) return { command: "status", value: "" };
+  const [first = "", ...rest] = trimmed.split(/\s+/);
+  if (CLEAR_ALIASES.has(first) && rest.length === 0) return { command: "clear", value: "" };
+  return COMMANDS.has(first as GoalCommand)
+    ? { command: first as GoalCommand, value: rest.join(" ").trim() }
+    : { command: "start", value: trimmed };
+}
 
 export function normalizeGoalLoopConfig(raw: unknown): GoalLoopConfig {
-  if (!raw || typeof raw !== "object") return DEFAULT_CONFIG;
-  return {
-    allowModelCreateGoal: (raw as { allowModelCreateGoal?: unknown }).allowModelCreateGoal === true,
-  };
+  return raw && typeof raw === "object" && (raw as { allowModelCreateGoal?: unknown }).allowModelCreateGoal === true
+    ? { allowModelCreateGoal: true }
+    : DEFAULT_CONFIG;
 }
 
 function readGoalLoopConfig(): GoalLoopConfig {
@@ -125,464 +147,504 @@ function readGoalLoopConfig(): GoalLoopConfig {
   }
 }
 
-export function parseGoalArgs(args: string): ParsedGoalArgs {
-  const trimmed = args.trim();
-  if (!trimmed) return { command: "status", value: "" };
+function messageRecord(message: unknown): { role?: unknown; stopReason?: unknown; message?: unknown; content?: unknown; usage?: unknown; timestamp?: unknown } | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const record = message as { role?: unknown; stopReason?: unknown; message?: unknown; content?: unknown; usage?: unknown; timestamp?: unknown };
+  return record.message && typeof record.message === "object" ? record.message as typeof record : record;
+}
 
-  const [first = "", ...rest] = trimmed.split(/\s+/);
-  if (COMMANDS.has(first as GoalCommand)) {
-    return { command: first as GoalCommand, value: rest.join(" ").trim() };
+export function sumAssistantUsage(messages: unknown[]): GoalUsage {
+  let total: GoalUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } };
+  for (const item of messages) {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant" || !record.usage || typeof record.usage !== "object") continue;
+    const raw = record.usage as Record<string, unknown>;
+    const cost = raw.cost && typeof raw.cost === "object" ? raw.cost as Record<string, unknown> : {};
+    const usage = normalizeGoalUsage({
+      input: raw.input,
+      output: raw.output,
+      cacheRead: raw.cacheRead,
+      cacheWrite: raw.cacheWrite,
+      totalTokens: raw.totalTokens,
+      cost: { total: cost.total },
+    });
+    if (!usage) continue;
+    total = {
+      input: total.input + usage.input,
+      output: total.output + usage.output,
+      cacheRead: total.cacheRead + usage.cacheRead,
+      cacheWrite: total.cacheWrite + usage.cacheWrite,
+      totalTokens: total.totalTokens + usage.totalTokens,
+      cost: { total: total.cost.total + usage.cost.total },
+    };
   }
-
-  return { command: "start", value: trimmed };
+  return total;
 }
 
-export function goalKey(projectRoot: string): string {
-  const normalized = normalize(projectRoot).replace(/\/+$/, "");
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+function autonomousRunFingerprint(messages: unknown[]): string {
+  const finalized = messages.map((item) => {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant") return undefined;
+    return {
+      timestamp: record.timestamp,
+      stopReason: record.stopReason,
+      usage: record.usage,
+      content: record.content,
+    };
+  }).filter(Boolean);
+  return createHash("sha256").update(JSON.stringify(finalized)).digest("hex");
 }
 
-export function createGoal(projectRoot: string, objective: string, now = new Date()): GoalState {
-  const timestamp = now.toISOString();
-  return {
-    projectRoot,
-    objective,
-    status: "active",
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    turns: 0,
-    maxTurns: DEFAULT_MAX_TURNS,
-    maxFailedVerificationAttempts: DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS,
-    consecutiveFailedVerificationAttempts: 0,
-    verification: {
-      commands: [],
-    },
-    evidence: [],
-  };
+function assistantStopReason(messages: unknown[]): "aborted" | "error" | undefined {
+  for (const item of [...messages].reverse()) {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant") continue;
+    return record.stopReason === "aborted" || record.stopReason === "error" ? record.stopReason : undefined;
+  }
+  return undefined;
 }
 
-export function normalizeGoalState(goal: GoalState | Record<string, unknown>): GoalState {
-  const raw = goal as Partial<GoalState>;
-  return {
-    projectRoot: raw.projectRoot ?? "",
-    objective: raw.objective ?? "",
-    status: raw.status ?? "active",
-    createdAt: raw.createdAt ?? new Date(0).toISOString(),
-    updatedAt: raw.updatedAt ?? raw.createdAt ?? new Date(0).toISOString(),
-    turns: raw.turns ?? 0,
-    maxTurns: raw.maxTurns ?? DEFAULT_MAX_TURNS,
-    maxFailedVerificationAttempts: raw.maxFailedVerificationAttempts ?? DEFAULT_MAX_FAILED_VERIFICATION_ATTEMPTS,
-    consecutiveFailedVerificationAttempts: raw.consecutiveFailedVerificationAttempts ?? 0,
-    lastEvaluation: raw.lastEvaluation,
-    verification: {
-      commands: Array.isArray(raw.verification?.commands) ? raw.verification.commands : [],
-      lastResult: raw.verification?.lastResult,
-    },
-    evidence: Array.isArray(raw.evidence) ? raw.evidence : [],
-  };
+function decisionTemplate(goal: GoalState): string {
+  const pending = goal.pendingRun;
+  if (!pending) return "No autonomous run is currently pending.";
+  return JSON.stringify({
+    goalId: goal.goalId,
+    goalRevision: goal.goalRevision,
+    runId: pending.runId,
+    evaluationRequestId: pending.evaluationRequestId,
+    decision: "continue",
+    reason: "one short sentence",
+  });
 }
 
-export function continuationDeliveryOptions(isIdle: boolean): { deliverAs: "followUp" } | undefined {
-  return isIdle ? undefined : { deliverAs: "followUp" };
-}
-
-export function recordEvidence(goal: GoalState, evidence: GoalEvidenceInput, now = new Date()): GoalState {
-  const entry: GoalEvidence = {
-    at: now.toISOString(),
-    kind: evidence.kind,
-    summary: evidence.summary,
-    command: evidence.command,
-    outcome: evidence.outcome,
-  };
-
-  const verification =
-    entry.kind === "verification"
-      ? {
-          ...goal.verification,
-          lastResult: `${entry.outcome ?? "unknown"}: ${entry.summary}`,
-        }
-      : goal.verification;
-
-  return {
-    ...goal,
-    verification,
-    evidence: [...goal.evidence, entry].slice(-MAX_EVIDENCE_ENTRIES),
-    updatedAt: now.toISOString(),
-  };
-}
-
-export function recordEvaluation(goal: GoalState, evaluation: GoalEvaluation, now = new Date()): GoalState {
-  const failedVerification =
-    evaluation.decision === "continue" && /\b(fail|fails|failed|failing|error|errored|red)\b/i.test(evaluation.reason);
-  const consecutiveFailedVerificationAttempts = failedVerification
-    ? goal.consecutiveFailedVerificationAttempts + 1
-    : evaluation.decision === "continue"
-      ? 0
-      : goal.consecutiveFailedVerificationAttempts;
-
-  const explicitStatus: GoalStatus =
-    evaluation.decision === "complete"
-      ? "complete"
-      : evaluation.decision === "blocked"
-        ? "blocked"
-        : evaluation.decision === "needs_user"
-          ? "needs_user"
-          : "active";
-  const status =
-    explicitStatus === "active" && consecutiveFailedVerificationAttempts >= goal.maxFailedVerificationAttempts
-      ? "blocked"
-      : explicitStatus;
-
-  return {
-    ...goal,
-    status,
-    turns: goal.turns + (evaluation.decision === "continue" ? 1 : 0),
-    consecutiveFailedVerificationAttempts,
-    updatedAt: now.toISOString(),
-    lastEvaluation: evaluation,
-  };
-}
-
-export function shouldAutoContinue(goal: GoalState): boolean {
-  return goal.status === "active" && goal.turns < goal.maxTurns;
-}
-
-export function resumeGoal(goal: GoalState, now = new Date()): GoalState {
-  return {
-    ...goal,
-    status: "active",
-    maxTurns: goal.turns >= goal.maxTurns ? goal.turns + DEFAULT_MAX_TURNS : goal.maxTurns,
-    updatedAt: now.toISOString(),
-  };
-}
-
-export function goalStatusText(goal: GoalState | undefined, frame = 0): string | undefined {
-  if (!goal || goal.status !== "active") return undefined;
-  return `goal ${GOAL_STATUS_FRAMES[frame % GOAL_STATUS_FRAMES.length]} ${goal.turns}/${goal.maxTurns}`;
-}
-
-export function buildEvaluatorInstructions(goal: GoalState): string {
-  const commands = goal.verification.commands.length
-    ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
-    : "- No explicit verification commands configured.";
-  const evidence = goal.evidence.length
-    ? goal.evidence
-        .slice(-5)
-        .map((entry) => {
-          const command = entry.command ? ` [${entry.command}]` : "";
-          const outcome = entry.outcome ? ` (${entry.outcome})` : "";
-          return `- ${entry.kind}${command}${outcome}: ${entry.summary}`;
-        })
-        .join("\n")
-    : "- No evidence recorded yet.";
-
+function workerInstructions(goal: GoalState): string {
   return [
-    "Evaluator subagent protocol:",
-    "- Before claiming complete, blocked, or needs_user, call a foreground read-only evaluator subagent if the Agent tool is available.",
-    "- Also call the evaluator when verification failures repeat or the evidence is ambiguous.",
-    "- Normal continue loop turns do not need evaluator review.",
-    "- If Agent is unavailable, use the worker GOAL_STATUS/GOAL_REASON markers as the fallback.",
-    "",
-    "Use this shape:",
-    "Agent({",
-    '  subagent_type: "Explore",',
-    '  description: "Evaluate goal status",',
-    "  run_in_background: false,",
-    "  prompt: `Review this goal loop decision.",
-    "Proposed status: <complete | blocked | needs_user | continue>",
-    "Proposed reason: <why the worker thinks this status is right>",
-    "Latest verification/output: <paste the latest relevant command output or evidence>",
-    `Goal: ${goal.objective}`,
-    "Verification commands:",
-    commands,
-    "Recent evidence:",
-    evidence,
-    "Return only:",
-    "GOAL_EVAL_STATUS: complete | continue | blocked | needs_user",
-    "GOAL_EVAL_REASON: one short sentence",
-    "GOAL_EVAL_CONFIDENCE: low | medium | high`",
-    "})",
-    "",
-    "Evaluator markers win over worker markers when both are present.",
+    "At the end of the response, include exactly one worker decision JSON line:",
+    `GOAL_WORKER_DECISION: ${decisionTemplate(goal)}`,
   ].join("\n");
+}
+
+function usageBudgetText(goal: GoalState): string {
+  const usage = goal.usage;
+  const tokens = usage?.totalTokens ?? 0;
+  const cost = usage?.cost.total ?? 0;
+  const budget = goal.tokenBudget === undefined ? "off" : `${tokens}/${goal.tokenBudget} tokens`;
+  return `Usage: ${tokens} tokens (input ${usage?.input ?? 0}, output ${usage?.output ?? 0}, cache read ${usage?.cacheRead ?? 0}, cache write ${usage?.cacheWrite ?? 0}, cost $${cost.toFixed(6)}); token budget: ${budget}`;
+}
+
+function steeringText(goal: GoalState): string {
+  return goal.steering.length
+    ? goal.steering.slice(-5).map((entry) => `- r${entry.goalRevision}: ${entry.text}`).join("\n")
+    : "- No follow-up steering.";
 }
 
 export function buildContinuationPrompt(goal: GoalState): string {
   const commands = goal.verification.commands.length
     ? goal.verification.commands.map((command) => `- ${command}`).join("\n")
-    : "- No explicit verification commands configured. Use the best project-specific checks you can infer.";
+    : "- No explicit verification commands configured.";
   const evidence = goal.evidence.length
-    ? goal.evidence
-        .slice(-5)
-        .map((entry) => {
-          const command = entry.command ? ` [${entry.command}]` : "";
-          const outcome = entry.outcome ? ` (${entry.outcome})` : "";
-          return `- ${entry.kind}${command}${outcome}: ${entry.summary}`;
-        })
-        .join("\n")
+    ? goal.evidence.slice(-5).map((entry) => `- ${entry.kind}${entry.command ? ` [${entry.command}]` : ""}${entry.outcome ? ` (${entry.outcome})` : ""}: ${entry.summary}`).join("\n")
     : "- No evidence recorded yet.";
-
   return [
+    // This durable marker ties before_agent_start to the exact message sent by
+    // the coordinator, rather than accidentally claiming a normal user turn.
+    `GOAL_LOOP_CONTINUATION_RUN: ${goal.pendingRun?.runId ?? "none"}`,
     "Continue working toward this active goal.",
-    "",
     `Goal: ${goal.objective}`,
+    "Follow-up steering:",
+    steeringText(goal),
     `Loop turn: ${goal.turns + 1}/${goal.maxTurns}`,
-    "",
+    usageBudgetText(goal),
     "Verification commands:",
     commands,
-    "",
     "Recent evidence:",
     evidence,
-    "",
-    "Goal tools:",
-    "- get_goal: inspect the current goal, verification commands, and evidence",
-    "- update_goal: record evidence, add verification commands, or mark complete/blocked/needs_user",
-    "",
-    buildEvaluatorInstructions(goal),
-    "",
-    "Operate as a goal loop:",
-    "- inspect the current state",
-    "- update or create todos if available",
-    "- call get_goal when goal state is unclear",
-    "- call update_goal after meaningful verification or when stopping",
-    "- use subagents only for independent research or review lanes",
-    "- make focused changes",
-    "- run the smallest useful verification, then broader checks when near completion",
-    "- Stop and ask the user if blocked, risky, or the same failure repeats",
-    "",
-    "At the end of your response, include exactly one status marker:",
-    "GOAL_STATUS: complete | continue | blocked | needs_user",
-    "GOAL_REASON: one short sentence",
-  ].join("\n");
+    "Use get_goal to inspect state. Use update_goal only to record evidence, add verification commands, or propose a terminal outcome.",
+    "A separate coordinator-owned evaluator will inspect this run after it settles. Report progress honestly and emit only the worker decision record.",
+    workerInstructions(goal),
+  ].join("\n\n");
 }
 
-export function buildGoalSystemPrompt(goal: GoalState): string {
-  return [
-    "Active Pi goal loop:",
-    `Goal: ${goal.objective}`,
-    `Status: ${goal.status}`,
-    `Loop budget: ${goal.turns}/${goal.maxTurns}`,
-    "",
-    "Before stopping, evaluate whether the goal is complete against the objective and any verification command output.",
-    "Use get_goal to inspect persisted goal state and update_goal to record evidence or terminal status.",
-    buildEvaluatorInstructions(goal),
-    "End every response while this goal is active with:",
-    "GOAL_STATUS: complete | continue | blocked | needs_user",
-    "GOAL_REASON: one short sentence",
-  ].join("\n");
+function continuationRunId(prompt: unknown): string | undefined {
+  if (typeof prompt !== "string") return undefined;
+  const match = /^GOAL_LOOP_CONTINUATION_RUN:\s*(\S+)$/m.exec(prompt);
+  return match?.[1];
 }
 
-function normalizeConfidence(value: string | undefined): GoalEvaluation["confidence"] {
-  const normalized = value?.toLowerCase();
-  return normalized === "low" || normalized === "medium" || normalized === "high" ? normalized : "medium";
-}
-
-export function parseEvaluationFromText(text: string): GoalEvaluation {
-  const evaluatorStatusMatch = text.match(/GOAL_EVAL_STATUS:\s*(complete|continue|blocked|needs_user)/i);
-  if (evaluatorStatusMatch) {
-    const evaluatorReasonMatch = text.match(/GOAL_EVAL_REASON:\s*(.+)/i);
-    const evaluatorConfidenceMatch = text.match(/GOAL_EVAL_CONFIDENCE:\s*(low|medium|high)/i);
-
-    return {
-      decision: evaluatorStatusMatch[1].toLowerCase() as GoalDecision,
-      reason: evaluatorReasonMatch?.[1]?.trim() || "No explicit evaluator reason found.",
-      confidence: normalizeConfidence(evaluatorConfidenceMatch?.[1]),
-    };
-  }
-
-  const statusMatch = text.match(/GOAL_STATUS:\s*(complete|continue|blocked|needs_user)/i);
-  const reasonMatch = text.match(/GOAL_REASON:\s*(.+)/i);
-  const decision = (statusMatch?.[1]?.toLowerCase() as GoalDecision | undefined) ?? "continue";
-
-  return {
-    decision,
-    reason: reasonMatch?.[1]?.trim() || "No explicit goal reason found.",
-    confidence: statusMatch ? "medium" : "low",
-  };
-}
-
-function getText(content: unknown): string {
+function contentText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .flatMap((part) => {
-      if (typeof part === "string") return [part];
-      if (!part || typeof part !== "object") return [] as string[];
-      const text = (part as { text?: unknown }).text;
-      return typeof text === "string" ? [text] : [];
-    })
-    .join("\n")
-    .trim();
+    .filter((part): part is { type?: unknown; text?: unknown } => Boolean(part) && typeof part === "object")
+    .map((part) => part.type === "text" && typeof part.text === "string" ? part.text : "")
+    .join("\n");
 }
 
-function unwrapMessage(message: unknown): { role?: unknown; content?: unknown; toolName?: unknown; stopReason?: unknown } | undefined {
-  if (!message || typeof message !== "object") return undefined;
-  const record = message as { role?: unknown; content?: unknown; toolName?: unknown; stopReason?: unknown; message?: unknown };
-  return record.message && typeof record.message === "object"
-    ? (record.message as { role?: unknown; content?: unknown; toolName?: unknown; stopReason?: unknown })
-    : record;
+export function buildRunEvaluationContext(messages: unknown[]): string {
+  return messages.flatMap((item) => {
+    const record = messageRecord(item);
+    if (record?.role !== "assistant" && record?.role !== "toolResult") return [];
+    const text = contentText(record.content).trim();
+    return text ? [`[${String(record.role)}] ${text}`] : [];
+  }).join("\n\n").slice(-32_000);
 }
 
-function getLastAssistantText(messages: unknown[]): string {
-  for (const message of [...messages].reverse()) {
-    const record = unwrapMessage(message);
-    if (record?.role !== "assistant") continue;
-    const text = getText(record.content);
-    if (text) return text;
+function buildGoalEvaluatorInput(
+  goal: GoalState & { pendingRun: NonNullable<GoalState["pendingRun"]> },
+  projectRoot: string,
+): GoalEvaluatorInput | undefined {
+  const pending = goal.pendingRun;
+  const candidate = pending.candidate;
+  if (candidate?.protocol !== "valid") return undefined;
+  return {
+    goalId: goal.goalId,
+    goalRevision: pending.goalRevision,
+    runId: pending.runId,
+    evaluationRequestId: pending.evaluationRequestId,
+    objective: goal.objective,
+    steering: goal.steering.map((entry) => entry.text),
+    verificationCommands: [...goal.verification.commands],
+    verificationProofs: goal.verification.proofs.filter((proof) =>
+      proof.goalRevision === pending.goalRevision && proof.runId === pending.runId
+    ),
+    evidence: [...goal.evidence],
+    transcriptExcerpt: pending.evaluationContext ?? "",
+    worker: candidate.worker,
+    cwd: projectRoot,
+  };
+}
+
+function evaluatorInputKey(input: GoalEvaluatorInput): string {
+  return JSON.stringify(input);
+}
+
+function evaluatorInputLimitReason(input: GoalEvaluatorInput): string | undefined {
+  if (input.objective.length > MAX_GOAL_OBJECTIVE_CHARS) {
+    return "Persisted goal objective exceeds evaluator input limits.";
   }
-  return "";
-}
-
-export function getGoalEvaluationText(messages: unknown[]): string {
-  for (const message of [...messages].reverse()) {
-    const record = unwrapMessage(message);
-    if (record?.role !== "toolResult" || record.toolName !== "Agent") continue;
-    const text = getText(record.content);
-    if (/GOAL_EVAL_STATUS:\s*(complete|continue|blocked|needs_user)/i.test(text)) return text;
+  if (input.verificationCommands.length > MAX_VERIFICATION_COMMANDS ||
+    input.verificationCommands.some((command) => command.length > MAX_VERIFICATION_COMMAND_CHARS)) {
+    return "Persisted verification commands exceed evaluator input limits.";
   }
-  return getLastAssistantText(messages);
-}
-
-function getLastAssistantStopReason(messages: unknown[]): string | undefined {
-  for (const message of [...messages].reverse()) {
-    const record = unwrapMessage(message);
-    if (record?.role === "assistant") return typeof record.stopReason === "string" ? record.stopReason : undefined;
+  if (input.verificationProofs.length > MAX_VERIFICATION_COMMANDS + 1 || input.verificationProofs.some((proof) =>
+    proof.summary.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS ||
+    (proof.command?.length ?? 0) > MAX_VERIFICATION_COMMAND_CHARS
+  )) {
+    return "Persisted verification proofs exceed evaluator input limits.";
+  }
+  if (input.evidence.some((entry) =>
+    entry.summary.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS ||
+    (entry.command?.length ?? 0) > MAX_VERIFICATION_COMMAND_CHARS
+  )) {
+    return "Persisted goal evidence exceeds evaluator input limits.";
+  }
+  if (input.steering.some((entry) => entry.length > MAX_GOAL_OBJECTIVE_CHARS) ||
+    input.worker.reason.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS) {
+    return "Persisted goal context exceeds evaluator input limits.";
   }
   return undefined;
 }
 
-export function getGoalEvaluation(messages: unknown[]): GoalEvaluation {
-  const stopReason = getLastAssistantStopReason(messages);
-  if (stopReason === "aborted" || stopReason === "error") {
-    return {
-      decision: "blocked",
-      reason: `Assistant turn ended with ${stopReason}.`,
-      confidence: "low",
-    };
+function isCurrentContinuation(messages: unknown[], runId: string): boolean {
+  for (const message of [...messages].reverse()) {
+    const record = messageRecord(message);
+    if (record?.role !== "user") continue;
+    return continuationRunId(contentText(record.content)) === runId;
   }
-  return parseEvaluationFromText(getGoalEvaluationText(messages));
+  return false;
 }
 
-function readStore(): GoalStore {
-  if (!existsSync(STATE_PATH)) return { goals: {} };
-  try {
-    const parsed = JSON.parse(readFileSync(STATE_PATH, "utf8")) as GoalStore;
-    if (!parsed || typeof parsed !== "object" || !parsed.goals || typeof parsed.goals !== "object" || Array.isArray(parsed.goals)) return { goals: {} };
-    return parsed;
-  } catch {
-    return { goals: {} };
-  }
+function containsUserMessage(messages: unknown[]): boolean {
+  return messages.some((message) => messageRecord(message)?.role === "user");
 }
 
-function writeStore(store: GoalStore) {
-  mkdirSync(dirname(STATE_PATH), { recursive: true });
-  writeFileSync(STATE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+function firstNonContinuationUserIndex(messages: unknown[], runId: string): number {
+  return messages.findIndex((message) => {
+    const record = messageRecord(message);
+    return record?.role === "user" && continuationRunId(contentText(record.content)) !== runId;
+  });
 }
 
-function getProjectGoal(projectRoot: string): GoalState | undefined {
-  const goal = readStore().goals[goalKey(projectRoot)];
-  return goal ? normalizeGoalState(goal) : undefined;
-}
-
-function setProjectGoal(goal: GoalState) {
-  const store = readStore();
-  store.goals[goalKey(goal.projectRoot)] = goal;
-  writeStore(store);
-}
-
-function clearProjectGoal(projectRoot: string) {
-  const store = readStore();
-  delete store.goals[goalKey(projectRoot)];
-  writeStore(store);
-}
-
-function formatStatus(goal: GoalState | undefined): string {
-  if (!goal) return "No active goal for this project.";
-  const latestEvidence = goal.evidence.at(-1);
-  return [
+export function buildGoalSystemPrompt(goal: GoalState, autonomous = true): string {
+  const common = [
+    "Active Pi goal loop:",
     `Goal: ${goal.objective}`,
     `Status: ${goal.status}`,
-    `Loops used: ${goal.turns}/${goal.maxTurns}`,
-    `Verification: ${goal.verification.commands.length ? goal.verification.commands.join(", ") : "none"}`,
-    latestEvidence ? `Latest evidence: ${latestEvidence.kind} - ${latestEvidence.summary}` : "Latest evidence: none",
-    goal.lastEvaluation ? `Last check: ${goal.lastEvaluation.decision} - ${goal.lastEvaluation.reason}` : "Last check: none",
+    "Follow-up steering:",
+    steeringText(goal),
+    `Loop budget: ${goal.turns}/${goal.maxTurns}`,
+    usageBudgetText(goal),
+    "Model-authored terminal status is only a proposal; the coordinator decides it after the run settles.",
+  ];
+  if (!autonomous) {
+    return [...common, "This is a normal user turn, not an autonomous continuation. Do not call update_goal for this pending run or emit autonomous decision records."].join("\n\n");
+  }
+  return [
+    ...common,
+    "Use get_goal to inspect state and update_goal to record evidence, add verification commands, or propose a terminal outcome.",
+    "A separate coordinator-owned evaluator will inspect this run after it settles. Report progress honestly and emit only the worker decision record.",
+    workerInstructions(goal),
+  ].join("\n\n");
+}
+
+function formatAchievement(goal: GoalState): string {
+  return [
+    `Goal: ${goal.objective}`,
+    `Completed: ${goal.updatedAt}`,
+    usageBudgetText(goal),
+    goal.lastEvaluation ? `Receipt: ${goal.lastEvaluation.reason}` : "Receipt: completed",
   ].join("\n");
 }
 
-function notify(ctx: { ui: { notify: (message: string, type?: "info" | "warning" | "error") => void } }, message: string, type: "info" | "warning" | "error" = "info") {
+export function formatGoalDuration(startedAt: string, now: Date): string {
+  const seconds = Math.max(0, Math.floor((now.getTime() - Date.parse(startedAt)) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+function formatStatus(goal: GoalState | undefined, latestAchievement: GoalState | undefined, timestamp: Date): string {
+  if (!goal) {
+    return latestAchievement
+      ? `No active goal for this working root. Latest achievement (read-only):\n${formatAchievement(latestAchievement)}`
+      : "No active goal for this working root. No archived achievement found.";
+  }
+  const latest = goal.evidence.at(-1);
+  return [
+    `Goal: ${goal.objective}`,
+    `Status: ${goal.status}`,
+    `Duration: ${formatGoalDuration(goal.createdAt, timestamp)}`,
+    `Evaluated runs: ${goal.evaluatedRuns}`,
+    `Loops used: ${goal.turns}/${goal.maxTurns}`,
+    usageBudgetText(goal),
+    `Revision: ${goal.goalRevision}`,
+    `Verification: ${goal.verification.commands.length ? goal.verification.commands.join(", ") : "none"}`,
+    latest ? `Latest evidence: ${latest.kind} - ${latest.summary}` : "Latest evidence: none",
+    goal.lastEvaluation ? `Last check: ${goal.lastEvaluation.decision} - ${goal.lastEvaluation.reason}` : "Last check: none",
+    goal.limitDetail ? `Limit: ${goal.limitDetail.reason}${goal.limitDetail.retryAfter ? ` (retry-after: ${goal.limitDetail.retryAfter})` : ""}` : undefined,
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function formatGoalList(goals: GoalState[]): string {
+  if (!goals.length) return "No active goals across stored working roots.";
+  return [
+    "Active goals across stored working roots:",
+    ...goals.map((goal) => `- ${goal.projectRoot} [${goal.status}] ${goal.turns}/${goal.maxTurns} — ${goal.objective}`),
+  ].join("\n");
+}
+
+function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
   ctx.ui.notify(message, type);
 }
 
-type GoalStatusContext = {
-  cwd?: string;
-  ui: { setStatus: (name: string, value: string | undefined) => void };
-};
+function storageError(ctx: ExtensionContext, error: unknown): void {
+  if (error instanceof GoalStorageCorruptError) {
+    notify(ctx, `Goal loop stopped because state was corrupt. Quarantined file: ${error.quarantinedPath}`, "error");
+    return;
+  }
+  if (error instanceof GoalStorageConflictError) {
+    if (error.manualCleanupPath) {
+      notify(ctx, `Goal loop storage is blocked by an orphaned lock. After verifying no Pi process is using this goal, remove: ${error.manualCleanupPath}`, "error");
+      return;
+    }
+    notify(ctx, "Goal loop state changed in another session. Reload status and retry; no continuation was sent.", "warning");
+    return;
+  }
+  if (error instanceof GoalStorageAuditError) {
+    notify(ctx, error.message, "warning");
+    return;
+  }
+  notify(ctx, `Goal loop storage error: ${error instanceof Error ? error.message : String(error)}`, "error");
+}
 
-function createGoalStatusAnimator() {
+function auditEvent(type: string, reason: string, ctx: ExtensionContext, now: Date): GoalAuditEvent {
+  return { type, at: now.toISOString(), reason, sessionId: ctx.sessionManager.getSessionId() };
+}
+
+type GoalReadResult =
+  | { ok: true; goal: GoalState | undefined }
+  | { ok: false };
+
+function readGoal(storage: GoalStorage, projectRoot: string, ctx: ExtensionContext): GoalReadResult {
+  try {
+    return { ok: true, goal: storage.read(projectRoot) };
+  } catch (error) {
+    storageError(ctx, error);
+    if (error instanceof GoalStorageAuditError && error.committedState) {
+      return { ok: true, goal: error.committedState };
+    }
+    return { ok: false };
+  }
+}
+
+function readLatestAchievement(storage: GoalStorage, projectRoot: string, ctx: ExtensionContext): GoalState | undefined {
+  try {
+    return storage.readLatestCompleted(projectRoot);
+  } catch (error) {
+    storageError(ctx, error);
+    return undefined;
+  }
+}
+
+function archiveCompletedGoal(storage: GoalStorage, goal: GoalState, ctx: ExtensionContext): boolean {
+  try {
+    storage.archive(goal);
+    return true;
+  } catch (error) {
+    storageError(ctx, error);
+    notify(ctx, "The completed goal remains in the active slot because its archive receipt could not be persisted.", "warning");
+    return false;
+  }
+}
+
+function persistGoal(storage: GoalStorage, goal: GoalState, event: GoalAuditEvent, ctx: ExtensionContext): GoalState | undefined {
+  try {
+    return storage.write(goal, goal.storageRevision, event);
+  } catch (error) {
+    storageError(ctx, error);
+    return error instanceof GoalStorageAuditError ? error.committedState : undefined;
+  }
+}
+
+function clearGoal(storage: GoalStorage, projectRoot: string, revision: number, event: GoalAuditEvent, ctx: ExtensionContext): boolean {
+  try {
+    storage.clear(projectRoot, revision, event);
+    return true;
+  } catch (error) {
+    storageError(ctx, error);
+    return error instanceof GoalStorageAuditError && error.cleared;
+  }
+}
+
+function leaseConflict(goal: GoalState, sessionId: string, now: Date): { owner: string; expiresAt: string } | undefined {
+  const lease = goal.lease;
+  if (!lease || lease.sessionId === sessionId || Date.parse(lease.expiresAt) <= now.getTime()) return undefined;
+  return { owner: lease.sessionId, expiresAt: lease.expiresAt };
+}
+
+function notifyLeaseConflict(ctx: ExtensionContext, conflict: { owner: string; expiresAt: string }): void {
+  notify(ctx, `Goal is active in session ${conflict.owner.slice(0, 8)} until ${conflict.expiresAt}. Pause it there or resume after the lease expires.`, "warning");
+}
+
+function ownsFreshPendingRun(
+  goal: GoalState,
+  sessionId: string,
+  now: Date,
+): goal is GoalState & { lease: NonNullable<GoalState["lease"]>; pendingRun: NonNullable<GoalState["pendingRun"]> } {
+  return goal.status === "active" &&
+    goal.lease?.sessionId === sessionId &&
+    Date.parse(goal.lease.expiresAt) > now.getTime() &&
+    goal.pendingRun?.sessionId === sessionId;
+}
+
+function prepareDispatch(goal: GoalState, sessionId: string, now: Date, randomId: () => string): { goal?: GoalState; reason?: string } {
+  const previousOwner = goal.lease?.sessionId;
+  const leased = acquireGoalLease(goal, sessionId, now);
+  if (!leased.ok) return { reason: `Goal is leased by session ${leased.ownerSessionId.slice(0, 8)} until ${leased.expiresAt}.` };
+  let next = leased.goal;
+  if (next.pendingRun && (previousOwner !== sessionId || next.pendingRun.sessionId !== sessionId)) {
+    next = { ...next, pendingRun: undefined, updatedAt: now.toISOString() };
+  }
+  const pending = createPendingRun(next, sessionId, now, { runId: randomId(), evaluationRequestId: randomId() });
+  return pending.ok ? { goal: pending.goal } : { reason: pending.reason };
+}
+
+function sendPrepared(pi: ExtensionAPI, ctx: ExtensionContext, goal: GoalState): boolean {
+  if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+    notify(ctx, "Goal run was saved but not sent because Pi is busy or messages are pending.", "warning");
+    return false;
+  }
+  try {
+    pi.sendUserMessage(buildContinuationPrompt(goal));
+    return true;
+  } catch (error) {
+    notify(ctx, `Goal run was saved but could not be sent: ${error instanceof Error ? error.message : String(error)}. Run /goal resume to retry.`, "error");
+    return false;
+  }
+}
+
+function createGoalStatusAnimator(storage: GoalStorage) {
   let frame = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
-  let latestCtx: GoalStatusContext | undefined;
-
-  const paint = (ctx: GoalStatusContext): boolean => {
-    const goal = getProjectGoal(ctx.cwd || process.cwd());
-    const active = goal?.status === "active";
+  let latestCtx: ExtensionContext | undefined;
+  const paint = (ctx: ExtensionContext): boolean => {
+    const result = readGoal(storage, ctx.cwd || process.cwd(), ctx);
+    const goal = result.ok ? result.goal : undefined;
     ctx.ui.setStatus("goal-loop", goalStatusText(goal, frame));
-    return active;
+    return result.ok && goal?.status === "active";
   };
-
-  const stopTimer = () => {
-    if (timer) clearInterval(timer);
-    timer = undefined;
-  };
-
   return {
-    sync(ctx: GoalStatusContext) {
+    sync(ctx: ExtensionContext) {
       latestCtx = ctx;
       if (!paint(ctx)) {
-        stopTimer();
+        if (timer) clearInterval(timer);
+        timer = undefined;
         return;
       }
       if (!timer) {
         timer = setInterval(() => {
           if (!latestCtx) return;
-          frame = (frame + 1) % GOAL_STATUS_FRAMES.length;
-          if (!paint(latestCtx)) stopTimer();
+          frame += 1;
+          if (!paint(latestCtx) && timer) {
+            clearInterval(timer);
+            timer = undefined;
+          }
         }, 500);
+        timer.unref?.();
       }
     },
-    clear(ctx?: GoalStatusContext) {
-      stopTimer();
+    clear(ctx?: ExtensionContext) {
+      if (timer) clearInterval(timer);
+      timer = undefined;
       latestCtx = undefined;
       ctx?.ui.setStatus("goal-loop", undefined);
     },
   };
 }
 
-function sendContinuation(pi: ExtensionAPI, ctx: { isIdle: () => boolean }, goal: GoalState) {
-  const options = continuationDeliveryOptions(ctx.isIdle());
-  if (options) {
-    pi.sendUserMessage(buildContinuationPrompt(goal), options);
-    return;
-  }
-  pi.sendUserMessage(buildContinuationPrompt(goal));
-}
-
-export default function goalLoopExtension(pi: ExtensionAPI) {
-  const config = readGoalLoopConfig();
-  const status = createGoalStatusAnimator();
+function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): void {
+  const storage = options.storage ?? createGoalStorage();
+  const config = options.config ?? readGoalLoopConfig();
+  const now = options.now ?? (() => new Date());
+  const randomId = options.randomId ?? randomUUID;
+  const evaluator = options.evaluator ?? createSubagentGoalEvaluator(pi, { timeoutMs: 120_000 });
+  const status = createGoalStatusAnimator(storage);
+  // Tool authority belongs only to the accepted top-level continuation attempt
+  // and is revoked at its first agent_end or first non-marker user message.
+  // Chain identity survives Pi's markerless low-level retries until
+  // agent_settled, but never grants tools.
+  type AutonomousRunIdentity = { projectRoot: string; sessionId: string; runId: string };
+  type AutonomousRunInterruption = AutonomousRunIdentity & { reason: string };
+  let activeContinuation: AutonomousRunIdentity | undefined;
+  let autonomousChain: AutonomousRunIdentity | undefined;
+  let autonomousInterruption: AutonomousRunInterruption | undefined;
+  let providerLimit: AutonomousRunIdentity & { retryAfter?: string } | undefined;
+  const clearContinuationAuthority = (): void => { activeContinuation = undefined; };
+  const clearProviderLimit = (): void => { providerLimit = undefined; };
+  const clearAutonomousTracking = (): void => {
+    autonomousChain = undefined;
+    autonomousInterruption = undefined;
+    providerLimit = undefined;
+  };
+  const matchesRun = (identity: AutonomousRunIdentity | undefined, projectRoot: string, sessionId: string, runId: string): boolean =>
+    identity?.projectRoot === projectRoot && identity.sessionId === sessionId && identity.runId === runId;
+  const hasContinuationAuthority = (projectRoot: string, sessionId: string, runId: string): boolean =>
+    matchesRun(activeContinuation, projectRoot, sessionId, runId);
 
   pi.registerTool({
     name: "get_goal",
     label: "Get Goal",
-    description: "Inspect the current project goal, status, verification commands, and evidence.",
-    promptSnippet: "Inspect the current project goal loop state.",
+    description: "Inspect the current working-root goal, status, verification commands, and evidence.",
+    promptSnippet: "Inspect the current working-root goal loop state.",
     parameters: Schema.Object({}) as any,
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const goal = getProjectGoal(ctx.cwd || process.cwd());
-      return {
-        content: [{ type: "text", text: formatStatus(goal) }],
-        details: { goal },
-      };
+    async execute(_id, _params, _signal, _update, ctx) {
+      const result = readGoal(storage, ctx.cwd || process.cwd(), ctx);
+      if (!result.ok) {
+        return { content: [{ type: "text", text: "Goal state is unavailable because storage could not be read." }], details: { error: "storage_error" } };
+      }
+      const latestAchievement = result.goal ? undefined : readLatestAchievement(storage, ctx.cwd || process.cwd(), ctx);
+      return { content: [{ type: "text", text: formatStatus(result.goal, latestAchievement, now()) }], details: { goal: result.goal, latestAchievement } };
     },
   });
 
@@ -590,29 +652,41 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
     pi.registerTool({
       name: "create_goal",
       label: "Create Goal",
-      description: "Create or replace the current project goal loop objective.",
-      promptSnippet: "Create or replace the current project goal loop objective.",
-      parameters: Schema.Object({
-        objective: Schema.String({ description: "Goal objective to pursue." }),
-        maxTurns: Schema.Optional(Schema.Number({ description: "Optional turn budget. Default is 10." })),
-        verificationCommands: Schema.Optional(Schema.Array(Schema.String({ description: "Verification command." }))),
-      }) as any,
+      description: "Create or replace the current working-root goal loop objective when model creation is explicitly enabled.",
+      promptSnippet: "Create a goal only when the user has enabled model goal creation.",
+      parameters: Schema.Object({ objective: Schema.String({ description: "Goal objective.", minLength: 1, maxLength: MAX_GOAL_OBJECTIVE_CHARS }) }) as any,
       executionMode: "sequential",
-      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      async execute(_id, params, _signal, _update, ctx) {
         const projectRoot = ctx.cwd || process.cwd();
-        const goal = {
-          ...createGoal(projectRoot, params.objective),
-          maxTurns: typeof params.maxTurns === "number" && params.maxTurns > 0 ? Math.floor(params.maxTurns) : DEFAULT_MAX_TURNS,
-          verification: {
-            commands: Array.isArray(params.verificationCommands) ? [...new Set(params.verificationCommands)] : [],
-          },
-        };
-        setProjectGoal(goal);
+        const readResult = readGoal(storage, projectRoot, ctx);
+        if (!readResult.ok) {
+          return { content: [{ type: "text", text: "Goal was not created because storage could not be read safely." }], details: { error: "storage_error" } };
+        }
+        const existing = readResult.goal;
+        const owner = ctx.sessionManager.getSessionId();
+        const timestamp = now();
+        if (existing) {
+          const conflict = leaseConflict(existing, owner, timestamp);
+          if (conflict) {
+            notifyLeaseConflict(ctx, conflict);
+            return { content: [{ type: "text", text: "Goal creation refused because another session owns the goal lease." }], details: { error: "lease_conflict" } };
+          }
+          if (existing.status === "complete" && !archiveCompletedGoal(storage, existing, ctx)) {
+            return { content: [{ type: "text", text: "Goal creation refused until the completed receipt can be archived." }], details: { error: "archive_error" } };
+          }
+        }
+        const input = params as CreateGoalToolParams;
+        const validated = validateGoalObjective(input.objective);
+        if (!validated.ok) return { content: [{ type: "text", text: validated.reason }], details: { error: "invalid_objective" } };
+        const objective = validated.objective;
+        let goal = { ...createGoal(projectRoot, objective, timestamp, randomId()), storageRevision: existing?.storageRevision ?? 0 };
+        const prepared = ctx.isIdle() && !ctx.hasPendingMessages() ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
+        if (prepared?.goal) goal = prepared.goal;
+        const persisted = persistGoal(storage, goal, auditEvent(prepared?.goal ? "run_dispatched" : "goal_created", "Model goal creation enabled by configuration.", ctx, timestamp), ctx);
+        if (!persisted) return { content: [{ type: "text", text: "Goal was not created because storage rejected the transition." }], details: { error: "storage_error" } };
         status.sync(ctx);
-        return {
-          content: [{ type: "text", text: `Goal created.\n\n${formatStatus(goal)}` }],
-          details: { goal },
-        };
+        if (prepared?.goal) sendPrepared(pi, ctx, persisted);
+        return { content: [{ type: "text", text: `Goal created.\n\n${formatStatus(persisted, undefined, timestamp)}` }], details: { goal: persisted } };
       },
     });
   }
@@ -620,139 +694,244 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "update_goal",
     label: "Update Goal",
-    description: "Record goal evidence, add verification commands, or mark the current project goal complete, blocked, or needing user input.",
-    promptSnippet: "Update the current project goal loop state.",
+    description: "Record evidence, add a verification command, or propose a terminal outcome.",
+    promptSnippet: "Update current goal evidence or propose a terminal outcome.",
     promptGuidelines: [
-      "Use update_goal to record verification evidence before marking a goal complete.",
-      "Use update_goal with status=blocked or status=needs_user when progress requires user input.",
+      "Use update_goal to record evidence before proposing completion.",
+      "Terminal outcomes passed to update_goal are proposals reviewed by the goal-loop coordinator.",
     ],
     parameters: Schema.Object({
-      status: Schema.Optional(Schema.Enum(["active", "paused", "complete", "blocked", "needs_user"] as const)),
-      reason: Schema.Optional(Schema.String({ description: "Short reason for a status update." })),
-      evidence: Schema.Optional(Schema.String({ description: "Evidence summary to append to the goal ledger." })),
+      proposedStatus: Schema.Optional(Schema.Enum(["complete", "blocked", "needs_user"] as const)),
+      reason: Schema.Optional(Schema.String({ maxLength: MAX_GOAL_EVIDENCE_SUMMARY_CHARS })),
+      evidence: Schema.Optional(Schema.String({ maxLength: MAX_GOAL_EVIDENCE_SUMMARY_CHARS })),
       evidenceKind: Schema.Optional(Schema.Enum(["note", "verification", "tool"] as const)),
-      command: Schema.Optional(Schema.String({ description: "Verification command related to the evidence." })),
+      command: Schema.Optional(Schema.String({ maxLength: MAX_VERIFICATION_COMMAND_CHARS })),
       outcome: Schema.Optional(Schema.Enum(["passed", "failed", "unknown"] as const)),
-      verificationCommand: Schema.Optional(Schema.String({ description: "Verification command to remember for future loop turns." })),
-      maxTurns: Schema.Optional(Schema.Number({ description: "Replace the remaining turn budget ceiling." })),
+      verificationCommand: Schema.Optional(Schema.String({ maxLength: MAX_VERIFICATION_COMMAND_CHARS })),
     }) as any,
     executionMode: "sequential",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, _signal, _update, ctx) {
       const projectRoot = ctx.cwd || process.cwd();
-      let goal = getProjectGoal(projectRoot);
-      if (!goal) {
-        return {
-          content: [{ type: "text", text: "No active goal for this project. Use /goal <objective> first." }],
-          details: { error: "missing_goal" },
-        };
+      const readResult = readGoal(storage, projectRoot, ctx);
+      if (!readResult.ok) return { content: [{ type: "text", text: "Goal update refused because storage could not be read safely." }], details: { error: "storage_error" } };
+      const currentGoal = readResult.goal;
+      if (!currentGoal) return { content: [{ type: "text", text: "No active goal for this working root. Use /goal <objective> first." }], details: { error: "missing_goal" } };
+      const owner = ctx.sessionManager.getSessionId();
+      const timestamp = now();
+      if (!ownsFreshPendingRun(currentGoal, owner, timestamp)) {
+        return { content: [{ type: "text", text: "Goal update refused because no matching session-owned run with a fresh lease is active." }], details: { error: "no_pending_run" } };
       }
-
-      if (typeof params.maxTurns === "number" && params.maxTurns > 0) {
-        goal = { ...goal, maxTurns: Math.floor(params.maxTurns), updatedAt: new Date().toISOString() };
+      const input = params as UpdateGoalToolParams;
+      const pendingRun = currentGoal.pendingRun;
+      if (!hasContinuationAuthority(projectRoot, owner, pendingRun.runId)) {
+        return { content: [{ type: "text", text: "Goal update refused because this is not the accepted autonomous continuation turn." }], details: { error: "no_continuation_authority" } };
       }
-
-      if (params.verificationCommand) {
+      let goal: GoalState = currentGoal;
+      const verificationCommand = typeof input.verificationCommand === "string" ? input.verificationCommand.trim() : undefined;
+      if (input.verificationCommand !== undefined && !verificationCommand) {
+        return { content: [{ type: "text", text: "Verification command must not be empty." }], details: { error: "invalid_verification_command" } };
+      }
+      if (verificationCommand && verificationCommand.length > MAX_VERIFICATION_COMMAND_CHARS) {
+        return { content: [{ type: "text", text: `Verification command must be ${MAX_VERIFICATION_COMMAND_CHARS} characters or fewer.` }], details: { error: "invalid_verification_command" } };
+      }
+      if (verificationCommand && !goal.verification.commands.includes(verificationCommand) && goal.verification.commands.length >= MAX_VERIFICATION_COMMANDS) {
+        return { content: [{ type: "text", text: `A goal may configure at most ${MAX_VERIFICATION_COMMANDS} verification commands.` }], details: { error: "too_many_verification_commands" } };
+      }
+      if (verificationCommand) {
+        goal = { ...goal, verification: { ...goal.verification, commands: [...new Set([...goal.verification.commands, verificationCommand])] }, updatedAt: timestamp.toISOString() };
+      }
+      const evidenceCommand = typeof input.command === "string" ? input.command.trim() || undefined : undefined;
+      if (evidenceCommand && evidenceCommand.length > MAX_VERIFICATION_COMMAND_CHARS) {
+        return { content: [{ type: "text", text: `Evidence command must be ${MAX_VERIFICATION_COMMAND_CHARS} characters or fewer.` }], details: { error: "invalid_evidence_command" } };
+      }
+      if (evidenceCommand && !goal.verification.commands.includes(evidenceCommand)) {
+        return { content: [{ type: "text", text: "Verification evidence must reference a configured verification command." }], details: { error: "unconfigured_evidence_command" } };
+      }
+      if (input.evidence || evidenceCommand || input.outcome) {
+        const summary = input.evidence ?? input.reason ?? "Goal evidence recorded.";
+        if (summary.length > MAX_GOAL_EVIDENCE_SUMMARY_CHARS) {
+          return { content: [{ type: "text", text: `Evidence summary must be ${MAX_GOAL_EVIDENCE_SUMMARY_CHARS} characters or fewer.` }], details: { error: "invalid_evidence" } };
+        }
+        goal = recordEvidence(goal, {
+          kind: input.evidenceKind ?? (evidenceCommand ? "verification" : "note"),
+          summary,
+          command: evidenceCommand,
+          outcome: input.outcome,
+          goalRevision: goal.goalRevision,
+          runId: pendingRun.runId,
+        }, timestamp);
+      }
+      if (input.proposedStatus) {
+        const conflictingProposal = pendingRun.toolProposal !== undefined && pendingRun.toolProposal !== input.proposedStatus;
         goal = {
           ...goal,
-          verification: {
-            ...goal.verification,
-            commands: [...new Set([...goal.verification.commands, params.verificationCommand])],
+          pendingRun: {
+            ...pendingRun,
+            // The first proposal is an immutable record of what the model
+            // asked for. A later disagreement is fail-closed at settlement.
+            toolProposal: pendingRun.toolProposal ?? input.proposedStatus,
+            ...(conflictingProposal ? { toolProposalConflict: true as const } : {}),
           },
-          updatedAt: new Date().toISOString(),
+          updatedAt: timestamp.toISOString(),
         };
       }
-
-      if (params.evidence || params.command || params.outcome) {
-        goal = recordEvidence(goal, {
-          kind: (params.evidenceKind as GoalEvidenceKind | undefined) ?? (params.command ? "verification" : "note"),
-          summary: params.evidence ?? params.reason ?? "Goal evidence recorded.",
-          command: params.command,
-          outcome: params.outcome as GoalEvidenceOutcome | undefined,
-        });
-      }
-
-      if (params.status === "active" || params.status === "paused") {
-        goal = { ...goal, status: params.status, updatedAt: new Date().toISOString() };
-      } else if (params.status) {
-        goal = recordEvaluation(goal, {
-          decision: params.status as GoalDecision,
-          reason: params.reason ?? params.evidence ?? "Goal status updated.",
-          confidence: "medium",
-        });
-      }
-
-      setProjectGoal(goal);
+      const persisted = persistGoal(storage, goal, auditEvent("goal_model_update", input.reason ?? "Model recorded goal evidence or proposal.", ctx, timestamp), ctx);
+      if (!persisted) return { content: [{ type: "text", text: "Goal update was rejected by storage." }], details: { error: "storage_error" } };
       status.sync(ctx);
-      return {
-        content: [{ type: "text", text: `Goal updated.\n\n${formatStatus(goal)}` }],
-        details: { goal },
-      };
+      return { content: [{ type: "text", text: `Goal update recorded.\n\n${formatStatus(persisted, undefined, timestamp)}` }], details: { goal: persisted } };
     },
   });
 
   pi.registerCommand("goal", {
-    description: "Set or manage an auto-continuing project goal loop",
-    async handler(args, ctx) {
+    description: "Set or manage a bounded working-root goal loop",
+    async handler(args, ctx: ExtensionCommandContext) {
       const parsed = parseGoalArgs(args);
       const projectRoot = ctx.cwd || process.cwd();
-      const existing = getProjectGoal(projectRoot);
+      const timestamp = now();
+      const owner = ctx.sessionManager.getSessionId();
 
-      if (parsed.command === "start") {
-        if (!parsed.value) {
-          notify(ctx, "Usage: /goal <objective>", "warning");
-          return;
+      if (parsed.command === "list") {
+        try {
+          notify(ctx, formatGoalList(storage.listActive()));
+        } catch (error) {
+          storageError(ctx, error);
         }
-        const goal = createGoal(projectRoot, parsed.value);
-        setProjectGoal(goal);
-        status.sync(ctx);
-        notify(ctx, `Goal started: ${goal.objective}`);
-        sendContinuation(pi, ctx, goal);
         return;
       }
 
+      const readResult = readGoal(storage, projectRoot, ctx);
+      if (!readResult.ok) return;
+      const existing = readResult.goal;
+
       if (parsed.command === "status") {
-        notify(ctx, formatStatus(existing));
+        notify(ctx, formatStatus(existing, existing ? undefined : readLatestAchievement(storage, projectRoot, ctx), timestamp));
+        return;
+      }
+
+      if (parsed.command === "start") {
+        const validated = validateGoalObjective(parsed.value);
+        if (!validated.ok) {
+          notify(ctx, validated.reason, "warning");
+          return;
+        }
+        if (existing) {
+          const conflict = leaseConflict(existing, owner, timestamp);
+          if (conflict) {
+            notifyLeaseConflict(ctx, conflict);
+            return;
+          }
+          if (existing.status === "complete" && !archiveCompletedGoal(storage, existing, ctx)) return;
+        }
+        let goal = { ...createGoal(projectRoot, validated.objective, timestamp, randomId()), storageRevision: existing?.storageRevision ?? 0 };
+        const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
+        const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
+        if (prepared?.goal) goal = prepared.goal;
+        else {
+          const leased = acquireGoalLease(goal, owner, timestamp);
+          if (leased.ok) goal = leased.goal;
+        }
+        const persisted = persistGoal(storage, goal, auditEvent(prepared?.goal ? "run_dispatched" : "goal_created", "Human started goal.", ctx, timestamp), ctx);
+        if (!persisted) return;
+        status.sync(ctx);
+        if (!prepared?.goal) {
+          notify(ctx, `Goal saved but not dispatched${prepared?.reason ? `: ${prepared.reason}` : "; Pi is not idle or messages are pending."}`, "warning");
+          return;
+        }
+        if (sendPrepared(pi, ctx, persisted)) notify(ctx, `Goal started: ${persisted.objective}`);
         return;
       }
 
       if (!existing) {
-        notify(ctx, "No active goal for this project.", "warning");
+        notify(ctx, "No active goal for this working root.", "warning");
+        return;
+      }
+      if (existing.status === "complete" && parsed.command !== "clear") {
+        notify(ctx, "This retained completion receipt cannot be edited or otherwise mutated; it is immutable. Inspect it with /goal, remove it with /goal clear, or start a new goal to archive it safely.", "warning");
+        return;
+      }
+      const conflict = leaseConflict(existing, owner, timestamp);
+      if (conflict) {
+        notifyLeaseConflict(ctx, conflict);
         return;
       }
 
       if (parsed.command === "pause") {
-        const goal = { ...existing, status: "paused" as const, updatedAt: new Date().toISOString() };
-        setProjectGoal(goal);
+        const paused = { ...existing, status: "paused" as const, lease: undefined, pendingRun: undefined, updatedAt: timestamp.toISOString() };
+        const persisted = persistGoal(storage, paused, auditEvent("goal_paused", "Human paused goal.", ctx, timestamp), ctx);
+        if (!persisted) return;
         status.sync(ctx);
         notify(ctx, "Goal paused.");
         return;
       }
 
       if (parsed.command === "resume") {
-        const goal = resumeGoal(existing);
-        setProjectGoal(goal);
+        if (!tokenBudgetAllowsResume(existing)) {
+          notify(ctx, `Goal cannot resume until its token budget is raised above ${existing.usage?.totalTokens ?? 0} or disabled with /goal budget off.`, "warning");
+          return;
+        }
+        let goal = resumeGoal({ ...existing, pendingRun: undefined, pendingSteer: undefined }, timestamp);
+        const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
+        const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
+        if (prepared?.goal) goal = prepared.goal;
+        else {
+          const leased = acquireGoalLease(goal, owner, timestamp);
+          if (leased.ok) goal = leased.goal;
+        }
+        const persisted = persistGoal(storage, goal, auditEvent(prepared?.goal ? "run_dispatched" : "goal_resumed", "Human resumed goal.", ctx, timestamp), ctx);
+        if (!persisted) return;
         status.sync(ctx);
-        notify(ctx, "Goal resumed.");
-        sendContinuation(pi, ctx, goal);
+        if (!prepared?.goal) {
+          notify(ctx, "Goal resumed but not dispatched because Pi is not idle or messages are pending.", "warning");
+          return;
+        }
+        if (sendPrepared(pi, ctx, persisted)) notify(ctx, "Goal resumed.");
         return;
       }
 
       if (parsed.command === "clear") {
-        clearProjectGoal(projectRoot);
+        if (!clearGoal(storage, projectRoot, existing.storageRevision, auditEvent("goal_cleared", "Human cleared goal.", ctx, timestamp), ctx)) return;
         status.clear(ctx);
         notify(ctx, "Goal cleared.");
         return;
       }
 
       if (parsed.command === "edit") {
-        if (!parsed.value) {
-          notify(ctx, "Usage: /goal edit <objective>", "warning");
+        const validated = validateGoalObjective(parsed.value);
+        if (!validated.ok) {
+          notify(ctx, validated.reason, "warning");
           return;
         }
-        const goal = { ...existing, objective: parsed.value, status: "active" as const, updatedAt: new Date().toISOString() };
-        setProjectGoal(goal);
+        let goal = editGoalObjective(existing, validated.objective, timestamp);
+        const safeToSend = ctx.isIdle() && !ctx.hasPendingMessages();
+        const prepared = safeToSend ? prepareDispatch(goal, owner, timestamp, randomId) : undefined;
+        if (prepared?.goal) goal = prepared.goal;
+        else {
+          const leased = acquireGoalLease(goal, owner, timestamp);
+          if (leased.ok) goal = leased.goal;
+        }
+        const persisted = persistGoal(storage, goal, auditEvent(prepared?.goal ? "run_dispatched" : "goal_edited", "Human changed objective.", ctx, timestamp), ctx);
+        if (!persisted) return;
         status.sync(ctx);
-        notify(ctx, `Goal updated: ${goal.objective}`);
+        if (prepared?.goal) {
+          if (sendPrepared(pi, ctx, persisted)) notify(ctx, `Goal updated: ${persisted.objective}`);
+        } else {
+          notify(ctx, `Goal updated but not dispatched: ${persisted.objective}`, "warning");
+        }
+        return;
+      }
+
+      if (parsed.command === "budget") {
+        const value = parsed.value.toLowerCase();
+        const tokenBudget = value === "off" ? undefined : /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
+        if (tokenBudget === null) {
+          notify(ctx, "Usage: /goal budget <positive-integer|off>", "warning");
+          return;
+        }
+        const goal = { ...existing, tokenBudget, updatedAt: timestamp.toISOString() };
+        const persisted = persistGoal(storage, goal, auditEvent("token_budget_changed", tokenBudget === undefined ? "Human disabled token budget." : `Human set token budget to ${tokenBudget}.`, ctx, timestamp), ctx);
+        if (!persisted) return;
+        status.sync(ctx);
+        notify(ctx, tokenBudget === undefined ? "Goal token budget disabled." : `Goal token budget set to ${tokenBudget} tokens.`);
         return;
       }
 
@@ -761,63 +940,376 @@ export default function goalLoopExtension(pi: ExtensionAPI) {
           notify(ctx, "Usage: /goal verify <command>", "warning");
           return;
         }
-        const commands = [...existing.verification.commands, parsed.value];
+        if (parsed.value.length > MAX_VERIFICATION_COMMAND_CHARS) {
+          notify(ctx, `Verification command must be ${MAX_VERIFICATION_COMMAND_CHARS} characters or fewer.`, "warning");
+          return;
+        }
+        if (!existing.verification.commands.includes(parsed.value) && existing.verification.commands.length >= MAX_VERIFICATION_COMMANDS) {
+          notify(ctx, `A goal may configure at most ${MAX_VERIFICATION_COMMANDS} verification commands.`, "warning");
+          return;
+        }
         const goal = {
           ...existing,
-          verification: { ...existing.verification, commands },
-          updatedAt: new Date().toISOString(),
+          verification: { ...existing.verification, commands: [...new Set([...existing.verification.commands, parsed.value])] },
+          updatedAt: timestamp.toISOString(),
         };
-        setProjectGoal(goal);
+        const persisted = persistGoal(storage, goal, auditEvent("verification_added", "Human added verification command.", ctx, timestamp), ctx);
+        if (!persisted) return;
         status.sync(ctx);
         notify(ctx, `Verification command added: ${parsed.value}`);
       }
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
-    status.sync(ctx);
-  });
+  pi.on("session_start", (_event, ctx) => status.sync(ctx));
 
   pi.on("session_shutdown", (_event, ctx) => {
+    clearContinuationAuthority();
+    clearAutonomousTracking();
+    const projectRoot = ctx.cwd || process.cwd();
+    const readResult = readGoal(storage, projectRoot, ctx);
+    if (!readResult.ok) {
+      status.clear(ctx);
+      return;
+    }
+    const goal = readResult.goal;
+    const owner = ctx.sessionManager.getSessionId();
+    if (goal?.lease?.sessionId === owner) {
+      const timestamp = now();
+      persistGoal(storage, releaseGoalLease({ ...goal, pendingRun: undefined }, owner, timestamp), auditEvent("lease_released", "Session shut down.", ctx, timestamp), ctx);
+    }
     status.clear(ctx);
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    const goal = getProjectGoal(event.systemPromptOptions.cwd || ctx.cwd || process.cwd());
+    const projectRoot = event.systemPromptOptions.cwd || ctx.cwd || process.cwd();
+    const readResult = readGoal(storage, projectRoot, ctx);
+    if (!readResult.ok) return;
+    clearContinuationAuthority();
+    clearAutonomousTracking();
+    let goal = readResult.goal;
     if (!goal || goal.status !== "active") return;
-    return {
-      systemPrompt: [event.systemPrompt, buildGoalSystemPrompt(goal)].filter(Boolean).join("\n\n"),
+    const owner = ctx.sessionManager.getSessionId();
+    const timestamp = now();
+    const expired = expireStalePendingRun(goal, timestamp);
+    if (expired !== goal) {
+      persistGoal(storage, expired, auditEvent("run_expired", "Continuation started after its lease expired.", ctx, timestamp), ctx);
+      status.sync(ctx);
+      return;
+    }
+    const conflict = leaseConflict(goal, owner, timestamp);
+    if (conflict) return;
+    // A goal-owned session keeps its lease warm and receives durable context
+    // on ordinary queued user turns too.  Those turns deliberately receive no
+    // run IDs, evaluator contract, or update_goal authority.
+    if (goal.lease?.sessionId !== owner) return;
+    const leased = acquireGoalLease(goal, owner, timestamp);
+    if (!leased.ok) return;
+    goal = leased.goal;
+    const runId = continuationRunId(event.prompt);
+    const autonomous = Boolean(runId && goal.pendingRun?.runId === runId && goal.pendingRun.sessionId === owner);
+    const persisted = persistGoal(storage, goal, auditEvent("lease_renewed", autonomous ? "Agent continuation turn started." : "Normal agent turn started for active goal.", ctx, timestamp), ctx);
+    if (!persisted) return;
+    if (autonomous && runId) {
+      activeContinuation = { projectRoot, sessionId: owner, runId };
+      autonomousChain = { projectRoot, sessionId: owner, runId };
+    }
+    return { systemPrompt: [event.systemPrompt, buildGoalSystemPrompt(persisted, autonomous)].filter(Boolean).join("\n\n") };
+  });
+
+  pi.on("message_start", (event, ctx) => {
+    if (!autonomousChain) return;
+    const record = messageRecord(event.message);
+    if (record?.role !== "user") return;
+    const projectRoot = ctx.cwd || process.cwd();
+    const owner = ctx.sessionManager.getSessionId();
+    if (!matchesRun(autonomousChain, projectRoot, owner, autonomousChain.runId)) return;
+    if (continuationRunId(contentText(record.content)) === autonomousChain.runId) return;
+
+    // Pi drains queued follow-ups inside the same low-level agent run. Revoke
+    // tool authority before the follow-up model turn can call update_goal, but
+    // retain chain identity until agent_end can isolate pre-follow-up usage.
+    clearContinuationAuthority();
+    clearProviderLimit();
+    const readResult = readGoal(storage, projectRoot, ctx);
+    if (!readResult.ok || !readResult.goal || !ownsFreshPendingRun(readResult.goal, owner, now())) return;
+    const timestamp = now();
+    const steered = recordGoalSteer(readResult.goal, owner, contentText(record.content), timestamp);
+    if (steered === readResult.goal) return;
+    const persisted = persistGoal(storage, steered, auditEvent("goal_steered", "User steered the active goal.", ctx, timestamp), ctx);
+    if (!persisted) return;
+    status.sync(ctx);
+    autonomousInterruption = {
+      ...autonomousChain,
+      reason: "Autonomous goal run was steered by a queued user follow-up; later work was not treated as autonomous.",
+    };
+  });
+
+  pi.on("after_provider_response", (event, ctx) => {
+    if (!autonomousChain) return;
+    const projectRoot = ctx.cwd || process.cwd();
+    const owner = ctx.sessionManager.getSessionId();
+    if (matchesRun(autonomousInterruption, projectRoot, owner, autonomousChain.runId)) return;
+    if (event.status !== 429) {
+      // Every observed response is authoritative for the current attempt.
+      clearProviderLimit();
+      return;
+    }
+    const retryAfterEntry = Object.entries(event.headers).find(([name]) => name.toLowerCase() === "retry-after");
+    providerLimit = {
+      ...autonomousChain,
+      retryAfter: typeof retryAfterEntry?.[1] === "string" ? retryAfterEntry[1] : undefined,
     };
   });
 
   pi.on("agent_end", (event, ctx) => {
+    const correlatedProviderLimit = providerLimit;
+    const interruption = autonomousInterruption;
+    clearContinuationAuthority();
+    clearProviderLimit();
     const projectRoot = ctx.cwd || process.cwd();
-    const goal = getProjectGoal(projectRoot);
-    if (!goal || goal.status !== "active") return;
-
-    const evaluation = getGoalEvaluation(event.messages as unknown[]);
-    const updated = recordEvaluation(goal, evaluation);
-    setProjectGoal(updated);
-    status.sync(ctx);
-
-    if (updated.status === "complete") {
-      notify(ctx, `Goal complete: ${evaluation.reason}`);
-      return;
-    }
-
-    if (updated.status === "blocked" || updated.status === "needs_user") {
-      notify(ctx, `Goal stopped (${updated.status}): ${evaluation.reason}`, "warning");
-      return;
-    }
-
-    if (!shouldAutoContinue(updated)) {
-      const blocked = { ...updated, status: "blocked" as const, updatedAt: new Date().toISOString() };
-      setProjectGoal(blocked);
+    const readResult = readGoal(storage, projectRoot, ctx);
+    if (!readResult.ok) return;
+    const goal = readResult.goal;
+    const owner = ctx.sessionManager.getSessionId();
+    const timestamp = now();
+    if (!goal) return;
+    const expired = expireStalePendingRun(goal, timestamp);
+    if (expired !== goal) {
+      persistGoal(storage, expired, auditEvent("run_expired", "Run ended after its lease expired.", ctx, timestamp), ctx);
       status.sync(ctx);
-      notify(ctx, `Goal stopped after ${updated.turns}/${updated.maxTurns} turns. Run /goal resume to continue.`, "warning");
       return;
     }
+    const messages = event.messages as unknown[];
+    if (
+      interruption &&
+      matchesRun(interruption, projectRoot, owner, interruption.runId) &&
+      goal.pendingSteer?.sessionId === owner &&
+      goal.pendingSteer.interruptedRunId === interruption.runId
+    ) {
+      const followUpIndex = firstNonContinuationUserIndex(messages, interruption.runId);
+      const autonomousMessages = followUpIndex >= 0 ? messages.slice(0, followUpIndex) : [];
+      let updated: GoalState = goal;
+      if (autonomousMessages.some((message) => messageRecord(message)?.role === "assistant")) {
+        updated = recordSteeredRunUsage(updated, owner, sumAssistantUsage(autonomousMessages), autonomousRunFingerprint(autonomousMessages), timestamp);
+      }
+      if (updated === goal) return;
+      persistGoal(storage, updated, auditEvent("steered_run_usage_recorded", interruption.reason, ctx, timestamp), ctx);
+      status.sync(ctx);
+      return;
+    }
+    if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
+    const runId = goal.pendingRun.runId;
+    const chainCorrelated = matchesRun(autonomousChain, projectRoot, owner, runId);
+    // Pi's agent.continue() retries emit only the new low-level messages, so
+    // the original continuation marker is absent. A queued user/follow-up run
+    // always introduces a user message and must not inherit chain authority.
+    if (!isCurrentContinuation(messages, runId) && !(chainCorrelated && !containsUserMessage(messages))) return;
+    const stopReason = assistantStopReason(messages);
+    let updated: GoalState = recordRunUsage(goal, sumAssistantUsage(messages), timestamp, autonomousRunFingerprint(messages));
+    const terminalUsageLimit = stopReason !== undefined &&
+      correlatedProviderLimit !== undefined &&
+      correlatedProviderLimit.projectRoot === projectRoot &&
+      correlatedProviderLimit.sessionId === owner &&
+      correlatedProviderLimit.runId === runId;
+    const candidate = stopReason
+      ? { protocol: "malformed" as const, source: "assistant_stop" as const, reason: `Assistant turn ended with ${stopReason}.` }
+      : parseCurrentRunCandidate(messages, {
+          goalId: goal.goalId,
+          goalRevision: goal.pendingRun.goalRevision,
+          runId,
+          evaluationRequestId: goal.pendingRun.evaluationRequestId,
+        });
+    updated = recordRunEvaluationContext(updated, buildRunEvaluationContext(messages), timestamp);
+    updated = recordRunCandidate(updated, candidate, timestamp);
+    const providerReason = terminalUsageLimit ? `Provider usage limit ended the autonomous run with ${stopReason}.` : undefined;
+    updated = recordProviderUsageLimit(updated, providerReason ? { reason: providerReason, retryAfter: correlatedProviderLimit?.retryAfter } : undefined, timestamp);
+    if (updated === goal) return;
+    persistGoal(storage, updated, auditEvent("run_candidate_recorded", providerReason ?? (candidate.protocol === "valid" ? "Recorded current-run decision and usage." : candidate.reason), ctx, timestamp), ctx);
+    status.sync(ctx);
+  });
 
-    sendContinuation(pi, ctx, updated);
+  pi.on("agent_settled", async (_event, ctx) => {
+    clearContinuationAuthority();
+    clearAutonomousTracking();
+    const projectRoot = ctx.cwd || process.cwd();
+    const readResult = readGoal(storage, projectRoot, ctx);
+    if (!readResult.ok) return;
+    let goal = readResult.goal;
+    const owner = ctx.sessionManager.getSessionId();
+    const timestamp = now();
+    if (!goal) return;
+    const expired = expireStalePendingRun(goal, timestamp);
+    if (expired !== goal) {
+      persistGoal(storage, expired, auditEvent("run_expired", "Run settled after its lease expired.", ctx, timestamp), ctx);
+      status.sync(ctx);
+      return;
+    }
+    if (goal.status === "active" && goal.pendingSteer?.sessionId === owner) {
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        notify(ctx, "Goal steering was saved; resume when Pi is idle.", "warning");
+        return;
+      }
+      const consumed = consumeGoalSteer(goal, owner, timestamp);
+      const prepared = prepareDispatch(consumed, owner, timestamp, randomId);
+      if (!prepared.goal) {
+        notify(ctx, `Goal steering could not resume: ${prepared.reason}`, "warning");
+        return;
+      }
+      const persisted = persistGoal(storage, prepared.goal, auditEvent("goal_steering_resumed", "Coordinator resumed after user steering.", ctx, timestamp), ctx);
+      if (persisted) {
+        status.sync(ctx);
+        sendPrepared(pi, ctx, persisted);
+      }
+      return;
+    }
+    if (!ownsFreshPendingRun(goal, owner, timestamp)) return;
+    const pending = goal.pendingRun;
+    if (pending?.candidate?.protocol === "valid") {
+      const expected = {
+        goalId: goal.goalId,
+        goalRevision: pending.goalRevision,
+        runId: pending.runId,
+        evaluationRequestId: pending.evaluationRequestId,
+      };
+      let evaluatorRecorded = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (!ownsFreshPendingRun(goal, owner, now())) return;
+        const input = buildGoalEvaluatorInput(goal, projectRoot);
+        if (!input) return;
+        const inputLimitReason = evaluatorInputLimitReason(input);
+        if (inputLimitReason) {
+          const evaluationTime = now();
+          const stopped = settlePendingRun(recordRunCandidate(goal, {
+            protocol: "malformed",
+            source: "assistant_message",
+            reason: inputLimitReason,
+          }, evaluationTime), evaluationTime);
+          const persistedStop = persistGoal(storage, stopped.goal, auditEvent("evaluator_input_rejected", inputLimitReason, ctx, evaluationTime), ctx);
+          if (persistedStop) {
+            status.sync(ctx);
+            notify(ctx, `Goal stopped (needs_user): ${inputLimitReason}`, "warning");
+          }
+          return;
+        }
+        const evaluation = await evaluator.evaluate(input);
+        const refreshed = readGoal(storage, projectRoot, ctx);
+        if (!refreshed.ok || !refreshed.goal) return;
+        goal = refreshed.goal;
+        if (
+          goal.goalId !== expected.goalId ||
+          goal.goalRevision !== expected.goalRevision ||
+          goal.pendingRun?.runId !== expected.runId ||
+          goal.pendingRun.evaluationRequestId !== expected.evaluationRequestId ||
+          !ownsFreshPendingRun(goal, owner, now())
+        ) return;
+
+        const refreshedInput = buildGoalEvaluatorInput(goal, projectRoot);
+        if (!refreshedInput) return;
+        const refreshedInputLimitReason = evaluatorInputLimitReason(refreshedInput);
+        if (refreshedInputLimitReason) {
+          const evaluationTime = now();
+          const stopped = settlePendingRun(recordRunCandidate(goal, {
+            protocol: "malformed",
+            source: "assistant_message",
+            reason: refreshedInputLimitReason,
+          }, evaluationTime), evaluationTime);
+          const persistedStop = persistGoal(storage, stopped.goal, auditEvent("evaluator_input_rejected", refreshedInputLimitReason, ctx, evaluationTime), ctx);
+          if (persistedStop) {
+            status.sync(ctx);
+            notify(ctx, `Goal stopped (needs_user): ${refreshedInputLimitReason}`, "warning");
+          }
+          return;
+        }
+        if (evaluatorInputKey(refreshedInput) !== evaluatorInputKey(input)) {
+          if (attempt === 2) {
+            const evaluationTime = now();
+            let stopGoal = goal;
+            let persistedStop: GoalState | undefined;
+            for (let stopAttempt = 0; stopAttempt < 3 && !persistedStop; stopAttempt += 1) {
+              const interrupted = recordRunCandidate(stopGoal, {
+                protocol: "malformed",
+                source: "assistant_message",
+                reason: "Goal changed repeatedly while independent evaluation was running.",
+              }, evaluationTime);
+              const stopped = settlePendingRun(interrupted, evaluationTime);
+              persistedStop = persistGoal(storage, stopped.goal, auditEvent("evaluator_retry_exhausted", stopped.reason ?? "Evaluator retry limit reached.", ctx, evaluationTime), ctx);
+              if (persistedStop) break;
+              const latest = readGoal(storage, projectRoot, ctx);
+              if (!latest.ok || !latest.goal ||
+                latest.goal.goalId !== expected.goalId ||
+                latest.goal.goalRevision !== expected.goalRevision ||
+                latest.goal.pendingRun?.runId !== expected.runId ||
+                latest.goal.pendingRun.evaluationRequestId !== expected.evaluationRequestId ||
+                !ownsFreshPendingRun(latest.goal, owner, now())) return;
+              stopGoal = latest.goal;
+            }
+            if (persistedStop) {
+              status.sync(ctx);
+              notify(ctx, "Goal stopped (needs_user) because it changed repeatedly during evaluation.", "warning");
+            }
+            return;
+          }
+          continue;
+        }
+
+        const candidate = goal.pendingRun.candidate;
+        if (candidate?.protocol !== "valid") return;
+        const evaluatedCandidate = evaluation.ok
+          ? { protocol: "valid" as const, source: candidate.source, worker: candidate.worker, evaluator: evaluation.record }
+          : { protocol: "malformed" as const, source: "assistant_message" as const, reason: evaluation.reason };
+        const evaluationTime = now();
+        const recorded = recordRunCandidate(goal, evaluatedCandidate, evaluationTime);
+        const persistedEvaluation = persistGoal(storage, recorded, auditEvent("evaluator_recorded", evaluation.ok ? evaluation.record.reason : evaluation.reason, ctx, evaluationTime), ctx);
+        if (!persistedEvaluation) return;
+        goal = persistedEvaluation;
+        evaluatorRecorded = true;
+        break;
+      }
+      if (!evaluatorRecorded) return;
+    }
+    const settled = settlePendingRun(goal, timestamp);
+    if (settled.action === "none") return;
+    let persisted = persistGoal(storage, settled.goal, auditEvent("run_settled", settled.reason ?? "Settled goal run.", ctx, timestamp), ctx);
+    if (!persisted) return;
+    status.sync(ctx);
+    if (settled.action === "complete") {
+      if (!archiveCompletedGoal(storage, persisted, ctx)) {
+        notify(ctx, `Goal complete, but its active receipt was retained: ${settled.reason}`, "warning");
+        return;
+      }
+      const cleared = clearGoal(storage, projectRoot, persisted.storageRevision, auditEvent("goal_completed_archived", "Completed goal archived and active slot cleared.", ctx, timestamp), ctx);
+      if (cleared) status.clear(ctx);
+      else status.sync(ctx);
+      notify(ctx, cleared ? `Goal complete: ${settled.reason}` : `Goal complete and archived, but its active slot was retained: ${settled.reason}`, cleared ? "info" : "warning");
+      return;
+    }
+    if (settled.action !== "dispatch") {
+      notify(ctx, `Goal stopped (${settled.action}): ${settled.reason}`, "warning");
+      return;
+    }
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+      notify(ctx, "Goal run settled; no continuation was queued because Pi is busy or messages are pending.", "warning");
+      return;
+    }
+    const prepared = prepareDispatch(persisted, owner, timestamp, randomId);
+    if (!prepared.goal) {
+      notify(ctx, `Goal continuation was not dispatched: ${prepared.reason}`, "warning");
+      return;
+    }
+    persisted = persistGoal(storage, prepared.goal, auditEvent("run_dispatched", "Coordinator dispatched next run.", ctx, timestamp), ctx);
+    if (!persisted) return;
+    status.sync(ctx);
+    sendPrepared(pi, ctx, persisted);
   });
 }
+
+export function createGoalLoopExtension(options: GoalLoopExtensionOptions = {}): (pi: ExtensionAPI) => void {
+  return (pi) => registerGoalLoop(pi, options);
+}
+
+export default function goalLoopExtension(pi: ExtensionAPI): void {
+  registerGoalLoop(pi, {});
+}
+
+export { GoalStorageAuditError, GoalStorageConflictError, GoalStorageCorruptError };
