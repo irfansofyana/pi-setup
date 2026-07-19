@@ -33,11 +33,7 @@ interface BtwState {
 
 interface ResolvedModel {
   model: Model<Api>;
-  auth: {
-    apiKey?: string;
-    headers?: Record<string, string>;
-    env?: Record<string, string>;
-  };
+  auth: AuthOptions;
 }
 
 const STATE_KEY = Symbol.for("pi-local-btw-state");
@@ -49,6 +45,22 @@ const DEFAULT_CONFIG: BtwConfig = {
 const SYSTEM_PROMPT = `You answer side questions for a coding-agent user.
 
 Use the supplied main-session context as read-only background. Answer the side question directly and concisely. Do not claim to have changed files, run tools, queued work, or affected the main agent. If the context is insufficient, say what is unknown and what to check next.`;
+
+interface AuthOptions {
+  apiKey?: string;
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  baseUrl?: string;
+}
+
+interface RuntimeAuthResult {
+  auth?: AuthOptions;
+  env?: Record<string, string>;
+}
+
+interface PiModelRuntime {
+  getAuth?: (model: Model<Api>) => Promise<RuntimeAuthResult | undefined>;
+}
 
 function getState(): BtwState {
   const globalState = globalThis as unknown as { [STATE_KEY]?: BtwState };
@@ -126,20 +138,67 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
+function messageText(message: Record<string, unknown>): string {
+  const role = message.role;
+  if (role === "branchSummary" && typeof message.summary === "string") {
+    return `branch_summary: ${message.summary}`;
+  }
+  if (role === "compactionSummary" && typeof message.summary === "string") {
+    return `compaction_summary: ${message.summary}`;
+  }
+  if (role === "bashExecution") {
+    const command = typeof message.command === "string" ? message.command : "";
+    const output = typeof message.output === "string" ? message.output : "";
+    return `bash: ${command}\n${output}`.trim();
+  }
+  const text = textFromContent(message.content).trim();
+  return text ? `${String(role)}: ${text}` : "";
+}
+
+function entryText(entry: Record<string, unknown>): string {
+  if (entry.type === "message" && entry.message && typeof entry.message === "object") {
+    return messageText(entry.message as Record<string, unknown>);
+  }
+  if (entry.type === "custom_message") {
+    const text = textFromContent(entry.content).trim();
+    return text ? `custom: ${text}` : "";
+  }
+  if (entry.type === "compaction" && typeof entry.summary === "string") {
+    return `compaction_summary: ${entry.summary}`;
+  }
+  if (entry.type === "branch_summary" && typeof entry.summary === "string") {
+    return `branch_summary: ${entry.summary}`;
+  }
+  return "";
+}
+
 function trimFromEnd(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return text.slice(text.length - maxChars).trimStart();
 }
 
-export function buildConversationContext(entries: unknown[], maxChars: number): string {
+export function buildConversationContext(items: unknown[], maxChars: number): string {
   const lines: string[] = [];
-  for (const entry of entries as Array<{ type?: string; message?: { role?: string; content?: unknown } }>) {
-    if (entry.type !== "message" || !entry.message?.role) continue;
-    const text = textFromContent(entry.message.content).trim();
+  for (const item of items as Array<Record<string, unknown>>) {
+    const text = item.type ? entryText(item).trim() : messageText(item).trim();
     if (!text) continue;
-    lines.push(`${entry.message.role}: ${text}`);
+    lines.push(text);
   }
   return trimFromEnd(lines.join("\n\n"), maxChars);
+}
+
+function readCompactionAwareContextItems(ctx: ExtensionCommandContext): unknown[] {
+  const sessionManager = ctx.sessionManager as unknown as {
+    buildSessionContext?: () => { messages?: unknown[] };
+    buildContextEntries?: () => unknown[];
+    getBranch?: () => unknown[];
+    getEntries?: () => unknown[];
+  };
+  const sessionContext = sessionManager.buildSessionContext?.();
+  if (Array.isArray(sessionContext?.messages)) return sessionContext.messages;
+  const contextEntries = sessionManager.buildContextEntries?.();
+  if (Array.isArray(contextEntries)) return contextEntries;
+  return sessionManager.getBranch?.() ?? sessionManager.getEntries?.() ?? [];
 }
 
 export function buildHistoryContext(history: BtwTurn[], maxTurns: number): string {
@@ -175,10 +234,33 @@ async function loadCompleteSimple(importModule: (id: string) => Promise<unknown>
   throw new Error("@earendil-works/pi-ai completeSimple is unavailable", { cause: lastError });
 }
 
+function runtimeFromContext(ctx: ExtensionCommandContext): PiModelRuntime | undefined {
+  const runtime = (ctx.modelRegistry as unknown as { runtime?: PiModelRuntime }).runtime;
+  return runtime && typeof runtime.getAuth === "function" ? runtime : undefined;
+}
+
+function cleanHeaders(headers: AuthOptions["headers"]): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  return Object.fromEntries(Object.entries(headers).filter(([, value]) => value !== null && value !== undefined));
+}
+
 async function authModel(ctx: ExtensionCommandContext, model: Model<Api>): Promise<ResolvedModel | undefined> {
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) return undefined;
-  return { model, auth };
+  const runtimeAuth = await runtimeFromContext(ctx)?.getAuth?.(model);
+  if (runtimeAuth?.auth) {
+    return {
+      model: runtimeAuth.auth.baseUrl ? { ...model, baseUrl: runtimeAuth.auth.baseUrl } : model,
+      auth: {
+        apiKey: runtimeAuth.auth.apiKey,
+        headers: cleanHeaders(runtimeAuth.auth.headers),
+        env: runtimeAuth.env,
+        baseUrl: runtimeAuth.auth.baseUrl,
+      },
+    };
+  }
+
+  const legacyAuth = await ctx.modelRegistry.getApiKeyAndHeaders?.(model);
+  if (!legacyAuth?.ok) return undefined;
+  return { model, auth: legacyAuth };
 }
 
 async function resolveModel(ctx: ExtensionCommandContext, config: BtwConfig): Promise<ResolvedModel | undefined> {
@@ -215,7 +297,7 @@ async function askBtw(question: string, ctx: ExtensionCommandContext, config: Bt
 
   const completeSimple = await loadCompleteSimple();
   const history = getHistory(ctx);
-  const conversationContext = buildConversationContext(ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [], config.maxContextChars);
+  const conversationContext = buildConversationContext(readCompactionAwareContextItems(ctx), config.maxContextChars);
   const historyContext = buildHistoryContext(history, config.maxHistoryTurns);
   const userMessage: UserMessage = {
     role: "user",

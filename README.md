@@ -669,7 +669,8 @@ Design notes:
 
 - uses the current Pi model by default, or `provider/model-id` from config
 - inherits current thinking level unless config overrides it
-- copies recent main-session context and hidden `/btw` history into a separate model call
+- copies compaction-aware main-session context and hidden `/btw` history into a separate model call
+- uses Pi runtime auth when available, preserving configured headers, env, and base URLs
 - does not call `pi.sendUserMessage()` and does not append side answers to the main session
 - first version has no tools and no bottom overlay; use it for quick context-aware chat, not parallel editing
 

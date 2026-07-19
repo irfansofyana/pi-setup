@@ -48,6 +48,28 @@ test("buildConversationContext keeps recent message text within char budget", ()
   assert.equal(context, "assistant: second");
 });
 
+test("buildConversationContext includes compaction and branch summaries", () => {
+  const context = buildConversationContext([
+    { type: "compaction", summary: "Earlier work changed auth.ts and added tests." },
+    { type: "branch_summary", summary: "Abandoned branch tried fetch-based auth." },
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "continue" }] } },
+  ], 10_000);
+
+  assert.match(context, /compaction_summary: Earlier work changed auth\.ts/);
+  assert.match(context, /branch_summary: Abandoned branch tried fetch-based auth/);
+  assert.match(context, /user: continue/);
+});
+
+test("buildConversationContext handles already-built session context messages", () => {
+  const context = buildConversationContext([
+    { role: "compactionSummary", summary: "Prior summary from buildSessionContext." },
+    { role: "assistant", content: [{ type: "text", text: "fresh answer" }] },
+  ], 10_000);
+
+  assert.match(context, /compaction_summary: Prior summary from buildSessionContext/);
+  assert.match(context, /assistant: fresh answer/);
+});
+
 test("buildHistoryContext preserves latest side-thread turns", () => {
   const history: BtwTurn[] = [
     { question: "q1", answer: "a1", timestamp: 1 },

@@ -91,6 +91,11 @@ Cons:
 
 Start with Option A, which is what this branch implements. It solves Irfan's immediate need: ask `/btw` during work, keep the side chat separate, preserve follow-up context, and keep implementation local.
 
+Implementation review update:
+
+- Prefer Pi's current runtime auth resolver when available. The local extension reads `ctx.modelRegistry.runtime.getAuth(model)` via the exposed runtime object at execution time, carries resolved `apiKey`, `headers`, `env`, and `baseUrl`, and only falls back to the legacy `getApiKeyAndHeaders()` path for older Pi versions.
+- Prefer compaction-aware context. The local extension reads `buildSessionContext()` when available, then `buildContextEntries()`, and only falls back to raw branch/session entries. It serializes compaction and branch summaries explicitly so side answers keep the same retained context that the main agent has after `/compact`.
+
 V2 should add either:
 
 - a bottom overlay/pager UI, or

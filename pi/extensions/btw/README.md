@@ -2,7 +2,7 @@
 
 Small local Pi extension that adds `/btw` for side questions while the main agent is working.
 
-It makes a separate one-off model call using a snapshot of the current session plus the local `/btw` side-thread history. The answer is shown through Pi UI notifications and is not appended to the main conversation.
+It makes a separate one-off model call using Pi's current auth/runtime configuration, a compaction-aware snapshot of the current session, and the local `/btw` side-thread history. The answer is shown through Pi UI notifications and is not appended to the main conversation.
 
 ## Install
 
@@ -55,4 +55,6 @@ Example:
 
 - This first local version has no bottom overlay and no tools.
 - It is safe for side chat because it does not call `pi.sendUserMessage()` and does not write `/btw` entries into the main session.
+- It prefers Pi's current runtime auth resolver, so custom provider headers, env, and base URLs survive better than raw API-key-only calls.
+- It prefers `buildSessionContext()`/`buildContextEntries()`, so compaction and branch summaries remain visible to side answers.
 - For tool-using side agents, build a later v2 that spawns a separate Pi JSON process or real sub-session.
