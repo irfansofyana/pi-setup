@@ -671,7 +671,7 @@ Design notes:
 - inherits current thinking level unless config overrides it
 - copies compaction-aware main-session context and hidden `/btw` history into a separate model call
 - uses Pi model runtime when available, preserving extension provider transports and configured auth
-- passes `thinkingLevel: "off"` explicitly instead of omitting reasoning
+- omits `reasoning` when `thinkingLevel` is `off`, matching Pi's own simple-call behavior
 - skips `bashExecution.excludeFromContext` entries, preserving the intent of `!!` shell commands
 - does not call `pi.sendUserMessage()` and does not append side answers to the main session
 - first version has no tools and no bottom overlay; use it for quick context-aware chat, not parallel editing
