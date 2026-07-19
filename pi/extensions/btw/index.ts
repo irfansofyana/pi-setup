@@ -303,7 +303,7 @@ export function buildStreamOptions(auth: AuthOptions, signal: AbortSignal | unde
     env: auth.env,
     signal,
   };
-  if (thinkingLevel) {
+  if (thinkingLevel && thinkingLevel !== "off") {
     (options as unknown as { reasoning: ThinkingLevel }).reasoning = thinkingLevel;
   }
   return options;

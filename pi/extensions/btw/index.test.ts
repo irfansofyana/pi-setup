@@ -99,7 +99,12 @@ test("buildUserPrompt includes main context, optional history, and question", ()
   assert.match(prompt, /## Side Question\n\nwhy\?/);
 });
 
-test("buildStreamOptions passes explicit off reasoning", () => {
+test("buildStreamOptions omits off reasoning", () => {
   const options = buildStreamOptions({ apiKey: "key" }, undefined, "off") as { reasoning?: string };
-  assert.equal(options.reasoning, "off");
+  assert.equal(options.reasoning, undefined);
+});
+
+test("buildStreamOptions passes enabled reasoning levels", () => {
+  const options = buildStreamOptions({ apiKey: "key" }, undefined, "low") as { reasoning?: string };
+  assert.equal(options.reasoning, "low");
 });
