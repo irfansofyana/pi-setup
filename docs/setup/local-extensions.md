@@ -2,6 +2,32 @@
 
 Copy repo-owned templates from `pi/extensions/` into `~/.pi/agent/extensions/`. Install required npm dependencies from [README package manifest](../../README.md#required-npm-package-manifest); this guide does not duplicate canonical package commands.
 
+## Command Deck chat editor
+
+Purpose: reproduce `irfan-pi` custom chat input without patching Pi or `@earendil-works/pi-tui`.
+
+Features:
+
+- `ASK` labeled input frame with `Ask, build, or investigate…` placeholder
+- Ready, thinking, tools, error, and bash state labels
+- Spinner, scroll indicators, and responsive narrow-terminal fallback
+- `@` file, `/` command, and newline hints
+
+Requires Pi `>=0.80.10`. Pi supplies `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`; no extra runtime package is required.
+
+Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates). The source template is [`pi/extensions/command-deck`](../../pi/extensions/command-deck).
+
+Run `/reload` after installation. If another extension replaces the editor, load order determines which editor is active.
+
+Smoke test from repository root:
+
+```bash
+PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent" \
+  node pi/extensions/command-deck/smoke-test.mjs
+```
+
+Set `PI_ROOT` explicitly when Pi is installed elsewhere. Optional `PI_THEME` points at theme file used by test.
+
 ## Headroom adapter
 
 Purpose: compress large Pi tool results through local Headroom proxy, store originals locally, and retrieve with native tools.
