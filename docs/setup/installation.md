@@ -55,6 +55,7 @@ Repo-owned templates are copied rather than installed from npm.
 | Hindsight | `pi/extensions/hindsight` | `~/.pi/agent/extensions/hindsight` |
 | Managed skills | `pi/extensions/managed-skills` | `~/.pi/agent/extensions/managed-skills` |
 | Goal loop | `pi/extensions/goal-loop` | `~/.pi/agent/extensions/goal-loop` |
+| Prompt loop | `pi/extensions/loop` | `~/.pi/agent/extensions/loop` |
 | BTW | `pi/extensions/btw` | `~/.pi/agent/extensions/btw` |
 | Caveman | `pi/extensions/caveman` | `~/.pi/agent/extensions/caveman` |
 
@@ -91,6 +92,7 @@ deploy pi/extensions/headroom "$HOME/.pi/agent/extensions/headroom" headroom
 deploy pi/extensions/hindsight "$HOME/.pi/agent/extensions/hindsight" hindsight
 deploy pi/extensions/managed-skills "$HOME/.pi/agent/extensions/managed-skills" managed-skills
 deploy pi/extensions/goal-loop "$HOME/.pi/agent/extensions/goal-loop" goal-loop
+deploy pi/extensions/loop "$HOME/.pi/agent/extensions/loop" loop
 deploy pi/extensions/btw "$HOME/.pi/agent/extensions/btw" btw
 deploy pi/extensions/caveman "$HOME/.pi/agent/extensions/caveman" caveman
 

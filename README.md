@@ -12,7 +12,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Theme/UI | `irfan-pi` theme, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
 | Delegation | Subagent workflows and structured user questions |
-| Guardrails | Permission gates, todos, and persisted goal loops |
+| Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
 | Context | `context-mode` and local Headroom compression/retrieval |
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel for context-aware questions while main agent works |
@@ -36,6 +36,7 @@ pi/
     hindsight/               # local Hindsight adapter template
     managed-skills/          # local managed generated skills template
     goal-loop/               # local /goal extension template
+    loop/                    # local Cursor-style /loop extension template
     btw/                     # local /btw side-question extension template
     caveman/                 # local /caveman extension template
 docs/setup/                  # detailed setup and operations guides
@@ -135,7 +136,7 @@ Full paths and configuration examples: [Configuration](docs/setup/configuration.
 | [Configuration](docs/setup/configuration.md) | Paths, scope, auth, theme, signature UI |
 | [MCP](docs/setup/mcp.md) | Global/project config, search servers, OAuth, bearer auth, commands |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
-| [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop |
+| [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop, prompt loop |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
 | [Operations](docs/setup/operations.md) | Daily commands, verification, troubleshooting, maintenance |
 

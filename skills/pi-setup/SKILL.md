@@ -59,7 +59,7 @@ Audit relevant surfaces with read-only checks:
 - Global versus project MCP files and server definitions.
 - Permission policy path and intent.
 - Theme selection and signature extension.
-- Headroom, Hindsight, managed-skills, goal-loop, BTW, and Caveman files/config.
+- Headroom, Hindsight, managed-skills, goal-loop, prompt-loop, BTW, and Caveman files/config.
 - Requested skills and optional tools.
 - Credential references and required environment variable names without printing values.
 

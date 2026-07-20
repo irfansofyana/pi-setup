@@ -43,6 +43,13 @@ import {
 import { parseCurrentRunCandidate } from "./evaluation.ts";
 import { createSubagentGoalEvaluator, type GoalEvaluator, type GoalEvaluatorInput } from "./evaluator.ts";
 import {
+  GOAL_DRIVER_REQUEST_EVENT,
+  GOAL_DRIVER_RESPONSE_PREFIX,
+  GoalDriverRegistry,
+  parseGoalDriverRequest,
+  type GoalDriverResponse,
+} from "./driver.ts";
+import {
   createGoalStorage,
   GoalStorageAuditError,
   GoalStorageConflictError,
@@ -610,6 +617,34 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
   const randomId = options.randomId ?? randomUUID;
   const evaluator = options.evaluator ?? createSubagentGoalEvaluator(pi, { timeoutMs: 120_000 });
   const status = createGoalStatusAnimator(storage);
+  const driverRegistry = new GoalDriverRegistry();
+  let driverContext: ExtensionContext | undefined;
+  let unsubscribeDriver: (() => void) | undefined;
+  const subscribeDriver = (ctx: ExtensionContext): void => {
+    driverContext = ctx;
+    unsubscribeDriver?.();
+    unsubscribeDriver = pi.events.on(GOAL_DRIVER_REQUEST_EVENT, (value) => {
+      const request = parseGoalDriverRequest(value);
+      if (!request) return;
+      const responseEvent = `${GOAL_DRIVER_RESPONSE_PREFIX}${request.requestId}`;
+      let response: GoalDriverResponse;
+      const activeCtx = driverContext;
+      if (!activeCtx) {
+        response = { ok: false, reason: "Goal Loop has no active Pi session context." };
+      } else {
+        const readResult = readGoal(storage, request.projectRoot, activeCtx);
+        if (!readResult.ok && request.action === "claim") {
+          response = { ok: false, reason: "Goal state could not be read safely." };
+        } else {
+          const goal = readResult.ok ? readResult.goal : undefined;
+          const hasActiveGoal = goal !== undefined && goal.status !== "complete";
+          response = driverRegistry.handle(request, hasActiveGoal);
+        }
+      }
+      pi.events.emit(responseEvent, response);
+    });
+  };
+  const loopOwnsRoot = (projectRoot: string): boolean => driverRegistry.isClaimed(projectRoot);
   // Tool authority belongs only to the accepted top-level continuation attempt
   // and is revoked at its first agent_end or first non-marker user message.
   // Chain identity survives Pi's markerless low-level retries until
@@ -658,6 +693,9 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
       executionMode: "sequential",
       async execute(_id, params, _signal, _update, ctx) {
         const projectRoot = ctx.cwd || process.cwd();
+        if (loopOwnsRoot(projectRoot)) {
+          return { content: [{ type: "text", text: "Goal creation refused because /loop owns this working root." }], details: { error: "loop_driver_active" } };
+        }
         const readResult = readGoal(storage, projectRoot, ctx);
         if (!readResult.ok) {
           return { content: [{ type: "text", text: "Goal was not created because storage could not be read safely." }], details: { error: "storage_error" } };
@@ -805,6 +843,11 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
 
       if (parsed.command === "status") {
         notify(ctx, formatStatus(existing, existing ? undefined : readLatestAchievement(storage, projectRoot, ctx), timestamp));
+        return;
+      }
+
+      if (loopOwnsRoot(projectRoot)) {
+        notify(ctx, "Goal command refused because /loop owns this working root. Run /loop stop first.", "warning");
         return;
       }
 
@@ -961,9 +1004,16 @@ function registerGoalLoop(pi: ExtensionAPI, options: GoalLoopExtensionOptions): 
     },
   });
 
-  pi.on("session_start", (_event, ctx) => status.sync(ctx));
+  pi.on("session_start", (_event, ctx) => {
+    subscribeDriver(ctx);
+    status.sync(ctx);
+  });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    driverRegistry.releaseSession(ctx.sessionManager.getSessionId());
+    unsubscribeDriver?.();
+    unsubscribeDriver = undefined;
+    driverContext = undefined;
     clearContinuationAuthority();
     clearAutonomousTracking();
     const projectRoot = ctx.cwd || process.cwd();
