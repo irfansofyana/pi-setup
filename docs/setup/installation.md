@@ -50,6 +50,7 @@ Repo-owned templates are copied rather than installed from npm.
 | --- | --- | --- |
 | Theme | `pi/themes/irfan-pi.json` | `~/.pi/agent/themes/irfan-pi.json` |
 | Signature UI | `pi/extensions/pi-signature.ts` | `~/.pi/agent/extensions/pi-signature.ts` |
+| Command Deck chat editor | `pi/extensions/command-deck` | `~/.pi/agent/extensions/command-deck` |
 | Headroom | `pi/extensions/headroom` | `~/.pi/agent/extensions/headroom` |
 | Hindsight | `pi/extensions/hindsight` | `~/.pi/agent/extensions/hindsight` |
 | Managed skills | `pi/extensions/managed-skills` | `~/.pi/agent/extensions/managed-skills` |
@@ -85,6 +86,7 @@ deploy() {
 
 deploy pi/themes/irfan-pi.json "$HOME/.pi/agent/themes/irfan-pi.json" irfan-pi.json
 deploy pi/extensions/pi-signature.ts "$HOME/.pi/agent/extensions/pi-signature.ts" pi-signature.ts
+deploy pi/extensions/command-deck "$HOME/.pi/agent/extensions/command-deck" command-deck
 deploy pi/extensions/headroom "$HOME/.pi/agent/extensions/headroom" headroom
 deploy pi/extensions/hindsight "$HOME/.pi/agent/extensions/hindsight" hindsight
 deploy pi/extensions/managed-skills "$HOME/.pi/agent/extensions/managed-skills" managed-skills

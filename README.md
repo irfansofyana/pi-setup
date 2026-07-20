@@ -9,7 +9,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with LLM provider login via `/login` |
-| Theme/UI | `irfan-pi` theme and `pi-signature.ts` header/footer extension |
+| Theme/UI | `irfan-pi` theme, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
 | Delegation | Subagent workflows and structured user questions |
 | Guardrails | Permission gates, todos, and persisted goal loops |
@@ -31,6 +31,7 @@ pi/
     gruvbox-dark.json        # alternate/base theme
   extensions/
     pi-signature.ts          # signature header + compact footer
+    command-deck/            # custom chat input/editor template
     headroom/                # local Headroom adapter template
     hindsight/               # local Hindsight adapter template
     managed-skills/          # local managed generated skills template
@@ -111,7 +112,7 @@ Run `/reload` after package installation. Use `pi list` to inspect installed pac
 | --- | --- | --- |
 | `~/.pi/agent/settings.json` | Global Pi | Theme and Pi settings |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
-| `~/.pi/agent/extensions/` | Global Pi | Extensions |
+| `~/.pi/agent/extensions/` | Global Pi | Extensions, including Command Deck chat editor |
 | `~/.pi/agent/extensions/pi-permission-system/config.json` | Global Pi | Permission policy |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon |
@@ -134,7 +135,7 @@ Full paths and configuration examples: [Configuration](docs/setup/configuration.
 | [Configuration](docs/setup/configuration.md) | Paths, scope, auth, theme, signature UI |
 | [MCP](docs/setup/mcp.md) | Global/project config, search servers, OAuth, bearer auth, commands |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
-| [Local extensions](docs/setup/local-extensions.md) | Headroom, Hindsight, managed skills, BTW, Caveman, goal loop |
+| [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
 | [Operations](docs/setup/operations.md) | Daily commands, verification, troubleshooting, maintenance |
 
