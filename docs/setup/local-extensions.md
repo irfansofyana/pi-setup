@@ -362,3 +362,62 @@ Only finalized assistant usage from accepted autonomous runs accumulates (`input
 Existing installations should recopy template, then run `/reload` or restart Pi.
 
 Extension does not bypass Pi permissions. It does not schedule work after Pi exits or execute verification commands independently. Same-worktree detection still requires launching concurrent sessions from distinct Git worktree roots.
+
+## Prompt loop
+
+Purpose: repo-owned Cursor-style `/loop` for repeated local prompts. It runs once immediately, then continues on fixed intervals or agent-selected time/safe-event wakes until agent declares completion, user stops it, or Pi exits.
+
+Requires Pi `>=0.80.4`, repo-owned Goal Loop template, and `@tintinweb/pi-subagents` RPC protocol version 2 from [README package manifest](../../README.md#required-npm-package-manifest).
+
+Use private backup-and-replace procedure in [Installation](installation.md#install-local-templates). Copy both `pi/extensions/goal-loop/` and `pi/extensions/loop/`, then run `/reload` or restart Pi.
+
+Commands:
+
+```text
+/loop                         # current status or latest receipt
+/loop <prompt>                # dynamic time/event pacing
+/loop <N><unit> <prompt>      # compact fixed interval
+/loop every 5 minutes <prompt> # natural leading interval
+/loop <prompt> every 5 minutes # natural trailing interval
+/loop stop                    # case-insensitive cancellation command
+```
+
+Examples:
+
+```text
+/loop 5m check whether the deployment finished
+/loop check whether the deployment finished every 5 minutes
+/loop work on this feature until tests pass
+```
+
+Behavior:
+
+- First iteration runs immediately.
+- Fixed schedules use absolute one-shot timers and coalesce busy ticks.
+- Dynamic iterations continue only after `schedule_loop_wakeup` proposes a delay, correlated background subagent, project file change, or allowlisted shared event.
+- Allowlisted events are `monitor:done`, `monitor:error`, `tasks:completed`, `tasks:failed`, and `loop:wake`; every wake requires matching correlation ID.
+- Agent owns completion: `complete_loop` stops fixed or dynamic mode when iteration settles; omitting dynamic wake also stops.
+- Goal Loop coordinates working-root ownership but does not evaluate every Loop iteration.
+- `/goal` and `/loop` are mutually exclusive for same working root inside one Pi process; persisted active `/goal` state also blocks new Loop claim.
+- Loop claims are process-local. Run concurrent Pi processes only from distinct Git worktree roots; one process cannot reserve its Loop root against `/goal` started in another process.
+- Missing Goal coordinator or queued user interruption stops safely.
+- State is process-local. `/reload`, session replacement, shutdown, and Pi exit stop loop; no offline daemon exists.
+- Pi permissions remain authoritative. Extension does not bypass tool approvals.
+
+Smoke test:
+
+```text
+/loop 5m check whether the deployment finished
+/loop
+/loop stop
+/loop work on this feature until tests pass
+```
+
+Run focused tests:
+
+```bash
+node --test pi/extensions/loop/*.test.ts
+node --test pi/extensions/goal-loop/*.test.ts
+```
+
+See [extension README](../../pi/extensions/loop/README.md) for internal wake correlation, safety limits, and implementation notes.

@@ -60,6 +60,7 @@ function createHarness(session = "session-a", evaluator: GoalEvaluator = passthr
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const handlers = new Map<string, any>();
+  const eventHandlers = new Map<string, Set<(value: unknown) => void>>();
   const sent: string[] = [];
   const notifications: Array<{ message: string; type?: string }> = [];
   let idle = true;
@@ -68,6 +69,17 @@ function createHarness(session = "session-a", evaluator: GoalEvaluator = passthr
   let currentNow = NOW;
   let id = 0;
   const api = {
+    events: {
+      on(name: string, handler: (value: unknown) => void) {
+        const listeners = eventHandlers.get(name) ?? new Set();
+        listeners.add(handler);
+        eventHandlers.set(name, listeners);
+        return () => listeners.delete(handler);
+      },
+      emit(name: string, value: unknown) {
+        for (const handler of eventHandlers.get(name) ?? []) handler(value);
+      },
+    },
     registerTool(tool: any) { tools.set(tool.name, tool); },
     registerCommand(name: string, command: any) { commands.set(name, command); },
     on(name: string, handler: any) { handlers.set(name, handler); },
@@ -88,7 +100,7 @@ function createHarness(session = "session-a", evaluator: GoalEvaluator = passthr
   };
   createGoalLoopExtension({ storage, config: { allowModelCreateGoal: false }, now: () => currentNow, randomId: () => `id-${++id}`, evaluator })(api as any);
   return {
-    root, storage, tools, commands, handlers, sent, notifications, ctx,
+    root, storage, tools, commands, handlers, eventHandlers, events: api.events, sent, notifications, ctx,
     setIdle(value: boolean) { idle = value; },
     setPendingMessages(value: boolean) { pendingMessages = value; },
     setThrowOnSend(value: boolean) { throwOnSend = value; },
@@ -217,6 +229,58 @@ test("parseGoalArgs supports native clear aliases", () => {
   for (const alias of ["stop", "off", "reset", "none", "cancel"]) {
     assert.deepEqual(parseGoalArgs(alias), { command: "clear", value: "" });
   }
+});
+
+test("Loop driver claim blocks /goal until matching release", async (t) => {
+  const harness = createHarness();
+  t.after(harness.cleanup);
+  await harness.handlers.get("session_start")({}, harness.ctx);
+
+  const responses: unknown[] = [];
+  const request = {
+    requestId: "driver-1",
+    action: "claim",
+    owner: "loop",
+    projectRoot: harness.ctx.cwd,
+    sessionId: "session-a",
+    generation: 1,
+  };
+  harness.events.on("goal-loop:driver:response:driver-1", (value: unknown) => responses.push(value));
+  harness.events.emit("goal-loop:driver:request", request);
+  assert.deepEqual(responses, [{ ok: true, claim: {
+    owner: "loop",
+    projectRoot: harness.ctx.cwd,
+    sessionId: "session-a",
+    generation: 1,
+  } }]);
+
+  await harness.commands.get("goal").handler("ship feature", harness.ctx);
+  assert.match(harness.notifications.at(-1)!.message, /\/loop owns/);
+  assert.equal(harness.storage.read(harness.ctx.cwd), undefined);
+
+  harness.events.emit("goal-loop:driver:request", { ...request, requestId: "driver-2", action: "release" });
+  await harness.commands.get("goal").handler("ship feature", harness.ctx);
+  assert.equal(harness.storage.read(harness.ctx.cwd)?.objective, "ship feature");
+});
+
+test("active /goal refuses Loop driver claim", async (t) => {
+  const harness = createHarness();
+  t.after(harness.cleanup);
+  await harness.handlers.get("session_start")({}, harness.ctx);
+  await harness.commands.get("goal").handler("ship feature", harness.ctx);
+
+  const responses: unknown[] = [];
+  harness.events.on("goal-loop:driver:response:driver-3", (value: unknown) => responses.push(value));
+  harness.events.emit("goal-loop:driver:request", {
+    requestId: "driver-3",
+    action: "claim",
+    owner: "loop",
+    projectRoot: harness.ctx.cwd,
+    sessionId: "session-a",
+    generation: 1,
+  });
+  assert.equal((responses[0] as { ok: boolean }).ok, false);
+  assert.match((responses[0] as { reason: string }).reason, /active \/goal/);
 });
 
 test("formatGoalDuration uses compact stable units", () => {

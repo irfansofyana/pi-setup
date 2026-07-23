@@ -37,7 +37,7 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 
 - Keep canonical npm package manifest only in `README.md`; change package membership and install forms there.
 - Keep topic docs and skill pointed at README manifest rather than duplicating commands.
-- Required repo-owned local templates remain Headroom, Hindsight, Managed Skills, Goal Loop, BTW, Caveman, signature UI, and `irfan-pi` theme. Detailed copy procedures belong in `docs/setup/`.
+- Required repo-owned local templates remain Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, BTW, Caveman, signature UI, and `irfan-pi` theme. Detailed copy procedures belong in `docs/setup/`.
 
 ## Permission policy notes
 
