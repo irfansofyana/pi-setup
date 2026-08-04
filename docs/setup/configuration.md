@@ -69,6 +69,7 @@ Included:
 - `irfan-gruvbox`: alternate Gruvbox Dark theme with OMP-inspired neutral tool cards, readable code output, and softer greens.
 - `command-deck`: custom `CustomEditor` chat input with labeled borders, placeholder, state labels, spinner, hints, and responsive fallback. Uses Pi public APIs; does not patch `pi-tui`.
 - `pi-signature.ts`: animated gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, and compact footer statuses. Header animation uses cached normal-render line count to pause outside live viewport without polling full TUI tree, preserving terminal scrollback and idle performance.
+- `terminal-title`: animated terminal title: `○ | π | <session-or-cwd>` while idle, Braille spinner while working, and `✓` after settlement. Session names from `/name` override cwd basename and refresh immediately.
 
 Install theme and signature with private backup-and-replace procedure in [Installation](installation.md#install-local-templates). Do not overwrite existing targets with raw `cp`.
 

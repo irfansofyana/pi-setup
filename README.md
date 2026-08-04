@@ -9,7 +9,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with LLM provider login via `/login` |
-| Theme/UI | `irfan-pi` theme, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
+| Theme/UI | `irfan-pi` theme, `command-deck` chat editor, signature UI, and animated terminal title |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
 | Delegation | Subagent workflows and structured user questions |
 | Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
@@ -31,6 +31,7 @@ pi/
     gruvbox-dark.json        # alternate/base theme
   extensions/
     pi-signature.ts          # signature header + compact footer
+    terminal-title/          # animated terminal-title template
     command-deck/            # custom chat input/editor template
     headroom/                # local Headroom adapter template
     hindsight/               # local Hindsight adapter template

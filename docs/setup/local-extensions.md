@@ -2,6 +2,24 @@
 
 Copy repo-owned templates from `pi/extensions/` into `~/.pi/agent/extensions/`. Install required npm dependencies from [README package manifest](../../README.md#required-npm-package-manifest); this guide does not duplicate canonical package commands.
 
+## Terminal title
+
+Purpose: show Pi activity in terminal tab/window title: idle `○`, animated Braille spinner while working, then `✓` when agent settles. Session name from `/name` takes precedence over cwd basename and titles truncate at 40 characters.
+
+Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates), then run `/reload`. `pi-signature.ts` owns header/footer; this template owns terminal title, so update both templates together.
+
+Source and test:
+
+```text
+pi/extensions/terminal-title
+```
+
+```bash
+node --test pi/extensions/terminal-title/*.test.ts
+```
+
+Inspired by [Kun's Pi Agent Config](https://blog.kunchenguid.com/p/kuns-pi-agent-config).
+
 ## Command Deck chat editor
 
 Purpose: reproduce `irfan-pi` custom chat input without patching Pi or `@earendil-works/pi-tui`.
