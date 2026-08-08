@@ -10,9 +10,9 @@ Hindsight is most useful when you treat it as a decision and learning log, not a
 | `global` | Explicit untagged memories only | Durable personal preferences and reusable procedures that apply everywhere |
 | `all` | Current project plus global | Default recall; joint reflection when using the shared `per-project-tagged` bank |
 
-`all` never means every project. With `per-project-tagged`, it filters the shared bank to the current project plus untagged global memories, so one Hindsight Reflect call can produce a genuine joint synthesis. With legacy `per-project`, recall still queries the current project's bank and the base global bank, then merges and deduplicates the results; reflect `all` fails closed because Hindsight has no native cross-bank joint Reflect API. Use reflect `project` or `global` separately, or migrate with `/hindsight config set scoping per-project-tagged`. Changing the setting does not move legacy separate-bank memories, so re-retain or curate the memories needed in the shared tagged bank.
+`all` never means every project in either per-project mode. With `per-project-tagged`, it filters the shared bank to the current project plus untagged global memories, so one Hindsight Reflect call can produce a genuine joint synthesis. With legacy `per-project`, recall still queries the current project's bank and the base global bank, then merges and deduplicates the results; reflect `all` fails closed because Hindsight has no native cross-bank joint Reflect API. Use reflect `project` or `global` separately, or migrate with `/hindsight config set scoping per-project-tagged`. Changing the setting does not move legacy separate-bank memories, so re-retain or curate the memories needed in the shared tagged bank.
 
-Automatic shutdown retention stays project-scoped. A memory becomes global only when you explicitly request it.
+With `per-project` or `per-project-tagged`, automatic shutdown retention stays project-isolated and a memory becomes global only when you explicitly request it. Legacy `global` scoping intentionally has no project isolation: `project`, `global`, and `all` use the same untagged base bank, so shutdown transcripts and explicit project retains can be recalled from other repositories. Do not use `global` scoping when repository isolation matters.
 
 ## Recall, reflect, and retain
 
