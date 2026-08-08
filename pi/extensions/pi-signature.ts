@@ -400,7 +400,6 @@ export default function piSignature(pi: ExtensionAPI) {
 		ctx.ui.setWorkingMessage("");
 		ctx.ui.setWorkingIndicator(funnySpinner(ctx.ui.theme));
 		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx));
-		ctx.ui.setTitle(`π · ${owner} · Irfan's Pi setup`);
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {

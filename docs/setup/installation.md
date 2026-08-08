@@ -50,6 +50,7 @@ Repo-owned templates are copied rather than installed from npm.
 | --- | --- | --- |
 | Theme | `pi/themes/irfan-pi.json` | `~/.pi/agent/themes/irfan-pi.json` |
 | Signature UI | `pi/extensions/pi-signature.ts` | `~/.pi/agent/extensions/pi-signature.ts` |
+| Terminal title | `pi/extensions/terminal-title` | `~/.pi/agent/extensions/terminal-title` |
 | Command Deck chat editor | `pi/extensions/command-deck` | `~/.pi/agent/extensions/command-deck` |
 | Headroom | `pi/extensions/headroom` | `~/.pi/agent/extensions/headroom` |
 | Hindsight | `pi/extensions/hindsight` | `~/.pi/agent/extensions/hindsight` |
@@ -87,6 +88,7 @@ deploy() {
 
 deploy pi/themes/irfan-pi.json "$HOME/.pi/agent/themes/irfan-pi.json" irfan-pi.json
 deploy pi/extensions/pi-signature.ts "$HOME/.pi/agent/extensions/pi-signature.ts" pi-signature.ts
+deploy pi/extensions/terminal-title "$HOME/.pi/agent/extensions/terminal-title" terminal-title
 deploy pi/extensions/command-deck "$HOME/.pi/agent/extensions/command-deck" command-deck
 deploy pi/extensions/headroom "$HOME/.pi/agent/extensions/headroom" headroom
 deploy pi/extensions/hindsight "$HOME/.pi/agent/extensions/hindsight" hindsight
