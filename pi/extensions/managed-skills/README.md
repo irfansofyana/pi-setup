@@ -4,7 +4,7 @@ Local OMP-inspired managed skills for Pi.
 
 Requires Pi `>=0.80.4`. Automatic continuation uses Pi's `agent_settled` lifecycle hook, introduced in `0.80.4`.
 
-This extension adds model-callable `manage_skill` and `learn` tools plus a `/managed-skills` command. It writes generated skills only under an isolated managed directory:
+This extension adds the model-callable `manage_skill` tool plus a `/managed-skills` command. Its Hindsight-backed `learn` tool is opt-in and disabled by default. It writes generated skills only under an isolated managed directory:
 
 ```text
 ~/.pi/agent/managed-skills/<skill-name>/SKILL.md
@@ -40,12 +40,20 @@ Reload Pi:
 
 ## Tools
 
-When enabled, the extension registers:
+With the default config, the enabled extension registers:
 
 ```text
 manage_skill  # generated skill CRUD
-learn         # Hindsight retain + optional managed skill create/update
 ```
+
+The Hindsight-backed `learn` tool is opt-in. Enable it and reload Pi before use:
+
+```text
+/managed-skills learn on
+/reload
+```
+
+When enabled, `learn` provides Hindsight retention plus optional managed skill creation or update.
 
 ### `manage_skill`
 
@@ -79,6 +87,8 @@ After any create/update/delete, run:
 Pi discovers skills at startup/reload, so new managed skills are not active until reload.
 
 ### `learn`
+
+`learn` is unavailable under the default config. Enable it with `/managed-skills learn on`, then run `/reload`.
 
 Use `learn` for durable facts, project conventions, user preferences, non-obvious fixes, or tool quirks that should survive future sessions in Hindsight.
 
@@ -118,43 +128,29 @@ Config lives at:
 ~/.pi/agent/managed-skills/config.json
 ```
 
-Defaults:
+Daily-use defaults:
 
 ```json
 {
   "enabled": true,
-  "learnEnabled": true,
-  "autoCapture": false,
+  "learnEnabled": false,
+  "autoCapture": true,
   "autoContinue": false,
-  "minToolCalls": 5,
+  "minToolCalls": 8,
   "maxSkillBytes": 64000,
   "maxMemoryChars": 12000
 }
 ```
 
 - `enabled`: registers managed-skills tooling and discovers managed skills.
-- `learnEnabled`: registers `learn` for Hindsight-backed lesson retention.
-- `autoCapture`: adds system prompt guidance telling the agent it may call `learn` and/or `manage_skill`.
-- `autoContinue`: after eligible tool-heavy work and all queued follow-ups/retries settle, runs one hidden capture turn that may call `learn` and/or `manage_skill`, then stops.
-- `minToolCalls`: threshold for `autoContinue`.
+- `learnEnabled`: registers `learn` for Hindsight-backed lesson retention. Keep off when standalone Hindsight tools already handle durable memory; enable when one call should retain a lesson and optionally write a skill.
+- `autoCapture`: adds standing system-prompt guidance to capture genuinely reusable procedures during normal work. It does not start another turn.
+- `autoContinue`: after eligible tool-heavy work and all queued follow-ups/retries settle, runs one hidden capture turn that may call `learn` and/or `manage_skill`, then stops. Keep off unless extra token use and autonomous writes are wanted.
+- `minToolCalls`: threshold for `autoContinue`; ignored while `autoContinue` is off.
 - `maxSkillBytes`: max serialized `SKILL.md` size.
 - `maxMemoryChars`: max Hindsight lesson/context length for `learn`.
 
-Recommended start:
-
-```json
-{
-  "enabled": true,
-  "learnEnabled": true,
-  "autoCapture": false,
-  "autoContinue": false,
-  "minToolCalls": 5,
-  "maxSkillBytes": 64000,
-  "maxMemoryChars": 12000
-}
-```
-
-Turn on automation only after manual workflow feels good.
+This profile keeps lightweight capture guidance active while leaving Hindsight retention and hidden capture turns explicit.
 
 If an existing config file is malformed or unreadable, the extension fails closed: managed tools, discovery, and automation stay disabled. `/managed-skills status` and `/managed-skills config` show the diagnostic. Correct the file or run a config-changing command, then `/reload`.
 

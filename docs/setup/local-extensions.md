@@ -162,7 +162,7 @@ Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
 
 ## Managed skills extension
 
-Purpose: OMP-inspired generated reusable skills for Pi. Provides `manage_skill`, `learn`, and `/managed-skills`, writing only isolated generated skills under:
+Purpose: OMP-inspired generated reusable skills for Pi. Provides `manage_skill` and `/managed-skills` by default, with an opt-in Hindsight-backed `learn` tool, writing only isolated generated skills under:
 
 ```text
 ~/.pi/agent/managed-skills/<skill-name>/SKILL.md
@@ -191,23 +191,27 @@ Commands:
 Tools:
 
 ```text
-manage_skill  # create/update/delete/list/view isolated managed SKILL.md files
-learn         # retain durable lessons in Hindsight, optionally with a managed skill
+manage_skill  # default: create/update/delete/list/view isolated managed SKILL.md files
+learn         # opt-in: retain durable Hindsight lessons, optionally with a managed skill
 ```
 
-Default config:
+Enable `learn` with `/managed-skills learn on`, then run `/reload` before invoking it.
+
+Daily-use default config:
 
 ```json
 {
   "enabled": true,
-  "learnEnabled": true,
-  "autoCapture": false,
+  "learnEnabled": false,
+  "autoCapture": true,
   "autoContinue": false,
-  "minToolCalls": 5,
+  "minToolCalls": 8,
   "maxSkillBytes": 64000,
   "maxMemoryChars": 12000
 }
 ```
+
+`autoCapture` adds standing guidance during normal work; it does not start another turn. `autoContinue` is separate: when enabled, it starts one hidden capture turn after at least `minToolCalls` tool calls and queued work settles. Keep `autoContinue` off unless extra token use and autonomous writes are wanted. Enable `learn` when managed-skills should retain Hindsight memory in the same call; standalone Hindsight tools remain available when it is off.
 
 Safety:
 
@@ -219,7 +223,7 @@ Safety:
 - Config and skill updates use same-directory atomic replacement.
 - Malformed existing config fails closed and reports diagnostic in `/managed-skills status`.
 - `learn` redacts common secret patterns before retaining to Hindsight.
-- Keep `autoCapture` and `autoContinue` off until manual capture feels safe.
+- Keep lightweight `autoCapture` guidance on; leave `autoContinue` off unless hidden capture turns are explicitly wanted.
 
 Run `/reload` after creating, updating, deleting, or copying managed skills.
 
