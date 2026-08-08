@@ -451,6 +451,9 @@ export default function hindsight(pi: ExtensionAPI) {
   }
 
   async function reflectFromMemoryScopes(projectRoot: string, scope: "project" | "global" | "all", query: string, options: any) {
+    if (configRef.scoping === "per-project" && scope === "all") {
+      throw new Error("Hindsight native cross-bank joint reflection is unavailable with scoping 'per-project' and scope 'all'. Use scope 'project' or 'global', or migrate with `/hindsight config set scoping per-project-tagged`; `per-project-tagged` is required for genuine project+global synthesis.");
+    }
     const scopes = computeMemoryScopes(configRef, projectRoot, scope);
     const responses = await Promise.all(scopes.map((bankScope) => client.reflect(bankScope, query, options)));
     return mergeReflectResponses(responses);
@@ -612,14 +615,17 @@ export default function hindsight(pi: ExtensionAPI) {
   pi.registerTool({
     name: "hindsight_reflect",
     label: "Hindsight Reflect",
-    description: "Ask Hindsight for a memory-grounded answer.",
-    promptSnippet: "Use Hindsight reflect for deeper reasoning over retained memories.",
-    promptGuidelines: ["Use hindsight_reflect when recall snippets are not enough and you need memory-grounded synthesis or task approach guidance."],
+    description: "Ask Hindsight for a memory-grounded answer. In separate-bank per-project scoping, scope all is unavailable; use per-project-tagged for joint project+global reflection.",
+    promptSnippet: "Use Hindsight reflect for deeper reasoning over retained memories; joint project+global reflection requires per-project-tagged scoping.",
+    promptGuidelines: [
+      "Use hindsight_reflect when recall snippets are not enough and you need memory-grounded synthesis or task approach guidance.",
+      "With legacy separate-bank per-project scoping, use project or global reflection separately; scope all fails closed because Hindsight has no native cross-bank joint reflection. Migrate to per-project-tagged for genuine project+global synthesis.",
+    ],
     parameters: Schema.Object({
       query: Schema.String({ description: "Question for Hindsight reflect." }),
       context: Schema.Optional(Schema.String({ description: "Optional current task context." })),
       budget: Schema.Optional(Schema.String({ description: "Reflect budget: low, mid, or high." })),
-      scope: Schema.Optional(Schema.String({ enum: ["project", "global", "all"], description: "Reflection scope: exact current project, exact untagged global, or the safe combination of current-project plus global memories. Defaults to all." })),
+      scope: Schema.Optional(Schema.String({ enum: ["project", "global", "all"], description: "Reflection scope. Defaults to all. Project and global work in every scoping mode; all performs genuine joint synthesis in a shared tagged bank, but fails closed with legacy separate-bank per-project scoping." })),
     }) as any,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const { query, context, budget, scope = "all" } = params as { query: string; context?: string; budget?: "low" | "mid" | "high"; scope?: "project" | "global" | "all" };

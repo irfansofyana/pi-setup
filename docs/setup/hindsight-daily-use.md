@@ -8,9 +8,9 @@ Hindsight is most useful when you treat it as a decision and learning log, not a
 | --- | --- | --- |
 | `project` | Current project only | Architecture, conventions, bugs, commands, dependencies, local decisions |
 | `global` | Explicit untagged memories only | Durable personal preferences and reusable procedures that apply everywhere |
-| `all` | Current project plus global | Default recall and reflection during normal project work |
+| `all` | Current project plus global | Default recall; joint reflection when using the shared `per-project-tagged` bank |
 
-`all` never means every project. With `per-project-tagged`, it filters the shared bank to the current project plus untagged global memories. With `per-project`, it queries the current project's bank and the base global bank, then merges and deduplicates the results.
+`all` never means every project. With `per-project-tagged`, it filters the shared bank to the current project plus untagged global memories, so one Hindsight Reflect call can produce a genuine joint synthesis. With legacy `per-project`, recall still queries the current project's bank and the base global bank, then merges and deduplicates the results; reflect `all` fails closed because Hindsight has no native cross-bank joint Reflect API. Use reflect `project` or `global` separately, or migrate with `/hindsight config set scoping per-project-tagged`. Changing the setting does not move legacy separate-bank memories, so re-retain or curate the memories needed in the shared tagged bank.
 
 Automatic shutdown retention stays project-scoped. A memory becomes global only when you explicitly request it.
 
@@ -59,7 +59,7 @@ Use global retention sparingly. If a fact contains a repository path, project-sp
 ### Ask Hindsight to reason
 
 ```text
-Reflect on our project and global memories about dependency upgrades. Recommend the safest rollout plan, explain which prior failures influenced it, and flag memories that may be stale. Use scope all.
+Reflect on our project and global memories about dependency upgrades. Recommend the safest rollout plan, explain which prior failures influenced it, and flag memories that may be stale. Use scope all (requires per-project-tagged scoping).
 ```
 
 ```text
@@ -113,7 +113,7 @@ These are the effective payloads Pi should generate when exact control matters.
 2. **During work:** do not retain guesses. Wait until a fact, decision, failure, or workaround is verified.
 3. **After verification:** retain rich project context—what happened, why, rejected approaches, exact non-secret commands, and observed results.
 4. **For reusable preferences or procedures:** explicitly retain with `global`; strip project-specific details first.
-5. **Before a major choice or retrospective:** reflect with `all`, then verify the answer against current code and documentation.
+5. **Before a major choice or retrospective:** with `per-project-tagged`, reflect with `all`; with legacy separate-bank `per-project`, choose `project` or `global` instead. Then verify the answer against current code and documentation.
 6. **When memories conflict:** prefer recent evidence and ask Pi to surface dates and contradictions rather than silently choosing one.
 
 Explicit `hindsight_retain` waits for the server to confirm the write (`async: false`), so an immediate recall can retrieve the retained memory. Hindsight may still consolidate richer observations afterward; if your next step depends on those derived observations rather than the exact retained text, prefer recalling on a later turn.
