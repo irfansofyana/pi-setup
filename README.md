@@ -137,6 +137,7 @@ Full paths and configuration examples: [Configuration](docs/setup/configuration.
 | [MCP](docs/setup/mcp.md) | Global/project config, search servers, OAuth, bearer auth, commands |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
 | [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop, prompt loop |
+| [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Scope choices, trigger prompts, tool payloads, memory hygiene, and a practical workflow |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
 | [Operations](docs/setup/operations.md) | Daily commands, verification, troubleshooting, maintenance |
 

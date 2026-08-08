@@ -157,6 +157,9 @@ export function computeMemoryScope(
     if (scope === "global") return { bankId: config.bankId, tags: [], tagsMatch: "exact" };
     return { bankId: config.bankId, tags: [projectTag(cwd)], tagsMatch: "any" };
   }
+  if (config.scoping === "per-project" && scope === "all") {
+    throw new Error("per-project scope 'all' spans two banks; use computeMemoryScopes()");
+  }
   if (config.scoping === "per-project" && scope === "global") {
     return { bankId: config.bankId, tags: [], tagsMatch: "exact" };
   }
@@ -164,6 +167,39 @@ export function computeMemoryScope(
     return { bankId: config.bankId, tags: [], tagsMatch: "exact" };
   }
   return computeBankScope(config, cwd);
+}
+
+export function computeMemoryScopes(
+  config: Pick<HindsightConfig, "bankId" | "scoping">,
+  cwd: string,
+  scope: MemoryScope,
+): BankScope[] {
+  if (config.scoping === "per-project" && scope === "all") {
+    return [
+      computeMemoryScope(config, cwd, "project"),
+      computeMemoryScope(config, cwd, "global"),
+    ];
+  }
+  return [computeMemoryScope(config, cwd, scope)];
+}
+
+export function mergeRecallResponses(responses: RecallResponse[]): RecallResponse {
+  const results: RecallResult[] = [];
+  const seen = new Set<string>();
+  for (const response of responses) {
+    for (const result of response.results ?? []) {
+      const key = result.id ? `id:${result.id}` : `text:${result.text ?? ""}\u0000${result.type ?? ""}\u0000${result.mentioned_at ?? result.occurred_start ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(result);
+    }
+  }
+  return { results };
+}
+
+export function mergeReflectResponses(responses: ReflectResponse[]): ReflectResponse {
+  const texts = [...new Set(responses.map((response) => response.text?.trim()).filter((text): text is string => Boolean(text)))];
+  return { text: texts.join("\n\n") };
 }
 
 export function formatRecallResponse(response: RecallResponse): string {

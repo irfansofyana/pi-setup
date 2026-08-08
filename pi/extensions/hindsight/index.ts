@@ -5,11 +5,14 @@ import {
   HindsightHttpClient,
   computeBankScope,
   computeMemoryScope,
+  computeMemoryScopes,
   defaultHindsightConfig,
   readHindsightConfigFile,
   writeHindsightConfigFile,
   formatRecallResponse,
   formatReflectResponse,
+  mergeRecallResponses,
+  mergeReflectResponses,
   runHindsightEmbed,
   type HindsightConfigFile,
   type RetainItem,
@@ -29,11 +32,14 @@ export {
   HindsightHttpClient,
   computeBankScope,
   computeMemoryScope,
+  computeMemoryScopes,
   defaultHindsightConfig,
   readHindsightConfigFile,
   writeHindsightConfigFile,
   formatRecallResponse,
   formatReflectResponse,
+  mergeRecallResponses,
+  mergeReflectResponses,
   runHindsightEmbed,
   RULES_DIR,
   buildRuleFromMarkdown,
@@ -438,6 +444,18 @@ export default function hindsight(pi: ExtensionAPI) {
     // Real Hindsight explicit retains are synchronous; kept as hook seam for commands/tests.
   }
 
+  async function recallFromMemoryScopes(projectRoot: string, scope: "project" | "global" | "all", query: string, options: any) {
+    const scopes = computeMemoryScopes(configRef, projectRoot, scope);
+    const responses = await Promise.all(scopes.map((bankScope) => client.recall(bankScope, query, options)));
+    return mergeRecallResponses(responses);
+  }
+
+  async function reflectFromMemoryScopes(projectRoot: string, scope: "project" | "global" | "all", query: string, options: any) {
+    const scopes = computeMemoryScopes(configRef, projectRoot, scope);
+    const responses = await Promise.all(scopes.map((bankScope) => client.reflect(bankScope, query, options)));
+    return mergeReflectResponses(responses);
+  }
+
   function memoryEnabled(cwd: string): boolean {
     return memoryBackendByCwd.get(cwd) ?? configRef.memoryBackend;
   }
@@ -584,7 +602,7 @@ export default function hindsight(pi: ExtensionAPI) {
       const { query, budget, scope = "all" } = params as { query: string; budget?: "low" | "mid" | "high"; scope?: "project" | "global" | "all" };
       const projectRoot = ctx.cwd || process.cwd();
       await flushRetainQueue();
-      const response = await client.recall(computeMemoryScope(configRef, projectRoot, scope), query, { budget: budget || configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal });
+      const response = await recallFromMemoryScopes(projectRoot, scope, query, { budget: budget || configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal });
       return {
         content: [{ type: "text", text: formatRecallResponse(response) || "No relevant hindsight memories." }],
       };
@@ -607,7 +625,7 @@ export default function hindsight(pi: ExtensionAPI) {
       const { query, context, budget, scope = "all" } = params as { query: string; context?: string; budget?: "low" | "mid" | "high"; scope?: "project" | "global" | "all" };
       const projectRoot = ctx.cwd || process.cwd();
       await flushRetainQueue();
-      const response = await client.reflect(computeMemoryScope(configRef, projectRoot, scope), query, { context, budget: budget || "low", signal });
+      const response = await reflectFromMemoryScopes(projectRoot, scope, query, { context, budget: budget || "low", signal });
       return { content: [{ type: "text", text: formatReflectResponse(response) }] };
     },
   });
@@ -647,7 +665,7 @@ export default function hindsight(pi: ExtensionAPI) {
         await client.clearMemories(scope, ctx?.signal);
         return `cleared Hindsight memories in bank ${scope.bankId}`;
       },
-      recallMemory: async (query) => formatRecallResponse(await client.recall(computeMemoryScope(configRef, ctx?.cwd || process.cwd(), "all"), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal })),
+      recallMemory: async (query) => formatRecallResponse(await recallFromMemoryScopes(ctx?.cwd || process.cwd(), "all", query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal })),
     }),
   });
 
@@ -678,7 +696,7 @@ export default function hindsight(pi: ExtensionAPI) {
     const query = queryFromMessages(messages);
     await flushRetainQueue();
     try {
-      const block = formatRecallResponse(await client.recall(computeMemoryScope(configRef, projectRoot, "all"), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal }));
+      const block = formatRecallResponse(await recallFromMemoryScopes(projectRoot, "all", query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal }));
       if (!block) return;
       autoRecallInjectedByCwd.add(projectRoot);
       return { messages: [customMemoryMessage(block), ...messages] };

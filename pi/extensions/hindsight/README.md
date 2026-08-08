@@ -71,7 +71,7 @@ Default is oh-my-pi-style `per-project-tagged`:
 
 Explicit retains default to `project`; shutdown transcript retention is always project-scoped. Explicit `global` retains are untagged and must be reserved for durable cross-project facts, user preferences, and reusable procedures—not project-specific code, repository details, or full transcripts. Explicit recall and reflect default to `all`.
 
-`per-project` keeps its separate bank per cwd for project/all operations; explicit global memories use the untagged base bank. `global` preserves its single untagged bank behavior. Exact untagged queries require a Hindsight version containing upstream exact-empty-tag support (vectorize-io/hindsight#2364).
+`per-project` keeps a separate bank per cwd for project memories and stores explicit global memories in the untagged base bank; `all` queries both banks and merges/deduplicates the responses. `global` preserves its single untagged bank behavior. Exact untagged queries require a Hindsight version containing upstream exact-empty-tag support (vectorize-io/hindsight#2364).
 
 ## Commands
 
@@ -100,6 +100,8 @@ Config keys accepted by `/hindsight config set`: `apiUrl`, `bankId`, `scoping`, 
 Retain full context. Hindsight extracts facts, entities, temporal/causal relationships, and embeddings server-side.
 
 ## Memory behavior guidance
+
+For concrete daily prompts and scope examples, see [Using Hindsight day to day](../../../docs/setup/hindsight-daily-use.md).
 
 This extension follows the upstream `hindsight-local` skill shape:
 
