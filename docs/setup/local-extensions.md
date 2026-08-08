@@ -32,7 +32,7 @@ Set `PI_ROOT` explicitly when Pi is installed elsewhere. Optional `PI_THEME` poi
 
 Purpose: compress large Pi tool results through local Headroom proxy, store originals locally, and retrieve with native tools.
 
-The adapter starts Headroom automatically for each Pi session, or adopts an already healthy proxy. If the CLI is missing, log/PID setup fails, startup times out, spawning fails, or the managed proxy exits unexpectedly, Pi always shows a warning and safely bypasses compression. `notifyFailures` only controls repetitive compression-path warnings.
+The adapter starts Headroom automatically for each Pi session, or adopts an already healthy proxy. Concurrent startup losers recheck and adopt the healthy winner. If an adopted proxy later stops, an auto-start session makes one replacement attempt on the next compression-path health check; failed recovery disables compression to avoid retry storms. Manual/off modes never recover automatically, and there is no background polling. If the CLI is missing, log/PID setup fails, startup times out, spawning fails, or the managed proxy exits unexpectedly, Pi always shows a warning and safely bypasses compression. `notifyFailures` only controls repetitive compression-path warnings.
 
 Install CLI and adapter:
 

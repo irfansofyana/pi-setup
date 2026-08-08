@@ -300,6 +300,71 @@ test("config reset during startup waits for stale work then runs a fresh probe",
   assert.equal(stats.details.proxyOwner, "external");
 });
 
+test("concurrent startup loser adopts the winner after its child exits before readiness", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4567, exitCode: null, killed: false });
+  let healthCalls = 0;
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    health: async () => ++healthCalls > 1,
+    waitForHealth: async () => {
+      child.exitCode = 1;
+      child.emit("exit", 1, null);
+      return false;
+    },
+    commandAvailable: () => true,
+    openLog: () => 12,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+    terminateChild: async () => true,
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(healthCalls, 2);
+  assert.equal(spawnCalls, 1);
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "external");
+  assert.ok(harness.notices.some((notice) => notice.message.includes("concurrent Headroom proxy")));
+  assert.equal(harness.notices.some((notice) => notice.message.includes("bypassing compression")), false);
+});
+
+test("auto session replaces a lost adopted proxy on the compression health path", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 7654, exitCode: null, killed: false });
+  let healthCalls = 0;
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    health: async () => {
+      healthCalls++;
+      return healthCalls === 1;
+    },
+    waitForHealth: async () => true,
+    commandAvailable: () => true,
+    openLog: () => 13,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+  let stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.proxyOwner, "external");
+
+  await harness.handlers.tool_result({
+    toolName: "bash",
+    input: {},
+    content: [{ type: "text", text: "x".repeat(DEFAULT_CONFIG.minChars) }],
+  }, harness.ctx);
+
+  stats = await harness.tools.headroom_stats.execute();
+  assert.equal(healthCalls, 3);
+  assert.equal(spawnCalls, 1);
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "managed");
+  assert.ok(harness.notices.some((notice) => notice.message === "Headroom proxy started."));
+});
+
 test("directory and PID-file failures stay visible and do not leak ownership", async () => {
   const directoryFailure = createHeadroomHarness({
     ensureDirs: () => { throw new Error("permission denied"); },

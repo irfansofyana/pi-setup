@@ -957,6 +957,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
     }
     managedProcess = child;
+    let startupPending = true;
+    let pendingTerminalNotice: ManagedProxyLifecycleNotice | undefined;
 
     const handleTerminalFailure = (notice: ManagedProxyLifecycleNotice | undefined): void => {
       if (!notice) return;
@@ -967,6 +969,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       owner = "none";
       try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
       updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (startupPending) {
+        pendingTerminalNotice = notice;
+        return;
+      }
       notifyLifecycleFailure(ctx, notice.message);
     };
     child.on("error", (error) => {
@@ -1009,6 +1015,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
     const becameHealthy = await dependencies.waitForHealth(config, getContextSignal(ctx), config.startupHealthTimeoutMs, () => managedProcess === child && attempt.isCurrent());
     if (!attempt.isCurrent()) return;
+    startupPending = false;
     if (becameHealthy) {
       lifecycle.markReady();
       owner = "managed";
@@ -1017,6 +1024,19 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (ctx.hasUI) ctx.ui.notify("Headroom proxy started.", "info");
       return;
     }
+
+    const concurrentProxyHealthy = pendingTerminalNotice
+      ? await dependencies.health(config, getContextSignal(ctx))
+      : false;
+    if (!attempt.isCurrent()) return;
+    if (concurrentProxyHealthy) {
+      owner = "external";
+      runtimeEnabled = config.enabled;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (ctx.hasUI) ctx.ui.notify("Headroom adopted a concurrent Headroom proxy after its own startup attempt ended.", "info");
+      return;
+    }
+    if (pendingTerminalNotice) notifyLifecycleFailure(ctx, pendingTerminalNotice.message);
 
     const timeoutNotice = terminalFailureNotified ? undefined : lifecycle.handleTimeout(config.startupHealthTimeoutMs);
     lifecycle.markStopping();
@@ -1107,6 +1127,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
 
     if (!(await dependencies.health(runConfig, getContextSignal(ctx)))) {
+      if (owner === "external" && runConfig.startup === "auto") await startManagedProxy(ctx);
       notifyFailure(ctx, "Headroom proxy unavailable; bypassing compression.");
       return headroomFailureResult(event as any, runConfig, "proxy unavailable.");
     }

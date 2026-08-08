@@ -122,6 +122,9 @@ Defaults:
 - Remote proxy URLs are blocked unless `allowRemote` is explicitly set to `true`.
 - If a proxy returns an identifiable `headroom-proxy` readiness payload at `proxyUrl`, the extension adopts it as external; unrelated local HTTP services are rejected.
 - Automatic startup and `/headroom start` wait up to `startupHealthTimeoutMs` (default 30s) for slow local proxy readiness.
+- If concurrent sessions race to start the same local proxy, a losing session rechecks readiness after its child exits and adopts the healthy winner instead of disabling compression.
+- An auto-start session that adopted another session's proxy starts one managed replacement when a compression-path health check detects that proxy has stopped. The triggering tool result is bypassed; failed recovery disables compression, preventing per-result retry storms.
+- Manual and off startup modes never recover automatically, and recovery uses no background polling.
 - Readiness is compression-oriented: upstream-only health failures do not block local tool-output compression.
 - Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable compression safely; `notifyFailures` only controls repetitive compression-path warnings.
 - `/headroom stop` never kills an external proxy.
