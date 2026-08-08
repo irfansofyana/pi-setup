@@ -4,7 +4,7 @@ Local OMP-inspired managed skills for Pi.
 
 Requires Pi `>=0.80.4`. Automatic continuation uses Pi's `agent_settled` lifecycle hook, introduced in `0.80.4`.
 
-This extension adds model-callable `manage_skill` and `learn` tools plus a `/managed-skills` command. It writes generated skills only under an isolated managed directory:
+This extension adds the model-callable `manage_skill` tool plus a `/managed-skills` command. Its Hindsight-backed `learn` tool is opt-in and disabled by default. It writes generated skills only under an isolated managed directory:
 
 ```text
 ~/.pi/agent/managed-skills/<skill-name>/SKILL.md
@@ -40,12 +40,20 @@ Reload Pi:
 
 ## Tools
 
-When enabled, the extension registers:
+With the default config, the enabled extension registers:
 
 ```text
 manage_skill  # generated skill CRUD
-learn         # Hindsight retain + optional managed skill create/update
 ```
+
+The Hindsight-backed `learn` tool is opt-in. Enable it and reload Pi before use:
+
+```text
+/managed-skills learn on
+/reload
+```
+
+When enabled, `learn` provides Hindsight retention plus optional managed skill creation or update.
 
 ### `manage_skill`
 
@@ -79,6 +87,8 @@ After any create/update/delete, run:
 Pi discovers skills at startup/reload, so new managed skills are not active until reload.
 
 ### `learn`
+
+`learn` is unavailable under the default config. Enable it with `/managed-skills learn on`, then run `/reload`.
 
 Use `learn` for durable facts, project conventions, user preferences, non-obvious fixes, or tool quirks that should survive future sessions in Hindsight.
 

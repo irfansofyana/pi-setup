@@ -162,7 +162,7 @@ Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
 
 ## Managed skills extension
 
-Purpose: OMP-inspired generated reusable skills for Pi. Provides `manage_skill`, `learn`, and `/managed-skills`, writing only isolated generated skills under:
+Purpose: OMP-inspired generated reusable skills for Pi. Provides `manage_skill` and `/managed-skills` by default, with an opt-in Hindsight-backed `learn` tool, writing only isolated generated skills under:
 
 ```text
 ~/.pi/agent/managed-skills/<skill-name>/SKILL.md
@@ -191,9 +191,11 @@ Commands:
 Tools:
 
 ```text
-manage_skill  # create/update/delete/list/view isolated managed SKILL.md files
-learn         # retain durable lessons in Hindsight, optionally with a managed skill
+manage_skill  # default: create/update/delete/list/view isolated managed SKILL.md files
+learn         # opt-in: retain durable Hindsight lessons, optionally with a managed skill
 ```
+
+Enable `learn` with `/managed-skills learn on`, then run `/reload` before invoking it.
 
 Daily-use default config:
 
