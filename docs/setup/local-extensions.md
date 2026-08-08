@@ -152,11 +152,13 @@ Commands:
 Tools:
 
 ```text
-hindsight_retain
-hindsight_recall
-hindsight_reflect
+hindsight_retain   # scope: project|global; default project
+hindsight_recall   # scope: project|global|all; default all
+hindsight_reflect  # scope: project|global|all; default all
 hindsight_rule
 ```
+
+With default `per-project-tagged` scoping, project operations use the exact current-project tag, global operations use exact untagged memory, and all operations safely combine the current project with untagged global memories while excluding memories tagged for other projects. Keep project code, repository details, and automatic/full transcripts project-scoped. Use explicit global retention only for durable cross-project facts, user preferences, or reusable procedures. Shutdown auto-retain remains project-only. Exact untagged recall/reflect requires a Hindsight build containing vectorize-io/hindsight#2364.
 
 Footer examples: `mem ok`, `mem checking`, `mem offline`, `mem:<bank> ok`.
 

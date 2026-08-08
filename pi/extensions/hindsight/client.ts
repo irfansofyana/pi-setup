@@ -38,6 +38,8 @@ export interface BankScope {
   tagsMatch?: "any" | "all" | "any_strict" | "all_strict" | "exact";
 }
 
+export type MemoryScope = "project" | "global" | "all";
+
 export interface RetainItem {
   content: string;
   context?: string;
@@ -143,6 +145,25 @@ export function computeBankScope(config: Pick<HindsightConfig, "bankId" | "scopi
   if (config.scoping === "global") return { bankId: config.bankId };
   if (config.scoping === "per-project") return { bankId: `${safeBankPart(config.bankId)}-${safeBankPart(projectKey(cwd))}` };
   return { bankId: config.bankId, tags: [projectTag(cwd)], tagsMatch: "any" };
+}
+
+export function computeMemoryScope(
+  config: Pick<HindsightConfig, "bankId" | "scoping">,
+  cwd: string,
+  scope: MemoryScope,
+): BankScope {
+  if (config.scoping === "per-project-tagged") {
+    if (scope === "project") return { bankId: config.bankId, tags: [projectTag(cwd)], tagsMatch: "exact" };
+    if (scope === "global") return { bankId: config.bankId, tags: [], tagsMatch: "exact" };
+    return { bankId: config.bankId, tags: [projectTag(cwd)], tagsMatch: "any" };
+  }
+  if (config.scoping === "per-project" && scope === "global") {
+    return { bankId: config.bankId, tags: [], tagsMatch: "exact" };
+  }
+  if (config.scoping === "global" && scope === "global") {
+    return { bankId: config.bankId, tags: [], tagsMatch: "exact" };
+  }
+  return computeBankScope(config, cwd);
 }
 
 export function formatRecallResponse(response: RecallResponse): string {

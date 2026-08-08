@@ -9,6 +9,7 @@ import { buildRuleFromMarkdown, builtinDefaultRules, discoverRules, parseFrontma
 import hindsight, {
   HindsightHttpClient,
   computeBankScope,
+  computeMemoryScope,
   defaultHindsightConfig,
   readHindsightConfigFile,
   formatRecallResponse,
@@ -260,6 +261,32 @@ test("computeBankScope supports oh-my-pi style project tagging", () => {
   assert.ok(tagged.tags?.[0].startsWith("project:demo-"));
 });
 
+test("computeMemoryScope layers exact project, exact global, and safe combined scopes in a tagged bank", () => {
+  const config = { bankId: "pi", scoping: "per-project-tagged" } as const;
+  const cwd = "/work/a/demo";
+  const project = computeMemoryScope(config, cwd, "project");
+
+  assert.equal(project.bankId, "pi");
+  assert.ok(project.tags?.[0].startsWith("project:demo-"));
+  assert.equal(project.tagsMatch, "exact");
+  assert.deepEqual(computeMemoryScope(config, cwd, "global"), { bankId: "pi", tags: [], tagsMatch: "exact" });
+  const all = computeMemoryScope(config, cwd, "all");
+  assert.equal(all.bankId, "pi");
+  assert.ok(all.tags?.[0].startsWith("project:demo-"));
+  assert.equal(all.tagsMatch, "any");
+});
+
+test("computeMemoryScope preserves legacy global and per-project bank layouts", () => {
+  const cwd = "/work/a/demo";
+  assert.deepEqual(computeMemoryScope({ bankId: "pi", scoping: "global" }, cwd, "project"), { bankId: "pi" });
+  assert.ok(computeMemoryScope({ bankId: "pi", scoping: "per-project" }, cwd, "project").bankId.startsWith("pi-demo-"));
+  assert.deepEqual(computeMemoryScope({ bankId: "pi", scoping: "per-project" }, cwd, "global"), {
+    bankId: "pi",
+    tags: [],
+    tagsMatch: "exact",
+  });
+});
+
 test("formatRecallResponse formats real Hindsight recall results", () => {
   const block = formatRecallResponse({ results: [{ text: "User prefers node:test", type: "experience", mentioned_at: "2026-01-02T00:00:00Z" }] });
   assert.ok(block.includes("Relevant memories from past conversations"));
@@ -336,11 +363,12 @@ test("HindsightHttpClient calls real API endpoints with scope and redaction", as
     return new Response(JSON.stringify({ results: [{ text: "ok" }], text: "reflected", success: true }), { status: 200 });
   };
   const client = new HindsightHttpClient({ apiUrl: "http://hindsight.local", apiToken: "tok", autoStartDaemon: false }, fetchImpl as any);
-  const scope = { bankId: "pi", tags: ["project:demo"], tagsMatch: "any" as const };
+  const scope = { bankId: "pi", tags: ["project:demo"], tagsMatch: "exact" as const };
 
   await client.retain(scope, [{ content: "OPENAI_API_KEY=supersecret12345", context: "ctx" }]);
   await client.recall(scope, "prefs", { budget: "high", maxTokens: 123 });
   await client.reflect(scope, "why", { context: "now", budget: "low" });
+  await client.recall({ bankId: "pi", tags: [], tagsMatch: "exact" }, "global prefs");
   await client.clearMemories(scope);
 
   assert.equal(calls[0].url, "http://hindsight.local/v1/default/banks/pi/memories");
@@ -350,10 +378,14 @@ test("HindsightHttpClient calls real API endpoints with scope and redaction", as
   assert.equal(calls[1].url, "http://hindsight.local/v1/default/banks/pi/memories/recall");
   assert.ok(calls[1].init.body.includes('"budget":"high"'));
   assert.ok(calls[1].init.body.includes('"max_tokens":123'));
+  assert.ok(calls[1].init.body.includes('"tags_match":"exact"'));
   assert.equal(calls[2].url, "http://hindsight.local/v1/default/banks/pi/reflect");
   assert.ok(calls[2].init.body.includes('"context":"now"'));
-  assert.equal(calls[3].url, "http://hindsight.local/v1/default/banks/pi/memories");
-  assert.equal(calls[3].init.method, "DELETE");
+  assert.ok(calls[2].init.body.includes('"tags_match":"exact"'));
+  assert.ok(calls[3].init.body.includes('"tags":[]'));
+  assert.ok(calls[3].init.body.includes('"tags_match":"exact"'));
+  assert.equal(calls[4].url, "http://hindsight.local/v1/default/banks/pi/memories");
+  assert.equal(calls[4].init.method, "DELETE");
 });
 
 test("HindsightHttpClient reports non-JSON HTTP errors before parsing", async () => {
@@ -466,9 +498,10 @@ test("auto-recall requires memory backend opt-in", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-auto-recall-"));
   const commands: Record<string, any> = {};
   const handlers: Record<string, Function> = {};
+  const recallScopes: any[] = [];
   const fakeClient = {
     retain: async () => ({}),
-    recall: async () => ({ results: [{ text: "remember this hidden fact", type: "experience", mentioned_at: "2026-01-01T00:00:00Z" }] }),
+    recall: async (scope: any) => { recallScopes.push(scope); return { results: [{ text: "remember this hidden fact", type: "experience", mentioned_at: "2026-01-01T00:00:00Z" }] }; },
   };
   hindsight({
     hindsightClient: fakeClient,
@@ -482,6 +515,9 @@ test("auto-recall requires memory backend opt-in", async () => {
   await commands.hindsight.handler("memory enable", { cwd, ui: { notify() {} } });
   const result = await handlers.context({ messages: [{ role: "user", content: "hidden fact" }] }, { cwd });
   assert.ok(result.messages[0].content.includes("hidden fact"));
+  assert.equal(recallScopes[0].bankId, "coding-agent");
+  assert.ok(recallScopes[0].tags[0].startsWith("project:"));
+  assert.equal(recallScopes[0].tagsMatch, "any");
   await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
 
   rmSync(cwd, { recursive: true, force: true });
@@ -492,7 +528,8 @@ test("session shutdown auto-retain requires memory backend opt-in", async () => 
   const commands: Record<string, any> = {};
   const handlers: Record<string, Function> = {};
   const retained: string[] = [];
-  const fakeClient = { retain: async (_scope: any, items: any[]) => { retained.push(...items.map((item) => item.content)); } };
+  const retainScopes: any[] = [];
+  const fakeClient = { retain: async (scope: any, items: any[]) => { retainScopes.push(scope); retained.push(...items.map((item) => item.content)); } };
   hindsight({
     hindsightClient: fakeClient,
     registerTool() {},
@@ -513,6 +550,8 @@ test("session shutdown auto-retain requires memory backend opt-in", async () => 
     sessionManager: { getEntries: () => [{ role: "user", content: "retain after opt-in" }] },
   });
   assert.equal(retained.some((text) => text.includes("retain after opt-in")), true);
+  assert.equal(retainScopes[0].tagsMatch, "exact");
+  assert.ok(retainScopes[0].tags[0].startsWith("project:"));
   await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
 
   rmSync(cwd, { recursive: true, force: true });
@@ -532,6 +571,41 @@ test("hindsight_retain reports server-confirmed retain", async () => {
   const result = await tools.hindsight_retain.execute("retain", { text: "durable fact", category: "test" }, undefined, undefined, { cwd });
   assert.deepEqual(retained, ["durable fact:false"]);
   assert.ok(result.content[0].text.includes("Retained memory"));
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("memory tools send layered scope payloads with safe defaults", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-tool-scopes-"));
+  const tools: Record<string, any> = {};
+  const calls: Array<{ operation: string; scope: any }> = [];
+  const fakeClient = {
+    retain: async (scope: any) => { calls.push({ operation: "retain", scope }); },
+    recall: async (scope: any) => { calls.push({ operation: "recall", scope }); return { results: [] }; },
+    reflect: async (scope: any) => { calls.push({ operation: "reflect", scope }); return { text: "ok" }; },
+  };
+  hindsight({
+    hindsightClient: fakeClient,
+    registerTool(tool: any) { tools[tool.name] = tool; },
+    registerCommand() {},
+    on() {},
+  } as any);
+
+  await tools.hindsight_retain.execute("retain-project", { text: "project fact" }, undefined, undefined, { cwd });
+  await tools.hindsight_retain.execute("retain-global", { text: "global fact", scope: "global" }, undefined, undefined, { cwd });
+  await tools.hindsight_recall.execute("recall-all", { query: "facts" }, undefined, undefined, { cwd });
+  await tools.hindsight_recall.execute("recall-project", { query: "facts", scope: "project" }, undefined, undefined, { cwd });
+  await tools.hindsight_recall.execute("recall-global", { query: "facts", scope: "global" }, undefined, undefined, { cwd });
+  await tools.hindsight_reflect.execute("reflect-global", { query: "facts", scope: "global" }, undefined, undefined, { cwd });
+
+  assert.equal(calls[0].scope.tagsMatch, "exact");
+  assert.ok(calls[0].scope.tags[0].startsWith("project:"));
+  assert.deepEqual(calls[1].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
+  assert.equal(calls[2].scope.bankId, "coding-agent");
+  assert.ok(calls[2].scope.tags[0].startsWith("project:"));
+  assert.equal(calls[2].scope.tagsMatch, "any");
+  assert.equal(calls[3].scope.tagsMatch, "exact");
+  assert.deepEqual(calls[4].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
+  assert.deepEqual(calls[5].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
   rmSync(cwd, { recursive: true, force: true });
 });
 

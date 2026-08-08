@@ -4,6 +4,7 @@ import {
   HINDSIGHT_CONFIG_PATH,
   HindsightHttpClient,
   computeBankScope,
+  computeMemoryScope,
   defaultHindsightConfig,
   readHindsightConfigFile,
   writeHindsightConfigFile,
@@ -27,6 +28,7 @@ export {
   HINDSIGHT_CONFIG_PATH,
   HindsightHttpClient,
   computeBankScope,
+  computeMemoryScope,
   defaultHindsightConfig,
   readHindsightConfigFile,
   writeHindsightConfigFile,
@@ -124,7 +126,8 @@ export function promptBlocks(_projectRoot: string, rules: Rule[], memoryBackend:
     ? [
       "Hindsight memory is backed by the local Hindsight daemon.",
       "Recall first: use hindsight_recall before non-trivial tasks, implementation decisions, tool/library suggestions, or work in unfamiliar project areas.",
-      "Retain immediately: use hindsight_retain when you learn durable user preferences, project conventions, procedure outcomes, bugs and fixes, workarounds, architecture decisions, or dependency/version requirements.",
+      "Retain immediately: use hindsight_retain with project scope for project conventions, bugs/fixes, architecture, and dependencies. Use global scope only for durable cross-project user preferences or reusable procedures.",
+      "Never put project-specific code, repository details, or full session transcripts in global memory. Automatic shutdown retention remains project-only.",
       "Pass rich context to retain: include what happened, why, exact commands/errors/outcomes, and relevant conversation excerpts. Do not over-summarize; Hindsight extracts facts/entities/relationships server-side.",
       "Use hindsight_reflect when recall snippets are not enough and you need a memory-grounded synthesis.",
       "Never retain secrets, credentials, API keys, tokens, or other sensitive values. Treat recalled memory as heuristic when it conflicts with current repo state or user instruction.",
@@ -534,29 +537,31 @@ export default function hindsight(pi: ExtensionAPI) {
   pi.registerTool({
     name: "hindsight_retain",
     label: "Hindsight Retain",
-    description: "Persist a memory note for the current project.",
-    promptSnippet: "Save a durable memory note for the current project via hindsight.",
+    description: "Persist a project or durable cross-project memory note.",
+    promptSnippet: "Save a durable memory note in project scope by default, or global scope when explicitly appropriate.",
     promptGuidelines: [
       "Use hindsight_retain immediately after learning durable user preferences, project conventions, procedure outcomes, bugs/fixes, workarounds, architecture decisions, or dependency/version requirements.",
       "Pass rich full context: what happened, why, commands/errors/outcomes, and relevant conversation excerpts. Do not pre-summarize aggressively; Hindsight extracts facts server-side.",
+      "Use global scope only for durable cross-project facts, user preferences, or reusable procedures; never for project-specific code or full transcripts.",
       "Never retain secrets, credentials, API keys, tokens, or sensitive values.",
     ],
     parameters: Schema.Object({
       text: Schema.String({ description: "Rich memory content to retain, including observations, commands/errors, rationale, outcomes, or conversation excerpts." }),
       category: Schema.Optional(Schema.String({ description: "Optional context label such as preferences, procedures, learnings, decisions, bugs, or workarounds." })),
+      scope: Schema.Optional(Schema.String({ enum: ["project", "global"], description: "Memory scope. Defaults to project; use global only for durable cross-project facts/preferences/procedures." })),
     }) as any,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const { text, category } = params as { text: string; category?: string };
+      const { text, category, scope = "project" } = params as { text: string; category?: string; scope?: "project" | "global" };
       const projectRoot = ctx.cwd || process.cwd();
-      await client.retain(computeBankScope(configRef, projectRoot), [{
+      await client.retain(computeMemoryScope(configRef, projectRoot, scope), [{
         content: text,
         context: category ?? "agent-retain",
-        metadata: { source: "pi-hindsight", category: category ?? "general", project: projectRoot },
+        metadata: { source: "pi-hindsight", category: category ?? "general", scope, ...(scope === "project" ? { project: projectRoot } : {}) },
         timestamp: new Date().toISOString(),
       }], { async: false, signal: _signal });
       return {
-        content: [{ type: "text", text: "Retained memory in Hindsight." }],
-        details: { category: category ?? "general", retained: true, backend: "hindsight" },
+        content: [{ type: "text", text: `Retained memory in Hindsight (scope: ${scope}).` }],
+        details: { category: category ?? "general", scope, retained: true, backend: "hindsight" },
       };
     },
   });
@@ -573,12 +578,13 @@ export default function hindsight(pi: ExtensionAPI) {
     parameters: Schema.Object({
       query: Schema.String({ description: "Query to match against memories." }),
       budget: Schema.Optional(Schema.String({ description: "Recall budget: low, mid, or high." })),
+      scope: Schema.Optional(Schema.String({ enum: ["project", "global", "all"], description: "Recall scope: exact current project, exact untagged global, or the safe combination of current-project plus global memories. Defaults to all." })),
     }) as any,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { query, budget } = params as { query: string; budget?: "low" | "mid" | "high" };
+      const { query, budget, scope = "all" } = params as { query: string; budget?: "low" | "mid" | "high"; scope?: "project" | "global" | "all" };
       const projectRoot = ctx.cwd || process.cwd();
       await flushRetainQueue();
-      const response = await client.recall(computeBankScope(configRef, projectRoot), query, { budget: budget || configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal });
+      const response = await client.recall(computeMemoryScope(configRef, projectRoot, scope), query, { budget: budget || configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal });
       return {
         content: [{ type: "text", text: formatRecallResponse(response) || "No relevant hindsight memories." }],
       };
@@ -595,12 +601,13 @@ export default function hindsight(pi: ExtensionAPI) {
       query: Schema.String({ description: "Question for Hindsight reflect." }),
       context: Schema.Optional(Schema.String({ description: "Optional current task context." })),
       budget: Schema.Optional(Schema.String({ description: "Reflect budget: low, mid, or high." })),
+      scope: Schema.Optional(Schema.String({ enum: ["project", "global", "all"], description: "Reflection scope: exact current project, exact untagged global, or the safe combination of current-project plus global memories. Defaults to all." })),
     }) as any,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const { query, context, budget } = params as { query: string; context?: string; budget?: "low" | "mid" | "high" };
+      const { query, context, budget, scope = "all" } = params as { query: string; context?: string; budget?: "low" | "mid" | "high"; scope?: "project" | "global" | "all" };
       const projectRoot = ctx.cwd || process.cwd();
       await flushRetainQueue();
-      const response = await client.reflect(computeBankScope(configRef, projectRoot), query, { context, budget: budget || "low", signal });
+      const response = await client.reflect(computeMemoryScope(configRef, projectRoot, scope), query, { context, budget: budget || "low", signal });
       return { content: [{ type: "text", text: formatReflectResponse(response) }] };
     },
   });
@@ -640,7 +647,7 @@ export default function hindsight(pi: ExtensionAPI) {
         await client.clearMemories(scope, ctx?.signal);
         return `cleared Hindsight memories in bank ${scope.bankId}`;
       },
-      recallMemory: async (query) => formatRecallResponse(await client.recall(computeBankScope(configRef, ctx?.cwd || process.cwd()), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal })),
+      recallMemory: async (query) => formatRecallResponse(await client.recall(computeMemoryScope(configRef, ctx?.cwd || process.cwd(), "all"), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal })),
     }),
   });
 
@@ -671,7 +678,7 @@ export default function hindsight(pi: ExtensionAPI) {
     const query = queryFromMessages(messages);
     await flushRetainQueue();
     try {
-      const block = formatRecallResponse(await client.recall(computeBankScope(configRef, projectRoot), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal }));
+      const block = formatRecallResponse(await client.recall(computeMemoryScope(configRef, projectRoot, "all"), query, { budget: configRef.recallBudget, maxTokens: configRef.recallMaxTokens, signal: ctx?.signal }));
       if (!block) return;
       autoRecallInjectedByCwd.add(projectRoot);
       return { messages: [customMemoryMessage(block), ...messages] };
@@ -733,7 +740,7 @@ export default function hindsight(pi: ExtensionAPI) {
       if (skipAutoRetainAfterClear.delete(projectRoot)) return;
       if (!memoryEnabled(projectRoot) || !configRef.autoRetain) return;
       const text = sessionTranscript(ctx);
-      if (text) await client.retain(computeBankScope(configRef, projectRoot), [{
+      if (text) await client.retain(computeMemoryScope(configRef, projectRoot, "project"), [{
         content: text,
         context: "pi session transcript",
         metadata: { source: "pi-session", project: projectRoot },

@@ -64,10 +64,14 @@ Environment variables override config file values:
 Default is oh-my-pi-style `per-project-tagged`:
 
 - bank: `coding-agent`
-- retain tags: `project:<basename>-<8-char sha1 cwd>`
-- recall/reflect use `tags_match: any`, so project memories and untagged global memories can surface.
+- project retain tag: `project:<basename>-<8-char sha1 cwd>`
+- `project` query scope: that exact project tag (`tags_match: exact`), preventing memories tagged for other projects from leaking in
+- `global` query scope: exactly untagged memories (`tags: []`, `tags_match: exact`)
+- `all` query scope: current-project-tagged plus untagged global memories (`tags_match: any`); memories tagged for other projects remain excluded
 
-`per-project` uses a separate bank per cwd. `global` uses one untagged bank.
+Explicit retains default to `project`; shutdown transcript retention is always project-scoped. Explicit `global` retains are untagged and must be reserved for durable cross-project facts, user preferences, and reusable procedures—not project-specific code, repository details, or full transcripts. Explicit recall and reflect default to `all`.
+
+`per-project` keeps its separate bank per cwd for project/all operations; explicit global memories use the untagged base bank. `global` preserves its single untagged bank behavior. Exact untagged queries require a Hindsight version containing upstream exact-empty-tag support (vectorize-io/hindsight#2364).
 
 ## Commands
 
@@ -88,9 +92,9 @@ Config keys accepted by `/hindsight config set`: `apiUrl`, `bankId`, `scoping`, 
 
 ## Tools
 
-- `hindsight_retain` — synchronously retains rich content in real Hindsight and reports failures.
-- `hindsight_recall` — calls `/v1/default/banks/{bank}/memories/recall`.
-- `hindsight_reflect` — calls `/v1/default/banks/{bank}/reflect`.
+- `hindsight_retain` — synchronously retains rich content and accepts `scope: project|global` (default `project`).
+- `hindsight_recall` — calls `/v1/default/banks/{bank}/memories/recall` and accepts `scope: project|global|all` (default `all`).
+- `hindsight_reflect` — calls `/v1/default/banks/{bank}/reflect` and accepts `scope: project|global|all` (default `all`).
 - `hindsight_rule` — looks up local rule cache by name or `rule://name`.
 
 Retain full context. Hindsight extracts facts, entities, temporal/causal relationships, and embeddings server-side.
@@ -100,7 +104,8 @@ Retain full context. Hindsight extracts facts, entities, temporal/causal relatio
 This extension follows the upstream `hindsight-local` skill shape:
 
 - Recall first before non-trivial tasks, implementation decisions, tool/library suggestions, or unfamiliar project areas.
-- Retain immediately after learning durable user preferences, project conventions, procedure outcomes, bugs and fixes, workarounds, architecture decisions, or dependency/version requirements.
+- Retain project conventions, code, bugs/fixes, architecture, and dependencies with project scope.
+- Use global scope only for durable cross-project user preferences, facts, or reusable procedures; never store project-specific code or full session transcripts globally.
 - Pass rich context to retain: include what happened, why, exact commands/errors/outcomes, and relevant conversation excerpts. Do not over-summarize; Hindsight extracts facts server-side.
 - Use categories as context labels such as `preferences`, `procedures`, `learnings`, `decisions`, `bugs`, or `workarounds`.
 - Never retain secrets, credentials, API keys, tokens, or sensitive values.
