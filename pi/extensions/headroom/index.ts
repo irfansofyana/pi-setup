@@ -1,8 +1,9 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
-  createWriteStream,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -17,6 +18,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 export type StartupMode = "manual" | "auto" | "off";
 export type ProxyOwner = "none" | "managed" | "external";
 export type NotifyFailures = "once" | "always" | "never";
+export type HeadroomFailureKind = "compression" | "lifecycle";
 
 export interface HeadroomConfig {
   enabled: boolean;
@@ -84,7 +86,7 @@ const STATUS_ID = "headroom";
 
 export const DEFAULT_CONFIG: HeadroomConfig = {
   enabled: true,
-  startup: "manual",
+  startup: "auto",
   proxyUrl: "http://127.0.0.1:8787",
   host: "127.0.0.1",
   port: 8787,
@@ -379,9 +381,10 @@ export function headroomReadyFromPayload(payload: unknown): boolean | undefined 
 }
 
 export function headroomCompressionReadyFromPayload(payload: unknown): boolean | undefined {
+  if (!isRecord(payload) || payload.service !== "headroom-proxy") return undefined;
   const aggregateReady = headroomReadyFromPayload(payload);
   if (aggregateReady === true) return true;
-  if (!isRecord(payload) || payload.service !== "headroom-proxy" || !isRecord(payload.checks)) return aggregateReady;
+  if (!isRecord(payload.checks)) return aggregateReady;
 
   const checks = payload.checks;
   const startup = checks.startup;
@@ -399,7 +402,7 @@ export function headroomCompressionReadyFromPayload(payload: unknown): boolean |
 
 async function endpointReady(url: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
   const payload = await fetchJson(url, { method: "GET" }, timeoutMs, signal);
-  return headroomCompressionReadyFromPayload(payload) ?? true;
+  return headroomCompressionReadyFromPayload(payload) ?? false;
 }
 
 async function waitForHealth(
@@ -443,6 +446,140 @@ export function enableRuntimeDecision(
 
 export function canStartRuntime(config: Pick<HeadroomConfig, "startup">): boolean {
   return config.startup !== "off";
+}
+
+export interface ManagedProxyLifecycleNotice {
+  kind: "spawn-error" | "startup-exit" | "startup-timeout" | "unexpected-exit";
+  message: string;
+}
+
+export function createManagedProxyLifecycle() {
+  let ready = false;
+  let stopping = false;
+  let terminalHandled = false;
+
+  return {
+    markReady(): void {
+      ready = true;
+    },
+    markStopping(): void {
+      stopping = true;
+    },
+    handleSpawnError(error: unknown): ManagedProxyLifecycleNotice | undefined {
+      if (stopping || terminalHandled) return undefined;
+      terminalHandled = true;
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        kind: "spawn-error",
+        message: `Headroom proxy failed to start: ${detail}. Bypassing compression. Run /headroom doctor or check /headroom logs.`,
+      };
+    },
+    handleTimeout(timeoutMs: number): ManagedProxyLifecycleNotice | undefined {
+      if (stopping || terminalHandled) return undefined;
+      terminalHandled = true;
+      return {
+        kind: "startup-timeout",
+        message: `Headroom proxy did not become healthy within ${timeoutMs}ms; bypassing compression. Check /headroom logs.`,
+      };
+    },
+    handleExit(code: number | null, signal: string | null): ManagedProxyLifecycleNotice | undefined {
+      if (stopping || terminalHandled) return undefined;
+      terminalHandled = true;
+      const detail = code !== null ? `code ${code}` : `signal ${signal ?? "unknown"}`;
+      if (!ready) {
+        return {
+          kind: "startup-exit",
+          message: `Headroom proxy exited before becoming ready (${detail}); bypassing compression. Check /headroom logs.`,
+        };
+      }
+      return {
+        kind: "unexpected-exit",
+        message: `Headroom managed proxy exited unexpectedly (${detail}); compression disabled. Check /headroom logs.`,
+      };
+    },
+  };
+}
+
+export interface HeadroomStartAttempt {
+  isCurrent(): boolean;
+}
+
+export function createStartCoordinator<TArgs extends unknown[]>(
+  task: (attempt: HeadroomStartAttempt, ...args: TArgs) => Promise<void>,
+) {
+  let generation = 0;
+  let inFlight: Promise<void> | undefined;
+
+  const start = (...args: TArgs): Promise<void> => {
+    if (inFlight) return inFlight;
+    const ownGeneration = ++generation;
+    const attempt: HeadroomStartAttempt = { isCurrent: () => generation === ownGeneration };
+    const current = task(attempt, ...args);
+    const settled = current.finally(() => {
+      if (inFlight === settled) inFlight = undefined;
+    });
+    inFlight = settled;
+    return settled;
+  };
+
+  const cancel = (): void => {
+    generation++;
+  };
+
+  const restart = async (...args: TArgs): Promise<void> => {
+    cancel();
+    const previous = inFlight;
+    if (previous) {
+      try { await previous; } catch {}
+    }
+    return start(...args);
+  };
+
+  return { start, cancel, restart, isStarting: () => inFlight !== undefined };
+}
+
+export async function terminateChildProcess(child: ChildProcess, graceMs = 1_000): Promise<boolean> {
+  if (child.exitCode !== null) return true;
+
+  const waitForExit = (): Promise<boolean> => new Promise((resolve) => {
+    if (child.exitCode !== null) {
+      resolve(true);
+      return;
+    }
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    child.once("exit", onExit);
+    timer = setTimeout(() => finish(child.exitCode !== null), Math.max(1, graceMs));
+  });
+
+  const signal = (value: NodeJS.Signals): boolean => {
+    try { return child.kill(value); } catch { return false; }
+  };
+
+  if (signal("SIGTERM") && await waitForExit()) return true;
+  if (child.exitCode !== null) return true;
+  if (!signal("SIGKILL")) return false;
+  return waitForExit();
+}
+
+export function shouldNotifyHeadroomFailure(
+  kind: HeadroomFailureKind,
+  hasUI: boolean,
+  policy: NotifyFailures,
+  alreadyNotified: boolean,
+): boolean {
+  if (!hasUI) return false;
+  if (kind === "lifecycle") return true;
+  if (policy === "never") return false;
+  return policy === "always" || !alreadyNotified;
 }
 
 export async function health(config: HeadroomConfig, signal?: AbortSignal): Promise<boolean> {
@@ -678,26 +815,75 @@ function clearLog(): void {
   writeFileSync(LOG_PATH, "", "utf8");
 }
 
-export default function headroom(pi: ExtensionAPI) {
-  ensureDirs();
-  let config = readConfig();
+export interface HeadroomDependencies {
+  readConfig(): HeadroomConfig;
+  ensureDirs(): void;
+  cleanupStore(config: HeadroomConfig): void;
+  health(config: HeadroomConfig, signal?: AbortSignal): Promise<boolean>;
+  waitForHealth(
+    config: HeadroomConfig,
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+    isActive: () => boolean,
+  ): Promise<boolean>;
+  commandAvailable(): boolean;
+  openLog(): number;
+  closeLog(fd: number): void;
+  spawnProxy(config: HeadroomConfig, logFd: number): ChildProcess;
+  writePid(pid: number): void;
+  terminateChild(child: ChildProcess): Promise<boolean>;
+}
+
+const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
+  readConfig,
+  ensureDirs,
+  cleanupStore,
+  health,
+  waitForHealth,
+  commandAvailable,
+  openLog: () => openSync(LOG_PATH, "a"),
+  closeLog: (fd) => closeSync(fd),
+  spawnProxy: (config, logFd) => spawn("headroom", ["proxy", "--host", config.host, "--port", String(config.port)], {
+    env: { ...process.env, HEADROOM_TELEMETRY: "off" },
+    stdio: ["ignore", logFd, logFd],
+  }),
+  writePid: (pid) => writeFileSync(PID_PATH, `${pid}\n`, "utf8"),
+  terminateChild: terminateChildProcess,
+};
+
+export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<HeadroomDependencies> = {}) {
+  const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
+  let config = dependencies.readConfig();
   let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
   let managedProcess: ChildProcess | undefined;
-  let logStream: ReturnType<typeof createWriteStream> | undefined;
+  let managedLifecycle: ReturnType<typeof createManagedProxyLifecycle> | undefined;
   let failureNotified = false;
   const stats = initialStats();
 
   const notifyFailure = (ctx: ExtensionContext, message: string): void => {
     stats.failures++;
-    if (!ctx.hasUI || config.notifyFailures === "never") return;
-    if (config.notifyFailures === "once" && failureNotified) return;
+    if (!shouldNotifyHeadroomFailure("compression", ctx.hasUI, config.notifyFailures, failureNotified)) return;
     failureNotified = true;
     ctx.ui.notify(message, "warning");
   };
 
-  const startManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
-    ensureDirs();
+  const notifyLifecycleFailure = (ctx: ExtensionContext, message: string): void => {
+    stats.failures++;
+    if (shouldNotifyHeadroomFailure("lifecycle", ctx.hasUI, config.notifyFailures, failureNotified)) ctx.ui.notify(message, "error");
+  };
+
+  const runManagedProxyStart = async (attempt: HeadroomStartAttempt, ctx: ExtensionContext): Promise<void> => {
+    try {
+      dependencies.ensureDirs();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      runtimeEnabled = false;
+      owner = "none";
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      notifyLifecycleFailure(ctx, `Headroom startup directory setup failed: ${detail}. Bypassing compression.`);
+      return;
+    }
     if (!canStartRuntime(config)) {
       runtimeEnabled = false;
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -718,11 +904,20 @@ export default function headroom(pi: ExtensionAPI) {
       if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy blocked: ${config.proxyUrl}. Set allowRemote=true only for a trusted proxy.`, "warning");
       return;
     }
-    if (await health(config, getContextSignal(ctx))) {
+    const alreadyHealthy = await dependencies.health(config, getContextSignal(ctx));
+    if (!attempt.isCurrent()) return;
+    if (alreadyHealthy) {
       owner = managedProcess ? "managed" : "external";
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify(`Headroom proxy already running (${owner}).`, "info");
+      return;
+    }
+    if (managedProcess) {
+      runtimeEnabled = false;
+      owner = "managed";
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      notifyLifecycleFailure(ctx, "A previous Headroom managed proxy is unhealthy but still tracked. Refusing to spawn a replacement until its exit is confirmed; retry /headroom stop or terminate it manually.");
       return;
     }
     if (!isLocalProxyUrl(config.proxyUrl)) {
@@ -732,31 +927,90 @@ export default function headroom(pi: ExtensionAPI) {
       return;
     }
 
-    if (!commandAvailable()) {
+    if (!dependencies.commandAvailable()) {
       owner = "none";
       runtimeEnabled = false;
       updateStatus(ctx, runtimeEnabled, owner, stats);
-      if (ctx.hasUI) ctx.ui.notify('Headroom CLI missing. Run /headroom doctor for install commands.', "error");
+      notifyLifecycleFailure(ctx, 'Headroom CLI missing. Run /headroom doctor for install commands.');
       return;
     }
 
-    const log = logStream = createWriteStream(LOG_PATH, { flags: "a" });
-    managedProcess = spawn("headroom", ["proxy", "--host", config.host, "--port", String(config.port)], {
-      env: { ...process.env, HEADROOM_TELEMETRY: "off" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    managedProcess.stdout.pipe(log, { end: false });
-    managedProcess.stderr.pipe(log, { end: false });
-    managedProcess.on("exit", () => {
-      if (owner === "managed") {
-        try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+    const lifecycle = createManagedProxyLifecycle();
+    managedLifecycle = lifecycle;
+    let terminalFailureNotified = false;
+    let child: ChildProcess;
+    let logFd: number | undefined;
+    try {
+      logFd = dependencies.openLog();
+      child = dependencies.spawnProxy(config, logFd);
+    } catch (error) {
+      const notice = lifecycle.handleSpawnError(error);
+      managedLifecycle = undefined;
+      owner = "none";
+      runtimeEnabled = false;
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      if (notice) notifyLifecycleFailure(ctx, notice.message);
+      return;
+    } finally {
+      if (logFd !== undefined) {
+        try { dependencies.closeLog(logFd); } catch {}
       }
-      managedProcess = undefined;
-      owner = owner === "managed" ? "none" : owner;
-    });
-    if (managedProcess.pid) writeFileSync(PID_PATH, `${managedProcess.pid}\n`, "utf8");
+    }
+    managedProcess = child;
 
-    if (await waitForHealth(config, getContextSignal(ctx), config.startupHealthTimeoutMs, () => managedProcess !== undefined)) {
+    const handleTerminalFailure = (notice: ManagedProxyLifecycleNotice | undefined): void => {
+      if (!notice) return;
+      terminalFailureNotified = true;
+      if (managedProcess === child) managedProcess = undefined;
+      if (managedLifecycle === lifecycle) managedLifecycle = undefined;
+      runtimeEnabled = false;
+      owner = "none";
+      try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      notifyLifecycleFailure(ctx, notice.message);
+    };
+    child.on("error", (error) => {
+      handleTerminalFailure(lifecycle.handleSpawnError(error));
+    });
+    child.on("exit", (code, signal) => {
+      handleTerminalFailure(lifecycle.handleExit(code, signal));
+      if (managedProcess === child) {
+        managedProcess = undefined;
+        if (managedLifecycle === lifecycle) managedLifecycle = undefined;
+        if (owner === "managed") owner = "none";
+        try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+        updateStatus(ctx, runtimeEnabled, owner, stats);
+      }
+    });
+    try {
+      if (child.pid) dependencies.writePid(child.pid);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const notice = lifecycle.handleSpawnError(new Error(`cannot write Headroom PID file: ${detail}`));
+      terminalFailureNotified = true;
+      runtimeEnabled = false;
+      owner = "managed";
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      lifecycle.markStopping();
+      const terminated = await dependencies.terminateChild(child);
+      if (!attempt.isCurrent()) return;
+      if (notice) notifyLifecycleFailure(ctx, notice.message);
+      if (terminated) {
+        if (managedProcess === child) managedProcess = undefined;
+        if (managedLifecycle === lifecycle) managedLifecycle = undefined;
+        owner = "none";
+        try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+        updateStatus(ctx, runtimeEnabled, owner, stats);
+      } else {
+        notifyLifecycleFailure(ctx, "Headroom child could not be terminated after PID-file failure; compression is disabled and the process remains tracked. Run /headroom stop or terminate it manually.");
+      }
+      return;
+    }
+
+    const becameHealthy = await dependencies.waitForHealth(config, getContextSignal(ctx), config.startupHealthTimeoutMs, () => managedProcess === child && attempt.isCurrent());
+    if (!attempt.isCurrent()) return;
+    if (becameHealthy) {
+      lifecycle.markReady();
       owner = "managed";
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -764,33 +1018,53 @@ export default function headroom(pi: ExtensionAPI) {
       return;
     }
 
-    if (managedProcess) {
-      managedProcess.kill("SIGTERM");
-      managedProcess = undefined;
+    const timeoutNotice = terminalFailureNotified ? undefined : lifecycle.handleTimeout(config.startupHealthTimeoutMs);
+    lifecycle.markStopping();
+    const terminated = managedProcess === child ? await dependencies.terminateChild(child) : child.exitCode !== null;
+    if (!attempt.isCurrent()) return;
+    if (terminated) {
+      if (managedProcess === child) managedProcess = undefined;
+      if (managedLifecycle === lifecycle) managedLifecycle = undefined;
+      owner = "none";
+    } else {
+      owner = "managed";
     }
-    owner = "none";
     runtimeEnabled = false;
-    try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
-    if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
+    try { if (existsSync(PID_PATH) && terminated) unlinkSync(PID_PATH); } catch {}
     updateStatus(ctx, runtimeEnabled, owner, stats);
-    notifyFailure(ctx, `Headroom proxy did not become healthy within ${config.startupHealthTimeoutMs}ms; bypassing compression. Check /headroom logs.`);
+    if (timeoutNotice) notifyLifecycleFailure(ctx, timeoutNotice.message);
+    if (!terminated) notifyLifecycleFailure(ctx, "Headroom timed-out child did not terminate; compression is disabled and the process remains tracked. Run /headroom stop or terminate it manually.");
   };
 
-  const stopManagedProxy = (ctx: ExtensionContext): void => {
+  const startCoordinator = createStartCoordinator(runManagedProxyStart);
+  const startManagedProxy = startCoordinator.start;
+
+  const stopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+    startCoordinator.cancel();
     runtimeEnabled = false;
     if (managedProcess) {
-      managedProcess.kill("SIGTERM");
-      managedProcess = undefined;
-      owner = "none";
-      try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
-      if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
-      if (ctx.hasUI) ctx.ui.notify("Headroom managed proxy stopped. Compression disabled.", "info");
-    } else {
-      const wasExternal = owner === "external";
-      owner = wasExternal ? "external" : "none";
-      if (ctx.hasUI) ctx.ui.notify(wasExternal ? "Compression disabled. External proxy left running." : "Compression disabled.", "info");
+      const child = managedProcess;
+      const lifecycle = managedLifecycle;
+      lifecycle?.markStopping();
+      const terminated = await dependencies.terminateChild(child);
+      if (terminated) {
+        if (managedProcess === child) managedProcess = undefined;
+        if (managedLifecycle === lifecycle) managedLifecycle = undefined;
+        owner = "none";
+        try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+        if (notify && ctx.hasUI) ctx.ui.notify("Headroom managed proxy stopped. Compression disabled.", "info");
+      } else {
+        owner = "managed";
+        notifyLifecycleFailure(ctx, "Headroom managed proxy did not terminate; compression is disabled and the process remains tracked. Retry /headroom stop or terminate it manually.");
+      }
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      return terminated;
     }
+    const wasExternal = owner === "external";
+    owner = wasExternal ? "external" : "none";
+    if (notify && ctx.hasUI) ctx.ui.notify(wasExternal ? "Compression disabled. External proxy left running." : "Compression disabled.", "info");
     updateStatus(ctx, runtimeEnabled, owner, stats);
+    return true;
   };
 
   const statsSummary = (): string => [
@@ -808,17 +1082,17 @@ export default function headroom(pi: ExtensionAPI) {
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
-    cleanupStore(config);
+    try {
+      dependencies.cleanupStore(config);
+    } catch (error) {
+      notifyLifecycleFailure(ctx, `Headroom local-store cleanup failed: ${error instanceof Error ? error.message : String(error)}. Compression will remain disabled unless startup succeeds.`);
+    }
     if (config.startup === "auto") await startManagedProxy(ctx);
     else updateStatus(ctx, runtimeEnabled, owner, stats);
   });
 
-  pi.on("session_shutdown", async () => {
-    if (managedProcess) {
-      managedProcess.kill("SIGTERM");
-      managedProcess = undefined;
-    }
-    if (logStream) { try { logStream.end(); } catch {} logStream = undefined; }
+  pi.on("session_shutdown", async (_event, ctx) => {
+    await stopManagedProxy(ctx, false);
   });
 
   pi.on("tool_result", async (event, ctx) => {
@@ -832,7 +1106,7 @@ export default function headroom(pi: ExtensionAPI) {
       return;
     }
 
-    if (!(await health(runConfig, getContextSignal(ctx)))) {
+    if (!(await dependencies.health(runConfig, getContextSignal(ctx)))) {
       notifyFailure(ctx, "Headroom proxy unavailable; bypassing compression.");
       return headroomFailureResult(event as any, runConfig, "proxy unavailable.");
     }
@@ -871,7 +1145,7 @@ export default function headroom(pi: ExtensionAPI) {
       };
       if (!canRetainOriginal(entry, runConfig)) throw new Error("stored original exceeds retention limits");
       saveOriginal(entry);
-      cleanupStore(runConfig);
+      dependencies.cleanupStore(runConfig);
       if (!loadOriginal(hash)) throw new Error("stored original was removed by retention limits");
 
       stats.compressions++;
@@ -952,12 +1226,11 @@ export default function headroom(pi: ExtensionAPI) {
         return;
       }
       if (command === "stop") {
-        stopManagedProxy(ctx);
+        await stopManagedProxy(ctx);
         return;
       }
       if (command === "restart") {
-        stopManagedProxy(ctx);
-        await startManagedProxy(ctx);
+        if (await stopManagedProxy(ctx)) await startCoordinator.restart(ctx);
         return;
       }
       if (command === "enable") {
@@ -1023,7 +1296,7 @@ export default function headroom(pi: ExtensionAPI) {
         return;
       }
       if (command === "cleanup") {
-        cleanupStore(config);
+        dependencies.cleanupStore(config);
         ctx.ui.notify("Headroom local store cleaned.", "info");
         return;
       }
@@ -1038,10 +1311,19 @@ export default function headroom(pi: ExtensionAPI) {
           return;
         }
         if (value === "reset") {
+          const stopped = await stopManagedProxy(ctx, false);
+          if (!stopped) {
+            runtimeEnabled = false;
+            updateStatus(ctx, runtimeEnabled, owner, stats);
+            ctx.ui.notify("Headroom config reset aborted because the managed proxy is still running. Retry /headroom stop or terminate it manually first.", "error");
+            return;
+          }
           config = DEFAULT_CONFIG;
-          runtimeEnabled = initialRuntimeEnabled(config);
+          runtimeEnabled = false;
+          owner = "none";
           updateStatus(ctx, runtimeEnabled, owner, stats);
           ctx.ui.notify("Headroom runtime config reset to defaults. Use /headroom config save to persist.", "info");
+          if (config.startup === "auto") await startCoordinator.restart(ctx);
           return;
         }
       }
