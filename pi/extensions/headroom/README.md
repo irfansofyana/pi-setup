@@ -4,7 +4,7 @@ Pi extension that integrates [Headroom Labs Headroom](https://github.com/headroo
 
 ## What it does
 
-- Starts/stops a managed local `headroom proxy` only when asked.
+- Automatically starts a managed local `headroom proxy` for each Pi session, or adopts an already healthy proxy.
 - Compresses final Pi `tool_result` text through `POST /v1/compress`.
 - Includes all large text tools by default, including MCP, web search, web fetch, logs, file reads, grep results, and unknown future tools.
 - Skips small outputs under 500 chars, excluded tools, and secret-like outputs.
@@ -78,7 +78,7 @@ Defaults:
 ```json
 {
   "enabled": true,
-  "startup": "manual",
+  "startup": "auto",
   "proxyUrl": "http://127.0.0.1:8787",
   "host": "127.0.0.1",
   "port": 8787,
@@ -117,11 +117,16 @@ Defaults:
 
 ## Lifecycle policy
 
-- Default startup is manual. Nothing starts until `/headroom start`.
+- Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy.
+- Set `startup` to `manual` to require `/headroom start`, or `off` to prevent startup and compression.
 - Remote proxy URLs are blocked unless `allowRemote` is explicitly set to `true`.
-- If a proxy is already healthy at `proxyUrl`, extension adopts it as external.
-- `/headroom start` waits up to `startupHealthTimeoutMs` (default 30s) for slow local proxy readiness.
+- If a proxy returns an identifiable `headroom-proxy` readiness payload at `proxyUrl`, the extension adopts it as external; unrelated local HTTP services are rejected.
+- Automatic startup and `/headroom start` wait up to `startupHealthTimeoutMs` (default 30s) for slow local proxy readiness.
+- If concurrent sessions race to start the same local proxy, a losing session rechecks readiness after its child exits and adopts the healthy winner instead of disabling compression.
+- An auto-start session that adopted another session's proxy starts one managed replacement when a compression-path health check detects that proxy has stopped. The triggering tool result is bypassed; failed recovery disables compression, preventing per-result retry storms.
+- Manual and off startup modes never recover automatically, and recovery uses no background polling.
 - Readiness is compression-oriented: upstream-only health failures do not block local tool-output compression.
+- Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable compression safely; `notifyFailures` only controls repetitive compression-path warnings.
 - `/headroom stop` never kills an external proxy.
 - `/headroom stop` disables compression for current session.
 - Commands mutate runtime state only. Use `/headroom config save` to persist.
@@ -150,8 +155,10 @@ Inside Pi:
 
 ```text
 /headroom doctor
-/headroom start
+/headroom status
 ```
+
+The proxy should already be running after Pi starts. Use `/headroom start` only when `startup` is `manual` or after an intentional stop.
 
 Then run a command that returns long text. Compressed outputs end with a marker like:
 
