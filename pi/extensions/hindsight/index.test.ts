@@ -304,13 +304,66 @@ test("formatRecallResponse formats real Hindsight recall results", () => {
   assert.ok(block.includes("User prefers node:test"));
 });
 
-test("combined memory responses deduplicate deterministically with project results first", () => {
+test("combined memory responses interleave scopes, deduplicate, and reserve output for global memory", () => {
   const merged = mergeRecallResponses([
-    { results: [{ id: "shared", text: "project copy" }, { text: "id-less", type: "fact", mentioned_at: "2026-01-01" }] },
-    { results: [{ id: "shared", text: "global duplicate" }, { text: "id-less", type: "fact", mentioned_at: "2026-01-01" }, { id: "global", text: "global only" }] },
+    { results: [
+      { id: "shared", text: "project copy" },
+      { id: "project", text: "project only" },
+      { text: "id-less", type: "fact", mentioned_at: "2026-01-01" },
+    ] },
+    { results: [
+      { id: "shared", text: "global duplicate" },
+      { id: "global", text: "global only" },
+      { text: "id-less", type: "fact", mentioned_at: "2026-01-01" },
+    ] },
     {},
   ]);
-  assert.deepEqual(merged.results?.map((result) => result.text), ["project copy", "id-less", "global only"]);
+  assert.deepEqual(merged.results?.map((result) => result.text), ["project copy", "global only", "project only", "id-less"]);
+
+  const largeCombined = mergeRecallResponses([
+    { results: [{ id: "project-large", type: "T".repeat(7_000), text: "P".repeat(10_000) }] },
+    { results: [{ id: "global-important", text: "GLOBAL_MEMORY_MUST_REMAIN_VISIBLE" }] },
+  ]);
+  const formatted = formatRecallResponse(largeCombined);
+  assert.ok(formatted.includes("GLOBAL_MEMORY_MUST_REMAIN_VISIBLE"));
+  assert.ok(formatted.length <= 6_000);
+
+  const blanksBeforeGlobal = formatRecallResponse(mergeRecallResponses([
+    { results: [
+      { id: "project-1", text: "A".repeat(5_000) },
+      { id: "project-2", text: "B".repeat(5_000) },
+    ] },
+    { results: [
+      { id: "blank-1", text: "" },
+      { id: "blank-2", text: "   " },
+      { id: "global-valid", text: "GLOBAL_AFTER_BLANKS" },
+    ] },
+  ]));
+  assert.ok(blanksBeforeGlobal.includes("GLOBAL_AFTER_BLANKS"));
+
+  const fourScopes = formatRecallResponse(mergeRecallResponses([
+    { results: [{ id: "scope-1", text: `SCOPE_ONE_${"1".repeat(8_000)}` }] },
+    { results: [{ id: "scope-2", text: `SCOPE_TWO_${"2".repeat(8_000)}` }] },
+    { results: [{ id: "scope-3", text: `SCOPE_THREE_${"3".repeat(8_000)}` }] },
+    { results: [{ id: "scope-4", text: "SCOPE_FOUR_VISIBLE" }] },
+  ]));
+  for (const marker of ["SCOPE_ONE_", "SCOPE_TWO_", "SCOPE_THREE_", "SCOPE_FOUR_VISIBLE"]) {
+    assert.ok(fourScopes.includes(marker));
+  }
+  assert.ok(fourScopes.length <= 6_000);
+
+  const manyScopes = formatRecallResponse(mergeRecallResponses(Array.from({ length: 60 }, (_, index) => ({
+    results: [{
+      id: `many-${index}`,
+      type: "T".repeat(7_000),
+      text: `SCOPE_${String(index).padStart(2, "0")}_VISIBLE_${"x".repeat(500)}`,
+    }],
+  }))));
+  for (let index = 0; index < 60; index++) {
+    assert.ok(manyScopes.includes(`SCOPE_${String(index).padStart(2, "0")}_VISIBLE`));
+  }
+  assert.ok(manyScopes.length <= 6_000);
+
   assert.deepEqual(mergeRecallResponses([]), { results: [] });
   assert.deepEqual(
     mergeReflectResponses([{ text: "project reflection" }, { text: "project reflection" }, { text: "global reflection" }, {}]),

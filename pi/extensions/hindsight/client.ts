@@ -183,16 +183,90 @@ export function computeMemoryScopes(
   return [computeMemoryScope(config, cwd, scope)];
 }
 
+const RECALL_OUTPUT_LIMIT = 6_000;
+const RECALL_HEADER_LINES = [
+  "Relevant memories from past conversations (prioritize recent when conflicting).",
+  "Only use memories directly useful for this task; ignore the rest:",
+];
+
+function recallResultKey(result: RecallResult): string {
+  return result.id
+    ? `id:${result.id}`
+    : `text:${result.text ?? ""}\u0000${result.type ?? ""}\u0000${result.mentioned_at ?? result.occurred_start ?? ""}`;
+}
+
+function renderRecallLine(result: RecallResult): string {
+  const date = (result.mentioned_at || result.occurred_start || "undated").slice(0, 10);
+  const rawKind = (result.type || "memory").trim() || "memory";
+  const kind = rawKind.length > 80 ? `${rawKind.slice(0, 79)}…` : rawKind;
+  return `- [${kind} @ ${date}] ${(result.text || "").trim()}`;
+}
+
+function fitRecallResultToLine(result: RecallResult, maxLineLength: number): RecallResult {
+  const text = (result.text || "").trim();
+  let date = (result.mentioned_at || result.occurred_start || "undated").slice(0, 10);
+  const rawKind = (result.type || "memory").trim() || "memory";
+  const textReserve = Math.min(text.length, Math.max(1, Math.min(32, Math.floor(maxLineLength / 2))));
+  let fixedPrefixLength = `- [ @ ${date}] `.length;
+  if (maxLineLength - fixedPrefixLength - textReserve < 1) {
+    date = "u";
+    fixedPrefixLength = `- [ @ ${date}] `.length;
+  }
+  const kindLimit = Math.max(1, maxLineLength - fixedPrefixLength - textReserve);
+  const kind = rawKind.length > kindLimit
+    ? (kindLimit === 1 ? rawKind.slice(0, 1) : `${rawKind.slice(0, kindLimit - 1)}…`)
+    : rawKind;
+  const fitted = { ...result, type: kind, mentioned_at: date, occurred_start: undefined };
+  const withoutText = renderRecallLine({ ...fitted, text: "" });
+  const textLimit = Math.max(1, maxLineLength - withoutText.length);
+  return {
+    ...fitted,
+    text: text.length > textLimit ? `${text.slice(0, Math.max(0, textLimit - 1))}…` : text,
+  };
+}
+
 export function mergeRecallResponses(responses: RecallResponse[]): RecallResponse {
-  const results: RecallResult[] = [];
-  const seen = new Set<string>();
-  for (const response of responses) {
+  // Earlier scopes keep duplicate ownership (project before global), but unique
+  // renderable results are emitted round-robin. The first result from every
+  // active scope is sized against the formatter's shared output budget.
+  const owningScope = new Map<string, number>();
+  responses.forEach((response, scopeIndex) => {
     for (const result of response.results ?? []) {
-      const key = result.id ? `id:${result.id}` : `text:${result.text ?? ""}\u0000${result.type ?? ""}\u0000${result.mentioned_at ?? result.occurred_start ?? ""}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      results.push(result);
+      if (!(result.text || "").trim()) continue;
+      const key = recallResultKey(result);
+      if (!owningScope.has(key)) owningScope.set(key, scopeIndex);
     }
+  });
+
+  const queues = responses.map((response, scopeIndex) => {
+    const seen = new Set<string>();
+    return (response.results ?? []).filter((result) => {
+      if (!(result.text || "").trim()) return false;
+      const key = recallResultKey(result);
+      if (owningScope.get(key) !== scopeIndex || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  });
+  const activeScopeCount = queues.filter((queue) => queue.length > 0).length;
+  const headerLength = RECALL_HEADER_LINES.join("\n").length;
+  const firstLineBudget = activeScopeCount > 0
+    ? Math.max(1, Math.floor((RECALL_OUTPUT_LIMIT - headerLength - activeScopeCount) / activeScopeCount))
+    : RECALL_OUTPUT_LIMIT;
+
+  const results: RecallResult[] = [];
+  const positions = queues.map(() => 0);
+  let added = true;
+  while (added) {
+    added = false;
+    queues.forEach((queue, scopeIndex) => {
+      const position = positions[scopeIndex];
+      if (position >= queue.length) return;
+      const result = queue[position];
+      results.push(position === 0 ? fitRecallResultToLine(result, firstLineBudget) : result);
+      positions[scopeIndex]++;
+      added = true;
+    });
   }
   return { results };
 }
@@ -205,18 +279,17 @@ export function mergeReflectResponses(responses: ReflectResponse[]): ReflectResp
 export function formatRecallResponse(response: RecallResponse): string {
   const results = response.results ?? [];
   if (!results.length) return "";
-  const lines = [
-    "Relevant memories from past conversations (prioritize recent when conflicting).",
-    "Only use memories directly useful for this task; ignore the rest:",
-  ];
+  const lines = [...RECALL_HEADER_LINES];
+  let currentLength = lines.join("\n").length;
   for (const result of results) {
-    const date = result.mentioned_at || result.occurred_start || "undated";
-    const kind = result.type || "memory";
-    const text = (result.text || "").trim();
-    if (!text) continue;
-    lines.push(`- [${kind} @ ${date.slice(0, 10)}] ${text}`);
+    if (!(result.text || "").trim()) continue;
+    const remaining = RECALL_OUTPUT_LIMIT - currentLength - 1;
+    if (remaining <= 0) break;
+    const line = renderRecallLine(fitRecallResultToLine(result, remaining));
+    lines.push(line.slice(0, remaining));
+    currentLength += 1 + Math.min(line.length, remaining);
   }
-  return lines.join("\n").slice(0, 6000);
+  return lines.join("\n");
 }
 
 export function formatReflectResponse(response: ReflectResponse): string {

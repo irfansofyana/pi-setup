@@ -71,7 +71,7 @@ Default is oh-my-pi-style `per-project-tagged`:
 
 Explicit retains default to `project`; shutdown transcript retention is always project-scoped. Explicit `global` retains are untagged and must be reserved for durable cross-project facts, user preferences, and reusable procedures—not project-specific code, repository details, or full transcripts. Explicit recall and reflect default to `all`.
 
-`per-project` keeps a separate bank per cwd for project memories and stores explicit global memories in the untagged base bank; `all` queries both banks and merges/deduplicates the responses. `global` preserves its single untagged bank behavior. Exact untagged queries require a Hindsight version containing upstream exact-empty-tag support (vectorize-io/hindsight#2364).
+`per-project` keeps a separate bank per cwd for project memories and stores explicit global memories in the untagged base bank; `all` queries both banks, deduplicates their responses, and interleaves project/global results under a shared output budget so either scope cannot crowd out the other. `global` preserves its single untagged bank behavior. Exact untagged queries require a Hindsight version containing upstream exact-empty-tag support (vectorize-io/hindsight#2364).
 
 ## Commands
 
