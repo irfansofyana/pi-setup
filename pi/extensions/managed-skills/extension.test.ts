@@ -44,7 +44,7 @@ test("runtime registers configured tools and passes effective discovery limit", 
   const pi = fakePi();
   let discoveryLimit = 0;
   createManagedSkillsExtension({
-    readConfig: () => ({ config: { ...DEFAULT_CONFIG, maxSkillBytes: 80_000 } }),
+    readConfig: () => ({ config: { ...DEFAULT_CONFIG, learnEnabled: true, maxSkillBytes: 80_000 } }),
     discoverSkills: async (_root, maxBytes) => {
       discoveryLimit = maxBytes;
       return [];
@@ -155,7 +155,7 @@ test("invalid config fails closed and status surfaces its diagnostic", async () 
 test("learn reports the partial outcome when skill persistence fails", async () => {
   const pi = fakePi();
   createManagedSkillsExtension({
-    readConfig: () => ({ config: DEFAULT_CONFIG }),
+    readConfig: () => ({ config: { ...DEFAULT_CONFIG, learnEnabled: true } }),
     retainLesson: async () => ({ bankId: "coding-agent" }),
     writeSkill: async () => { throw new Error("disk full"); },
   })(pi.api as any);

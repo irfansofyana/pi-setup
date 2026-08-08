@@ -20,6 +20,15 @@ test("missing config uses defaults", async (t) => {
   t.after(() => import("node:fs/promises").then(({ rm }) => rm(root, { recursive: true, force: true })));
 
   assert.deepEqual(readManagedSkillsConfig(join(root, "missing.json")), { config: DEFAULT_CONFIG });
+  assert.deepEqual(DEFAULT_CONFIG, {
+    enabled: true,
+    learnEnabled: false,
+    autoCapture: true,
+    autoContinue: false,
+    minToolCalls: 8,
+    maxSkillBytes: 64_000,
+    maxMemoryChars: 12_000,
+  });
 });
 
 test("invalid existing config fails closed with a diagnostic", async (t) => {

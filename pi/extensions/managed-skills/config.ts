@@ -8,10 +8,10 @@ export const DEFAULT_MAX_MANAGED_SKILL_BYTES = 64_000;
 export const DEFAULT_MAX_LEARN_MEMORY_CHARS = 12_000;
 export const DEFAULT_CONFIG: ManagedSkillsConfig = Object.freeze({
   enabled: true,
-  learnEnabled: true,
-  autoCapture: false,
+  learnEnabled: false,
+  autoCapture: true,
   autoContinue: false,
-  minToolCalls: 5,
+  minToolCalls: 8,
   maxSkillBytes: DEFAULT_MAX_MANAGED_SKILL_BYTES,
   maxMemoryChars: DEFAULT_MAX_LEARN_MEMORY_CHARS,
 });

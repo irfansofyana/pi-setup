@@ -118,43 +118,29 @@ Config lives at:
 ~/.pi/agent/managed-skills/config.json
 ```
 
-Defaults:
+Daily-use defaults:
 
 ```json
 {
   "enabled": true,
-  "learnEnabled": true,
-  "autoCapture": false,
+  "learnEnabled": false,
+  "autoCapture": true,
   "autoContinue": false,
-  "minToolCalls": 5,
+  "minToolCalls": 8,
   "maxSkillBytes": 64000,
   "maxMemoryChars": 12000
 }
 ```
 
 - `enabled`: registers managed-skills tooling and discovers managed skills.
-- `learnEnabled`: registers `learn` for Hindsight-backed lesson retention.
-- `autoCapture`: adds system prompt guidance telling the agent it may call `learn` and/or `manage_skill`.
-- `autoContinue`: after eligible tool-heavy work and all queued follow-ups/retries settle, runs one hidden capture turn that may call `learn` and/or `manage_skill`, then stops.
-- `minToolCalls`: threshold for `autoContinue`.
+- `learnEnabled`: registers `learn` for Hindsight-backed lesson retention. Keep off when standalone Hindsight tools already handle durable memory; enable when one call should retain a lesson and optionally write a skill.
+- `autoCapture`: adds standing system-prompt guidance to capture genuinely reusable procedures during normal work. It does not start another turn.
+- `autoContinue`: after eligible tool-heavy work and all queued follow-ups/retries settle, runs one hidden capture turn that may call `learn` and/or `manage_skill`, then stops. Keep off unless extra token use and autonomous writes are wanted.
+- `minToolCalls`: threshold for `autoContinue`; ignored while `autoContinue` is off.
 - `maxSkillBytes`: max serialized `SKILL.md` size.
 - `maxMemoryChars`: max Hindsight lesson/context length for `learn`.
 
-Recommended start:
-
-```json
-{
-  "enabled": true,
-  "learnEnabled": true,
-  "autoCapture": false,
-  "autoContinue": false,
-  "minToolCalls": 5,
-  "maxSkillBytes": 64000,
-  "maxMemoryChars": 12000
-}
-```
-
-Turn on automation only after manual workflow feels good.
+This profile keeps lightweight capture guidance active while leaving Hindsight retention and hidden capture turns explicit.
 
 If an existing config file is malformed or unreadable, the extension fails closed: managed tools, discovery, and automation stay disabled. `/managed-skills status` and `/managed-skills config` show the diagnostic. Correct the file or run a config-changing command, then `/reload`.
 

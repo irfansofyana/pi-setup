@@ -195,19 +195,21 @@ manage_skill  # create/update/delete/list/view isolated managed SKILL.md files
 learn         # retain durable lessons in Hindsight, optionally with a managed skill
 ```
 
-Default config:
+Daily-use default config:
 
 ```json
 {
   "enabled": true,
-  "learnEnabled": true,
-  "autoCapture": false,
+  "learnEnabled": false,
+  "autoCapture": true,
   "autoContinue": false,
-  "minToolCalls": 5,
+  "minToolCalls": 8,
   "maxSkillBytes": 64000,
   "maxMemoryChars": 12000
 }
 ```
+
+`autoCapture` adds standing guidance during normal work; it does not start another turn. `autoContinue` is separate: when enabled, it starts one hidden capture turn after at least `minToolCalls` tool calls and queued work settles. Keep `autoContinue` off unless extra token use and autonomous writes are wanted. Enable `learn` when managed-skills should retain Hindsight memory in the same call; standalone Hindsight tools remain available when it is off.
 
 Safety:
 
@@ -219,7 +221,7 @@ Safety:
 - Config and skill updates use same-directory atomic replacement.
 - Malformed existing config fails closed and reports diagnostic in `/managed-skills status`.
 - `learn` redacts common secret patterns before retaining to Hindsight.
-- Keep `autoCapture` and `autoContinue` off until manual capture feels safe.
+- Keep lightweight `autoCapture` guidance on; leave `autoContinue` off unless hidden capture turns are explicitly wanted.
 
 Run `/reload` after creating, updating, deleting, or copying managed skills.
 
