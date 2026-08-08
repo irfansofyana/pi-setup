@@ -405,16 +405,18 @@ async function endpointReady(url: string, timeoutMs: number, signal?: AbortSigna
   return headroomCompressionReadyFromPayload(payload) ?? false;
 }
 
-async function waitForHealth(
+export async function waitForHealth(
   config: HeadroomConfig,
   signal: AbortSignal | undefined,
   timeoutMs: number,
   shouldContinue: () => boolean = () => true,
 ): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + Math.max(0, timeoutMs);
   while (!signal?.aborted && shouldContinue()) {
-    if (await health(config, signal)) return true;
-    const remainingMs = deadline - Date.now();
+    if (performance.now() >= deadline) return false;
+    const healthy = await health(config, signal);
+    if (healthy) return performance.now() < deadline;
+    const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) return false;
     await new Promise((resolve) => setTimeout(resolve, Math.min(500, remainingMs)));
   }
@@ -538,11 +540,15 @@ export function createStartCoordinator<TArgs extends unknown[]>(
   return { start, cancel, restart, isStarting: () => inFlight !== undefined };
 }
 
+function childHasExited(child: Pick<ChildProcess, "exitCode" | "signalCode">): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
+
 export async function terminateChildProcess(child: ChildProcess, graceMs = 1_000): Promise<boolean> {
-  if (child.exitCode !== null) return true;
+  if (childHasExited(child)) return true;
 
   const waitForExit = (): Promise<boolean> => new Promise((resolve) => {
-    if (child.exitCode !== null) {
+    if (childHasExited(child)) {
       resolve(true);
       return;
     }
@@ -557,7 +563,7 @@ export async function terminateChildProcess(child: ChildProcess, graceMs = 1_000
     };
     const onExit = () => finish(true);
     child.once("exit", onExit);
-    timer = setTimeout(() => finish(child.exitCode !== null), Math.max(1, graceMs));
+    timer = setTimeout(() => finish(childHasExited(child)), Math.max(1, graceMs));
   });
 
   const signal = (value: NodeJS.Signals): boolean => {
@@ -565,7 +571,7 @@ export async function terminateChildProcess(child: ChildProcess, graceMs = 1_000
   };
 
   if (signal("SIGTERM") && await waitForExit()) return true;
-  if (child.exitCode !== null) return true;
+  if (childHasExited(child)) return true;
   if (!signal("SIGKILL")) return false;
   return waitForExit();
 }
@@ -816,6 +822,8 @@ function clearLog(): void {
 }
 
 export interface HeadroomDependencies {
+  /** Monotonic milliseconds from an arbitrary origin; use only for elapsed durations. */
+  monotonicNowMs(): number;
   readConfig(): HeadroomConfig;
   ensureDirs(): void;
   cleanupStore(config: HeadroomConfig): void;
@@ -835,6 +843,7 @@ export interface HeadroomDependencies {
 }
 
 const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
+  monotonicNowMs: () => performance.now(),
   readConfig,
   ensureDirs,
   cleanupStore,
@@ -1013,6 +1022,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       return;
     }
 
+    const startupHealthStartedAtMs = dependencies.monotonicNowMs();
     const becameHealthy = await dependencies.waitForHealth(config, getContextSignal(ctx), config.startupHealthTimeoutMs, () => managedProcess === child && attempt.isCurrent());
     if (!attempt.isCurrent()) return;
     startupPending = false;
@@ -1025,8 +1035,15 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       return;
     }
 
-    const concurrentProxyHealthy = pendingTerminalNotice
-      ? await dependencies.health(config, getContextSignal(ctx))
+    const elapsedStartupHealthMs = Math.max(0, dependencies.monotonicNowMs() - startupHealthStartedAtMs);
+    const remainingStartupHealthMs = config.startupHealthTimeoutMs - elapsedStartupHealthMs;
+    const concurrentProxyHealthy = pendingTerminalNotice && remainingStartupHealthMs > 0
+      ? await dependencies.waitForHealth(
+        config,
+        getContextSignal(ctx),
+        remainingStartupHealthMs,
+        () => pendingTerminalNotice !== undefined && managedProcess !== child && attempt.isCurrent(),
+      )
       : false;
     if (!attempt.isCurrent()) return;
     if (concurrentProxyHealthy) {
@@ -1040,7 +1057,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
     const timeoutNotice = terminalFailureNotified ? undefined : lifecycle.handleTimeout(config.startupHealthTimeoutMs);
     lifecycle.markStopping();
-    const terminated = managedProcess === child ? await dependencies.terminateChild(child) : child.exitCode !== null;
+    const terminated = managedProcess === child ? await dependencies.terminateChild(child) : childHasExited(child);
     if (!attempt.isCurrent()) return;
     if (terminated) {
       if (managedProcess === child) managedProcess = undefined;

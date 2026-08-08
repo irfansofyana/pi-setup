@@ -30,6 +30,7 @@ import headroom, {
   statusText,
   terminateChildProcess,
   truncateText,
+  waitForHealth,
   type StoredOriginal,
 } from "./index.ts";
 
@@ -219,6 +220,21 @@ test("managed child termination waits for exit and fails closed when signals fai
   assert.deepEqual(stuck.signals, ["SIGTERM", "SIGKILL"]);
 });
 
+test("managed child termination recognizes an already confirmed signal exit", async () => {
+  const signals: string[] = [];
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null,
+    signalCode: "SIGTERM",
+    kill(signal: NodeJS.Signals) {
+      signals.push(signal);
+      return false;
+    },
+  });
+
+  assert.equal(await terminateChildProcess(child as any, 1), true);
+  assert.deepEqual(signals, []);
+});
+
 function createHeadroomHarness(dependencies: Record<string, unknown>) {
   const handlers: Record<string, (...args: any[]) => any> = {};
   const commands: Record<string, any> = {};
@@ -304,12 +320,17 @@ test("concurrent startup loser adopts the winner after its child exits before re
   const child = Object.assign(new EventEmitter(), { pid: 4567, exitCode: null, killed: false });
   let healthCalls = 0;
   let spawnCalls = 0;
+  let waitCalls = 0;
   const harness = createHeadroomHarness({
-    health: async () => ++healthCalls > 1,
+    health: async () => { healthCalls++; return false; },
     waitForHealth: async () => {
-      child.exitCode = 1;
-      child.emit("exit", 1, null);
-      return false;
+      waitCalls++;
+      if (waitCalls === 1) {
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        return false;
+      }
+      return true;
     },
     commandAvailable: () => true,
     openLog: () => 12,
@@ -322,12 +343,185 @@ test("concurrent startup loser adopts the winner after its child exits before re
   await harness.handlers.session_start({}, harness.ctx);
 
   const stats = await harness.tools.headroom_stats.execute();
-  assert.equal(healthCalls, 2);
+  assert.equal(healthCalls, 1);
+  assert.equal(waitCalls, 2);
   assert.equal(spawnCalls, 1);
   assert.equal(stats.details.enabled, true);
   assert.equal(stats.details.proxyOwner, "external");
   assert.ok(harness.notices.some((notice) => notice.message.includes("concurrent Headroom proxy")));
   assert.equal(harness.notices.some((notice) => notice.message.includes("bypassing compression")), false);
+});
+
+test("concurrent startup loser waits only the remaining startup budget for the winner", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4568, exitCode: null, signalCode: null, killed: false });
+  let monotonicNowMs = 10_000;
+  const waitTimeouts: number[] = [];
+  const harness = createHeadroomHarness({
+    monotonicNowMs: () => monotonicNowMs,
+    health: async () => false,
+    waitForHealth: async (_config: unknown, _signal: AbortSignal | undefined, timeoutMs: number, isActive: () => boolean) => {
+      waitTimeouts.push(timeoutMs);
+      assert.equal(isActive(), true);
+      if (waitTimeouts.length === 1) {
+        monotonicNowMs += 1_250;
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        return false;
+      }
+      return true;
+    },
+    commandAvailable: () => true,
+    openLog: () => 14,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    terminateChild: async () => true,
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.deepEqual(waitTimeouts, [DEFAULT_CONFIG.startupHealthTimeoutMs, DEFAULT_CONFIG.startupHealthTimeoutMs - 1_250]);
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "external");
+  assert.ok(harness.notices.some((notice) => notice.message.includes("concurrent Headroom proxy")));
+  assert.equal(harness.notices.some((notice) => notice.message.includes("bypassing compression")), false);
+});
+
+test("concurrent startup loser skips winner wait and adoption at zero remaining budget", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4570, exitCode: null, signalCode: null, killed: false });
+  let monotonicNowMs = 10_000;
+  let waitCalls = 0;
+  const harness = createHeadroomHarness({
+    monotonicNowMs: () => monotonicNowMs,
+    health: async () => false,
+    waitForHealth: async () => {
+      waitCalls++;
+      if (waitCalls === 1) {
+        monotonicNowMs += DEFAULT_CONFIG.startupHealthTimeoutMs;
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        return false;
+      }
+      return true;
+    },
+    commandAvailable: () => true,
+    openLog: () => 16,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    terminateChild: async () => true,
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(waitCalls, 1);
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "none");
+  assert.equal(harness.notices.some((notice) => notice.message.includes("adopted a concurrent Headroom proxy")), false);
+});
+
+test("concurrent startup loser skips winner wait and adoption at negative remaining budget", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4571, exitCode: null, signalCode: null, killed: false });
+  let monotonicNowMs = 20_000;
+  let waitCalls = 0;
+  const harness = createHeadroomHarness({
+    monotonicNowMs: () => monotonicNowMs,
+    health: async () => false,
+    waitForHealth: async () => {
+      waitCalls++;
+      if (waitCalls === 1) {
+        monotonicNowMs += DEFAULT_CONFIG.startupHealthTimeoutMs + 1;
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        return false;
+      }
+      return true;
+    },
+    commandAvailable: () => true,
+    openLog: () => 17,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    terminateChild: async () => true,
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(waitCalls, 1);
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "none");
+  assert.equal(harness.notices.some((notice) => notice.message.includes("adopted a concurrent Headroom proxy")), false);
+});
+
+test("wall-clock rollback cannot extend the concurrent-winner deadline", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4572, exitCode: null, signalCode: null, killed: false });
+  let wallNowMs = 50_000;
+  let monotonicNowMs = 1_000;
+  const waitTimeouts: number[] = [];
+  const harness = createHeadroomHarness({
+    now: () => wallNowMs,
+    monotonicNowMs: () => monotonicNowMs,
+    health: async () => false,
+    waitForHealth: async (_config: unknown, _signal: AbortSignal | undefined, timeoutMs: number) => {
+      waitTimeouts.push(timeoutMs);
+      if (waitTimeouts.length === 1) {
+        wallNowMs -= 5_000;
+        monotonicNowMs += DEFAULT_CONFIG.startupHealthTimeoutMs;
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        return false;
+      }
+      return true;
+    },
+    commandAvailable: () => true,
+    openLog: () => 18,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    terminateChild: async () => true,
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.deepEqual(waitTimeouts, [DEFAULT_CONFIG.startupHealthTimeoutMs]);
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "none");
+});
+
+test("signal-exited startup child is no longer tracked when no concurrent proxy becomes ready", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4569, exitCode: null, signalCode: null as NodeJS.Signals | null, killed: false });
+  let waitCalls = 0;
+  let terminateCalls = 0;
+  const harness = createHeadroomHarness({
+    health: async () => false,
+    waitForHealth: async () => {
+      waitCalls++;
+      if (waitCalls === 1) {
+        child.signalCode = "SIGTERM";
+        child.emit("exit", null, "SIGTERM");
+      }
+      return false;
+    },
+    commandAvailable: () => true,
+    openLog: () => 15,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    terminateChild: async () => { terminateCalls++; return false; },
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(waitCalls, 2);
+  assert.equal(terminateCalls, 0);
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "none");
+  assert.equal(harness.notices.some((notice) => notice.message.includes("remains tracked")), false);
 });
 
 test("auto session replaces a lost adopted proxy on the compression health path", async () => {
@@ -712,6 +906,36 @@ test("health forwards caller abort signal to fetch", async () => {
     assert.equal(await health(DEFAULT_CONFIG, controller.signal), false);
     assert.equal(receivedSignal?.aborted, true);
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("waitForHealth uses a monotonic deadline and never probes after it", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalDateNow = Date.now;
+  const controller = new AbortController();
+  let safetyAbortFired = false;
+  const safetyAbort = setTimeout(() => {
+    safetyAbortFired = true;
+    controller.abort();
+  }, 100);
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response(JSON.stringify({ service: "headroom-proxy", ready: false }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  Date.now = () => 0;
+
+  try {
+    assert.equal(await waitForHealth(DEFAULT_CONFIG, controller.signal, 20), false);
+    assert.equal(safetyAbortFired, false);
+    assert.equal(calls, 1);
+  } finally {
+    clearTimeout(safetyAbort);
+    Date.now = originalDateNow;
     globalThis.fetch = originalFetch;
   }
 });
