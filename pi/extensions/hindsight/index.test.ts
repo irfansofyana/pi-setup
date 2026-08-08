@@ -9,9 +9,13 @@ import { buildRuleFromMarkdown, builtinDefaultRules, discoverRules, parseFrontma
 import hindsight, {
   HindsightHttpClient,
   computeBankScope,
+  computeMemoryScope,
+  computeMemoryScopes,
   defaultHindsightConfig,
   readHindsightConfigFile,
   formatRecallResponse,
+  mergeRecallResponses,
+  mergeReflectResponses,
   handleHindsightCommand,
   markRuleInjected,
   promptBlocks,
@@ -260,10 +264,111 @@ test("computeBankScope supports oh-my-pi style project tagging", () => {
   assert.ok(tagged.tags?.[0].startsWith("project:demo-"));
 });
 
+test("computeMemoryScope layers exact project, exact global, and safe combined scopes in a tagged bank", () => {
+  const config = { bankId: "pi", scoping: "per-project-tagged" } as const;
+  const cwd = "/work/a/demo";
+  const project = computeMemoryScope(config, cwd, "project");
+
+  assert.equal(project.bankId, "pi");
+  assert.ok(project.tags?.[0].startsWith("project:demo-"));
+  assert.equal(project.tagsMatch, "exact");
+  assert.deepEqual(computeMemoryScope(config, cwd, "global"), { bankId: "pi", tags: [], tagsMatch: "exact" });
+  const all = computeMemoryScope(config, cwd, "all");
+  assert.equal(all.bankId, "pi");
+  assert.ok(all.tags?.[0].startsWith("project:demo-"));
+  assert.equal(all.tagsMatch, "any");
+});
+
+test("computeMemoryScope preserves legacy global and per-project bank layouts", () => {
+  const cwd = "/work/a/demo";
+  assert.deepEqual(computeMemoryScope({ bankId: "pi", scoping: "global" }, cwd, "project"), { bankId: "pi" });
+  assert.ok(computeMemoryScope({ bankId: "pi", scoping: "per-project" }, cwd, "project").bankId.startsWith("pi-demo-"));
+  assert.deepEqual(computeMemoryScope({ bankId: "pi", scoping: "per-project" }, cwd, "global"), {
+    bankId: "pi",
+    tags: [],
+    tagsMatch: "exact",
+  });
+  assert.throws(
+    () => computeMemoryScope({ bankId: "pi", scoping: "per-project" }, cwd, "all"),
+    /computeMemoryScopes/,
+  );
+  const all = computeMemoryScopes({ bankId: "pi", scoping: "per-project" }, cwd, "all");
+  assert.equal(all.length, 2);
+  assert.ok(all[0].bankId.startsWith("pi-demo-"));
+  assert.deepEqual(all[1], { bankId: "pi", tags: [], tagsMatch: "exact" });
+});
+
 test("formatRecallResponse formats real Hindsight recall results", () => {
   const block = formatRecallResponse({ results: [{ text: "User prefers node:test", type: "experience", mentioned_at: "2026-01-02T00:00:00Z" }] });
   assert.ok(block.includes("Relevant memories from past conversations"));
   assert.ok(block.includes("User prefers node:test"));
+});
+
+test("combined memory responses interleave scopes, deduplicate, and reserve output for global memory", () => {
+  const merged = mergeRecallResponses([
+    { results: [
+      { id: "shared", text: "project copy" },
+      { id: "project", text: "project only" },
+      { text: "id-less", type: "fact", mentioned_at: "2026-01-01" },
+    ] },
+    { results: [
+      { id: "shared", text: "global duplicate" },
+      { id: "global", text: "global only" },
+      { text: "id-less", type: "fact", mentioned_at: "2026-01-01" },
+    ] },
+    {},
+  ]);
+  assert.deepEqual(merged.results?.map((result) => result.text), ["project copy", "global only", "project only", "id-less"]);
+
+  const largeCombined = mergeRecallResponses([
+    { results: [{ id: "project-large", type: "T".repeat(7_000), text: "P".repeat(10_000) }] },
+    { results: [{ id: "global-important", text: "GLOBAL_MEMORY_MUST_REMAIN_VISIBLE" }] },
+  ]);
+  const formatted = formatRecallResponse(largeCombined);
+  assert.ok(formatted.includes("GLOBAL_MEMORY_MUST_REMAIN_VISIBLE"));
+  assert.ok(formatted.length <= 6_000);
+
+  const blanksBeforeGlobal = formatRecallResponse(mergeRecallResponses([
+    { results: [
+      { id: "project-1", text: "A".repeat(5_000) },
+      { id: "project-2", text: "B".repeat(5_000) },
+    ] },
+    { results: [
+      { id: "blank-1", text: "" },
+      { id: "blank-2", text: "   " },
+      { id: "global-valid", text: "GLOBAL_AFTER_BLANKS" },
+    ] },
+  ]));
+  assert.ok(blanksBeforeGlobal.includes("GLOBAL_AFTER_BLANKS"));
+
+  const fourScopes = formatRecallResponse(mergeRecallResponses([
+    { results: [{ id: "scope-1", text: `SCOPE_ONE_${"1".repeat(8_000)}` }] },
+    { results: [{ id: "scope-2", text: `SCOPE_TWO_${"2".repeat(8_000)}` }] },
+    { results: [{ id: "scope-3", text: `SCOPE_THREE_${"3".repeat(8_000)}` }] },
+    { results: [{ id: "scope-4", text: "SCOPE_FOUR_VISIBLE" }] },
+  ]));
+  for (const marker of ["SCOPE_ONE_", "SCOPE_TWO_", "SCOPE_THREE_", "SCOPE_FOUR_VISIBLE"]) {
+    assert.ok(fourScopes.includes(marker));
+  }
+  assert.ok(fourScopes.length <= 6_000);
+
+  const manyScopes = formatRecallResponse(mergeRecallResponses(Array.from({ length: 60 }, (_, index) => ({
+    results: [{
+      id: `many-${index}`,
+      type: "T".repeat(7_000),
+      text: `SCOPE_${String(index).padStart(2, "0")}_VISIBLE_${"x".repeat(500)}`,
+    }],
+  }))));
+  for (let index = 0; index < 60; index++) {
+    assert.ok(manyScopes.includes(`SCOPE_${String(index).padStart(2, "0")}_VISIBLE`));
+  }
+  assert.ok(manyScopes.length <= 6_000);
+
+  assert.deepEqual(mergeRecallResponses([]), { results: [] });
+  assert.deepEqual(
+    mergeReflectResponses([{ text: "project reflection" }, { text: "project reflection" }, { text: "global reflection" }, {}]),
+    { text: "project reflection\n\nglobal reflection" },
+  );
 });
 
 test("defaultHindsightConfig reads local daemon defaults", () => {
@@ -336,11 +441,12 @@ test("HindsightHttpClient calls real API endpoints with scope and redaction", as
     return new Response(JSON.stringify({ results: [{ text: "ok" }], text: "reflected", success: true }), { status: 200 });
   };
   const client = new HindsightHttpClient({ apiUrl: "http://hindsight.local", apiToken: "tok", autoStartDaemon: false }, fetchImpl as any);
-  const scope = { bankId: "pi", tags: ["project:demo"], tagsMatch: "any" as const };
+  const scope = { bankId: "pi", tags: ["project:demo"], tagsMatch: "exact" as const };
 
   await client.retain(scope, [{ content: "OPENAI_API_KEY=supersecret12345", context: "ctx" }]);
   await client.recall(scope, "prefs", { budget: "high", maxTokens: 123 });
   await client.reflect(scope, "why", { context: "now", budget: "low" });
+  await client.recall({ bankId: "pi", tags: [], tagsMatch: "exact" }, "global prefs");
   await client.clearMemories(scope);
 
   assert.equal(calls[0].url, "http://hindsight.local/v1/default/banks/pi/memories");
@@ -350,10 +456,14 @@ test("HindsightHttpClient calls real API endpoints with scope and redaction", as
   assert.equal(calls[1].url, "http://hindsight.local/v1/default/banks/pi/memories/recall");
   assert.ok(calls[1].init.body.includes('"budget":"high"'));
   assert.ok(calls[1].init.body.includes('"max_tokens":123'));
+  assert.ok(calls[1].init.body.includes('"tags_match":"exact"'));
   assert.equal(calls[2].url, "http://hindsight.local/v1/default/banks/pi/reflect");
   assert.ok(calls[2].init.body.includes('"context":"now"'));
-  assert.equal(calls[3].url, "http://hindsight.local/v1/default/banks/pi/memories");
-  assert.equal(calls[3].init.method, "DELETE");
+  assert.ok(calls[2].init.body.includes('"tags_match":"exact"'));
+  assert.ok(calls[3].init.body.includes('"tags":[]'));
+  assert.ok(calls[3].init.body.includes('"tags_match":"exact"'));
+  assert.equal(calls[4].url, "http://hindsight.local/v1/default/banks/pi/memories");
+  assert.equal(calls[4].init.method, "DELETE");
 });
 
 test("HindsightHttpClient reports non-JSON HTTP errors before parsing", async () => {
@@ -466,9 +576,10 @@ test("auto-recall requires memory backend opt-in", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "hindsight-auto-recall-"));
   const commands: Record<string, any> = {};
   const handlers: Record<string, Function> = {};
+  const recallScopes: any[] = [];
   const fakeClient = {
     retain: async () => ({}),
-    recall: async () => ({ results: [{ text: "remember this hidden fact", type: "experience", mentioned_at: "2026-01-01T00:00:00Z" }] }),
+    recall: async (scope: any) => { recallScopes.push(scope); return { results: [{ text: "remember this hidden fact", type: "experience", mentioned_at: "2026-01-01T00:00:00Z" }] }; },
   };
   hindsight({
     hindsightClient: fakeClient,
@@ -482,6 +593,9 @@ test("auto-recall requires memory backend opt-in", async () => {
   await commands.hindsight.handler("memory enable", { cwd, ui: { notify() {} } });
   const result = await handlers.context({ messages: [{ role: "user", content: "hidden fact" }] }, { cwd });
   assert.ok(result.messages[0].content.includes("hidden fact"));
+  assert.equal(recallScopes[0].bankId, "coding-agent");
+  assert.ok(recallScopes[0].tags[0].startsWith("project:"));
+  assert.equal(recallScopes[0].tagsMatch, "any");
   await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
 
   rmSync(cwd, { recursive: true, force: true });
@@ -492,7 +606,8 @@ test("session shutdown auto-retain requires memory backend opt-in", async () => 
   const commands: Record<string, any> = {};
   const handlers: Record<string, Function> = {};
   const retained: string[] = [];
-  const fakeClient = { retain: async (_scope: any, items: any[]) => { retained.push(...items.map((item) => item.content)); } };
+  const retainScopes: any[] = [];
+  const fakeClient = { retain: async (scope: any, items: any[]) => { retainScopes.push(scope); retained.push(...items.map((item) => item.content)); } };
   hindsight({
     hindsightClient: fakeClient,
     registerTool() {},
@@ -513,6 +628,8 @@ test("session shutdown auto-retain requires memory backend opt-in", async () => 
     sessionManager: { getEntries: () => [{ role: "user", content: "retain after opt-in" }] },
   });
   assert.equal(retained.some((text) => text.includes("retain after opt-in")), true);
+  assert.equal(retainScopes[0].tagsMatch, "exact");
+  assert.ok(retainScopes[0].tags[0].startsWith("project:"));
   await commands.hindsight.handler("memory disable", { cwd, ui: { notify() {} } });
 
   rmSync(cwd, { recursive: true, force: true });
@@ -533,6 +650,183 @@ test("hindsight_retain reports server-confirmed retain", async () => {
   assert.deepEqual(retained, ["durable fact:false"]);
   assert.ok(result.content[0].text.includes("Retained memory"));
   rmSync(cwd, { recursive: true, force: true });
+});
+
+test("memory tools send layered scope payloads with safe defaults", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-tool-scopes-"));
+  const tools: Record<string, any> = {};
+  const calls: Array<{ operation: string; scope: any }> = [];
+  const fakeClient = {
+    retain: async (scope: any) => { calls.push({ operation: "retain", scope }); },
+    recall: async (scope: any) => { calls.push({ operation: "recall", scope }); return { results: [] }; },
+    reflect: async (scope: any) => { calls.push({ operation: "reflect", scope }); return { text: "ok" }; },
+  };
+  hindsight({
+    hindsightClient: fakeClient,
+    registerTool(tool: any) { tools[tool.name] = tool; },
+    registerCommand() {},
+    on() {},
+  } as any);
+
+  await tools.hindsight_retain.execute("retain-project", { text: "project fact" }, undefined, undefined, { cwd });
+  await tools.hindsight_retain.execute("retain-global", { text: "global fact", scope: "global" }, undefined, undefined, { cwd });
+  await tools.hindsight_recall.execute("recall-all", { query: "facts" }, undefined, undefined, { cwd });
+  await tools.hindsight_recall.execute("recall-project", { query: "facts", scope: "project" }, undefined, undefined, { cwd });
+  await tools.hindsight_recall.execute("recall-global", { query: "facts", scope: "global" }, undefined, undefined, { cwd });
+  await tools.hindsight_reflect.execute("reflect-global", { query: "facts", scope: "global" }, undefined, undefined, { cwd });
+
+  assert.equal(calls[0].scope.tagsMatch, "exact");
+  assert.ok(calls[0].scope.tags[0].startsWith("project:"));
+  assert.deepEqual(calls[1].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
+  assert.equal(calls[2].scope.bankId, "coding-agent");
+  assert.ok(calls[2].scope.tags[0].startsWith("project:"));
+  assert.equal(calls[2].scope.tagsMatch, "any");
+  assert.equal(calls[3].scope.tagsMatch, "exact");
+  assert.deepEqual(calls[4].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
+  assert.deepEqual(calls[5].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("per-project all recall entry points merge the project and global banks", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-per-project-all-"));
+  const configPath = join(cwd, "config.json");
+  const oldPath = process.env.HINDSIGHT_CONFIG_PATH;
+  process.env.HINDSIGHT_CONFIG_PATH = configPath;
+  const tools: Record<string, any> = {};
+  const commands: Record<string, any> = {};
+  const handlers: Record<string, Function> = {};
+  const calls: Array<{ operation: string; scope: any }> = [];
+  const ctx = { cwd, ui: { notify() {} } };
+
+  try {
+    await handleHindsightCommand("config set scoping per-project", ctx);
+    hindsight({
+      hindsightClient: {
+        recall: async (scope: any) => {
+          calls.push({ operation: "recall", scope });
+          return { results: [{ id: scope.bankId, text: `memory from ${scope.bankId}` }] };
+        },
+      },
+      registerTool(tool: any) { tools[tool.name] = tool; },
+      registerCommand(name: string, command: any) { commands[name] = command; },
+      on(name: string, handler: Function) { handlers[name] = handler; },
+    } as any);
+
+    const recalled = await tools.hindsight_recall.execute("recall-all", { query: "facts" }, undefined, undefined, { cwd });
+    await commands.hindsight.handler("recall facts", ctx);
+    const autoRecalled = await handlers.context({ messages: [{ role: "user", content: "facts" }] }, ctx);
+    const recallCalls = calls.filter((call) => call.operation === "recall");
+
+    assert.equal(recallCalls.length, 6);
+    for (let index = 0; index < recallCalls.length; index += 2) {
+      assert.ok(recallCalls[index].scope.bankId.startsWith("coding-agent-hindsight-per-project-all-"));
+      assert.deepEqual(recallCalls[index + 1].scope, { bankId: "coding-agent", tags: [], tagsMatch: "exact" });
+    }
+    assert.match(recalled.content[0].text, /memory from coding-agent-hindsight-per-project-all-/);
+    assert.match(recalled.content[0].text, /memory from coding-agent/);
+    assert.match(autoRecalled.messages[0].content, /memory from coding-agent-hindsight-per-project-all-/);
+    assert.match(autoRecalled.messages[0].content, /memory from coding-agent/);
+  } finally {
+    await handleHindsightCommand("config reset", ctx);
+    if (oldPath === undefined) delete process.env.HINDSIGHT_CONFIG_PATH;
+    else process.env.HINDSIGHT_CONFIG_PATH = oldPath;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("per-project all reflection fails closed without outbound calls", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-per-project-reflect-all-"));
+  const configPath = join(cwd, "config.json");
+  const oldPath = process.env.HINDSIGHT_CONFIG_PATH;
+  process.env.HINDSIGHT_CONFIG_PATH = configPath;
+  const tools: Record<string, any> = {};
+  const calls: string[] = [];
+  const ctx = { cwd, ui: { notify() {} } };
+
+  try {
+    await handleHindsightCommand("config set scoping per-project", ctx);
+    hindsight({
+      hindsightClient: {
+        recall: async () => { calls.push("recall"); return { results: [] }; },
+        reflect: async () => { calls.push("reflect"); return { text: "unsafe split answer" }; },
+      },
+      registerTool(tool: any) { tools[tool.name] = tool; },
+      registerCommand() {},
+      on() {},
+    } as any);
+
+    await assert.rejects(
+      tools.hindsight_reflect.execute(
+        "reflect-all",
+        { query: "recommend an approach", context: "current task", scope: "all" },
+        undefined,
+        undefined,
+        { cwd },
+      ),
+      (error: Error) => {
+        assert.match(error.message, /native cross-bank joint reflection is unavailable/i);
+        assert.match(error.message, /per-project-tagged/);
+        assert.match(error.message, /genuine project\+global synthesis/i);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, []);
+  } finally {
+    await handleHindsightCommand("config reset", ctx);
+    if (oldPath === undefined) delete process.env.HINDSIGHT_CONFIG_PATH;
+    else process.env.HINDSIGHT_CONFIG_PATH = oldPath;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("per-project-tagged all reflection makes one normal reflect call", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "hindsight-tagged-reflect-all-"));
+  const configPath = join(cwd, "config.json");
+  const oldPath = process.env.HINDSIGHT_CONFIG_PATH;
+  process.env.HINDSIGHT_CONFIG_PATH = configPath;
+  const tools: Record<string, any> = {};
+  const calls: Array<{ operation: string; scope: any; query: string; options: any }> = [];
+  const ctx = { cwd, ui: { notify() {} } };
+
+  try {
+    await handleHindsightCommand("config set scoping per-project-tagged", ctx);
+    hindsight({
+      hindsightClient: {
+        recall: async () => { calls.push({ operation: "recall", scope: undefined, query: "", options: undefined }); return { results: [] }; },
+        reflect: async (scope: any, query: string, options: any) => {
+          calls.push({ operation: "reflect", scope, query, options });
+          return { text: "joint tagged-bank synthesis" };
+        },
+      },
+      registerTool(tool: any) { tools[tool.name] = tool; },
+      registerCommand() {},
+      on() {},
+    } as any);
+
+    const result = await tools.hindsight_reflect.execute(
+      "reflect-all",
+      { query: "recommend an approach", context: "current task", scope: "all", budget: "mid" },
+      undefined,
+      undefined,
+      { cwd },
+    );
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].operation, "reflect");
+    assert.equal(calls[0].scope.bankId, "coding-agent");
+    assert.equal(calls[0].scope.tagsMatch, "any");
+    assert.equal(calls[0].scope.tags.length, 1);
+    assert.ok(calls[0].scope.tags[0].startsWith("project:"));
+    assert.equal(calls[0].query, "recommend an approach");
+    assert.equal(calls[0].options.context, "current task");
+    assert.equal(calls[0].options.budget, "mid");
+    assert.equal(result.content[0].text, "joint tagged-bank synthesis");
+  } finally {
+    await handleHindsightCommand("config reset", ctx);
+    if (oldPath === undefined) delete process.env.HINDSIGHT_CONFIG_PATH;
+    else process.env.HINDSIGHT_CONFIG_PATH = oldPath;
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("hindsight clear skips shutdown auto-retain", async () => {
