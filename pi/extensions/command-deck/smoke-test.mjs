@@ -108,6 +108,11 @@ const multiline = renderedText().split("\n");
 const firstLine = multiline.findIndex((line) => line.includes("first"));
 const thirdLine = multiline.findIndex((line) => line.includes("third"));
 assert(firstLine >= 0 && thirdLine - firstLine >= 2, "interior blank prompt lines must remain visible");
+
+editor.setText(Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n"));
+assert.match(renderedText(), /↑\s*\d+/, "long prompts should expose hidden content above the viewport");
+for (let index = 0; index < 50; index++) editor.handleInput("\x1b[A");
+assert.match(renderedText(), /↓\s*\d+/, "moving upward should expose hidden content below the viewport");
 editor.setText("");
 
 await emit("agent_start");
