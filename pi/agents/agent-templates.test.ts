@@ -65,6 +65,16 @@ test("builder is an inherited-context worktree agent with narrow local editing a
   assert.match(content, /parent agent must run real verification/i);
 });
 
+test("reviewer has no shell, mutation, or extension authority", () => {
+  const content = read("reviewer.md");
+  const fm = frontmatter("reviewer");
+  assert.match(fm, /^tools: read, grep, find, ls$/m);
+  assert.match(fm, /^extensions: false$/m);
+  assert.doesNotMatch(fm, /\bbash\b/);
+  assert.match(content, /diff and verification evidence supplied by the parent/i);
+  assert.match(content, /parent agent owns command execution/i);
+});
+
 test("global defaults favor bounded parallelism and private transcripts", () => {
   const settings = JSON.parse(read("subagents.json"));
   assert.deepEqual(settings, {
