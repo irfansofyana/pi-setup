@@ -32,3 +32,18 @@ test("header visibility reads the cached normal-render line count", () => {
 	assert.match(cache, /Array\.isArray/);
 	assert.doesNotMatch(cache, /\.render\s*\(/);
 });
+
+test("irfan-sumi uses a compact breathing signature without the orbit", () => {
+	const lines = functionSource("signatureLines");
+	const header = functionSource("signatureHeader");
+	const breath = functionSource("sumiBreathColor");
+	const indicator = functionSource("workingIndicator");
+	assert.match(lines, /theme\.name === MINIMAL_THEME/);
+	assert.match(lines, /sumiBreathColor\(frame\)/);
+	assert.match(header, /animationVisible = minimal \|\| width >= 34/);
+	assert.match(header, /frame \+= 1/);
+	assert.match(breath, /Math\.cos/);
+	assert.match(breath, /SUMI_BREATH_PERIOD/);
+	assert.match(indicator, /theme\.name !== MINIMAL_THEME/);
+	assert.match(indicator, /"working"/);
+});
