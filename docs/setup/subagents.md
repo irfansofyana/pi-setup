@@ -6,10 +6,10 @@ This setup turns `@tintinweb/pi-subagents` into a small agent team instead of a 
 
 | Identity | Role ID | Job | Authority | Preloaded skills |
 | --- | --- | --- | --- | --- |
-| **Ciung Wanara** | `researcher` | Current web/repository research with primary-source evidence | Read-only local tools plus only 9router search/fetch | `9router-web-researcher` |
-| **Mundinglaya** | `code-mapper` | Trace architecture, execution flow, change surface, and tests | Read-only; no shell or extensions | `mermaid`, `teach` |
-| **Sangkuriang** | `builder` | Writes tests first, then implementation in a Git worktree | Local read/edit/write only; no shell, test execution, network, or extensions | `code-review` |
-| **Siliwangi** | `reviewer` | Independent diff, risk, and test review | Read-only; no shell or extensions | `code-review` |
+| **Ciung** | `researcher` | Current web/repository research with primary-source evidence | Read-only local tools plus only 9router search/fetch | `9router-web-researcher` |
+| **Laya** | `code-mapper` | Trace architecture, execution flow, change surface, and tests | Read-only; no shell or extensions | `mermaid`, `teach` |
+| **Sangkur** | `builder` | Writes tests first, then implementation in a Git worktree | Local read/edit/write only; no shell, test execution, network, or extensions | `code-review` |
+| **Prabu** | `reviewer` | Independent diff, risk, and test review | Read-only; no shell or extensions | `code-review` |
 
 The main Pi session remains coordinator. Specialists return evidence and branches; they do not become a second autonomous hierarchy.
 
@@ -94,25 +94,25 @@ Run `/reload` or restart Pi. Open `/agents` and confirm all four roles appear as
 ### Fast understanding
 
 ```text
-Run Ciung Wanara (`researcher`) and Mundinglaya (`code-mapper`) in parallel for this task. Wait for both, reconcile disagreements, then give me one implementation recommendation. Do not edit yet.
+Run Ciung (`researcher`) and Laya (`code-mapper`) in parallel for this task. Wait for both, reconcile disagreements, then give me one implementation recommendation. Do not edit yet.
 ```
 
 ### Amp-like build loop
 
 ```text
 Use the agent team for this change:
-1. Ciung Wanara (`researcher`) checks current external constraints only if needed;
-2. Mundinglaya (`code-mapper`) traces the relevant code and tests;
+1. Ciung (`researcher`) checks current external constraints only if needed;
+2. Laya (`code-mapper`) traces the relevant code and tests;
 3. synthesize acceptance criteria;
-4. Sangkuriang (`builder`) writes tests first, then implementation in its worktree without executing tests;
-5. the parent runs real verification and supplies the actual diff plus results to Siliwangi (`reviewer`) for independent, read-only assessment.
+4. Sangkur (`builder`) writes tests first, then implementation in its worktree without executing tests;
+5. the parent runs real verification and supplies the actual diff plus results to Prabu (`reviewer`) for independent, read-only assessment.
 Do not merge or push. Return the branch and a go/no-go verdict.
 ```
 
 ### Parallel reconnaissance
 
 ```text
-Spawn Ciung Wanara (`researcher`) for upstream behavior and Mundinglaya (`code-mapper`) for our current implementation in the background. Keep working on the task framing while they run, then join their results before deciding.
+Spawn Ciung (`researcher`) for upstream behavior and Laya (`code-mapper`) for our current implementation in the background. Keep working on the task framing while they run, then join their results before deciding.
 ```
 
 Use foreground mode when the next decision depends immediately on one result. Use background mode for independent work; the default smart join consolidates agents spawned in the same turn.
@@ -124,7 +124,7 @@ Builder's worktree isolation creates a local `pi-agent-*` branch only when chang
 1. Inspect the returned branch and commit.
 2. Capture `git diff <base>...<branch>` and the affected-file context.
 3. Re-run relevant tests in a clean integration checkout and retain the real output.
-4. Ask Siliwangi (`reviewer`) to assess the supplied diff, file context, and verification evidence; it cannot run commands itself.
+4. Ask Prabu (`reviewer`) to assess the supplied diff, file context, and verification evidence; it cannot run commands itself.
 5. Cherry-pick or merge only after the review verdict and tests pass.
 6. Push or open a PR from the parent session, never from the subagent by default.
 
@@ -160,7 +160,7 @@ Inside Pi:
 Smoke test with a harmless read-only request:
 
 ```text
-Ask Mundinglaya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
+Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
 ```
 
 Expected: the role appears as global, uses only read/grep/find/ls, cites repository files, and returns an explicit deliverable. Then run a researcher query and confirm only `ninerouter_web_search`/`ninerouter_web_fetch` are exposed from 9router.
