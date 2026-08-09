@@ -1,63 +1,48 @@
 # My Pi Setup
 
-Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compression, subagents, skills, and operational guardrails.
+An installable first-party Pi package plus a reviewed companion-package manifest: themes, local extensions, MCP, memory, context compression, subagents, skills, and operational guardrails.
 
 ![Pi setup home screen](docs/images/pi-home.png)
 
-## What this repository provides
+## What this package provides
 
 | Area | Included |
 | --- | --- |
-| Core agent | Pi coding agent with LLM provider login via `/login` |
-| Theme/UI | `irfan-pi` and minimalist `irfan-sumi` themes, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
+| Core agent | Pi coding agent with provider login through `/login` |
+| Theme/UI | `irfan-sumi`, `irfan-pi`, alternate themes, Command Deck, and Pi Signature |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
-| Delegation | Fresh task packets, web-only Ciung research, Laya code mapping, Sangkur worktree builds, Prabu review, and native per-invocation model selection |
-| Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
+| Delegation | Ciung research, Laya code mapping, Sangkur worktree builds, and Prabu review |
+| Guardrails | Permission gates, todos, persisted goals, and prompt loops |
 | Context | `context-mode` and local Headroom compression/retrieval |
 | Memory | Local Hindsight adapter and generated managed skills |
-| Side questions | Local `/btw` channel for context-aware questions while main agent works |
+| Side questions | Local `/btw` channel while the main agent works |
 | Routing | `pi-9router-ext` model/search routing tools |
 | Operations | Markdown preview, usage stats, and Caveman response mode |
-| Skills | Research, review, diagrams, frontend, sparring, docs, and Notion workflows |
-| Optional tools | Understand-Anything code graphs and Notion `ntn` CLI |
+| Skills | Setup, MCP, context-mode, and optional workflow skills |
 
 ### `irfan-sumi` preview
 
 ![Pi using the minimalist irfan-sumi theme](docs/images/irfan-sumi-preview.png)
 
-`irfan-sumi` keeps the full Pi workflow while reducing the header and chat input to warm, quiet essentials. Existing `irfan-pi` users can follow the [switch and rollback guide](docs/setup/configuration.md#switch-from-irfan-pi-to-irfan-sumi).
+`irfan-sumi` is the fresh-install setup default: warm, quiet, and compact. Package installation does not rewrite `~/.pi/agent/settings.json`; changing an existing device's selected theme requires explicit approval. See [Configuration](docs/setup/configuration.md#theme-and-signature-ui).
 
 ## Repository layout
 
 ```text
+package.json                  # Pi resources + exact companion package metadata
 pi/
-  agents/                     # trusted global subagent templates + defaults
-  themes/
-    irfan-pi.json            # main theme
-    irfan-sumi.json          # minimalist ink-and-amber alternate
-    irfan-gruvbox.json       # alternate Gruvbox theme
-    gruvbox-dark.json        # alternate/base theme
-  extensions/
-    pi-signature.ts          # signature header + compact footer
-    command-deck/            # custom chat input/editor template
-    headroom/                # local Headroom adapter template
-    hindsight/               # local Hindsight adapter template
-    managed-skills/          # local managed generated skills template
-    goal-loop/               # local /goal extension template
-    loop/                    # local Cursor-style /loop extension template
-    btw/                     # local /btw side-question extension template
-    caveman/                 # local /caveman extension template
-docs/setup/                  # detailed setup and operations guides
-skills/pi-setup/             # approval-gated setup/audit skill
+  agents/                     # reviewed templates; deployed separately
+  themes/                     # irfan-sumi, irfan-pi, and alternates
+  extensions/                 # repo-owned package extensions
+skills/pi-setup/              # bundled audit and migration skill
+docs/setup/                   # setup and operations guides
 ```
 
-Do **not** copy entire `pi/` folder into `~/.pi/`. Copy only needed files/templates.
+Pi loads declared extensions, themes, and skills from the installed package. Do not copy the whole `pi/` directory—or individual package resources—into `~/.pi/` for a normal install.
 
 ## Fresh-machine bootstrap
 
-Recommended path: install Pi and this repository's setup skill first. Skill audits existing state, proposes exact changes, and waits for approval before mutating machine.
-
-Prerequisites: Node.js/npm on `PATH`, `pipx` or `uv`, Git, and provider credentials supplied through `/login` or environment variables.
+Prerequisites: Node.js `>=22.19.0`, Pi `>=0.84.1`, npm, Git, optional `pipx` or `uv`, and provider credentials supplied through `/login` or environment variables.
 
 ```bash
 # 1) Install Pi
@@ -65,111 +50,121 @@ curl -fsSL https://pi.dev/install.sh | sh
 # or
 npm install -g @earendil-works/pi-coding-agent
 
-# 2) Clone setup repository and enter its root
-git clone https://github.com/irfansofyana/pi-setup.git
-cd pi-setup
+# 2) Install one reviewed pi-setup release
+pi install git:github.com/irfansofyana/pi-setup@v0.1.0
 
-# 3) Install setup skill
-npx skills add . --global --skill pi-setup
-
-# 4) Start Pi from this repository
+# 3) Start Pi
 pi
 ```
 
-Inside Pi, authenticate if needed, then invoke skill:
+Use the reviewed release tag you intend to run. Inside Pi:
 
 ```text
 /login
-Audit this Pi setup and propose changes; do not mutate until I approve.
+/pi-setup-init
+/pi-setup-doctor
 ```
 
-Skill reads canonical manifest below and relevant topic guides. Manual setup remains available through [Installation](docs/setup/installation.md).
+`/pi-setup-init` queues the bundled skill's audit/proposal prompt; `/pi-setup-doctor` queues a strictly read-only health audit. Neither command mutates files or settings directly. On a fresh device, init proposes the required companion packages and `irfan-sumi`, then waits for numbered approval.
 
-## Required npm package manifest
+## Existing-device migration
 
-These nine commands are canonical. Keep package names and install forms exact.
+The same package command is non-destructive: the package has no postinstall settings migration and does not overwrite existing settings, config, state, memory, generated skills, logs, or secrets.
 
-```bash
-pi install npm:pi-mcp-adapter
-pi install npm:@tintinweb/pi-subagents
-pi install npm:@gotgenes/pi-permission-system
-pi install npm:context-mode
-pi install npm:@juicesharp/rpiv-ask-user-question
-pi install npm:pi-markdown-preview
-pi install npm:@juicesharp/rpiv-todo
-pi install npm:pi-9router-ext
-pi install npm:pi-stats-ext
+After installing the tagged package, ask Pi:
+
+```text
+/pi-setup-init
 ```
 
-| Package | Purpose |
-| --- | --- |
-| `pi-mcp-adapter` | Standard MCP config and tools |
-| `@tintinweb/pi-subagents` | Delegated agent workflows |
-| `@gotgenes/pi-permission-system` | Approval gates |
-| `context-mode` | Context-saving tools and workflows |
-| `@juicesharp/rpiv-ask-user-question` | Structured questions |
-| `pi-markdown-preview` | Markdown render/export |
-| `@juicesharp/rpiv-todo` | Task tracking |
-| `pi-9router-ext` | Model/search routing |
-| `pi-stats-ext` | Usage statistics |
+The migration workflow must:
 
-Run `/reload` after package installation. Use `pi list` to inspect installed package sources.
+1. Inventory `pi list`, legacy manual extensions/themes, global/project config, and selected theme.
+2. Verify the separately managed companion packages below and propose only missing or version-drifted installs.
+3. Distinguish duplicate loaders from user-owned config/state directories.
+4. Present numbered actions with private backups, rollback, and reload impact.
+5. Remove only explicitly approved duplicates after first-party resources are verified.
+6. Preserve the current theme unless a separate theme proposal is approved.
+7. Re-audit after changes and report unresolved or blocked items.
+
+Global subagent templates still require reviewed, skill-managed deployment to `~/.pi/agent/agents/`; Pi package resources do not natively include agents. Full procedure: [Installation](docs/setup/installation.md#existing-device-migration) and [Subagent team](docs/setup/subagents.md).
+
+<a id="required-npm-package-manifest"></a>
+
+## Required companion packages
+
+The root `piSetup.requiredPackages` metadata is canonical. These packages are installed as separate Pi package sources by the approval-gated setup skill; the first-party package does not absorb their lifecycle scripts or resource paths.
+
+| Package | Version | Purpose |
+| --- | --- | --- |
+| `@gotgenes/pi-permission-system` | `24.0.0` | Approval gates |
+| `@juicesharp/rpiv-ask-user-question` | `2.4.0` | Structured questions |
+| `@juicesharp/rpiv-todo` | `2.4.0` | Task tracking |
+| `@tintinweb/pi-subagents` | `0.14.3` | Delegated agent workflows |
+| `context-mode` | `1.0.169` | Context-saving tools and skills |
+| `pi-9router-ext` | `0.2.3` | Model/search routing |
+| `pi-markdown-preview` | `0.11.3` | Markdown render/export |
+| `pi-mcp-adapter` | `2.21.1` | Standard MCP config and tools |
+| `pi-stats-ext` | `0.2.0` | Usage statistics |
+
+Use `pi list` to inspect package sources. These companion packages remain separate Pi-managed sources by design; their presence is expected, not a duplicate of the first-party package.
 
 ## Configuration scope summary
 
 | Path | Scope | Purpose |
 | --- | --- | --- |
-| `~/.pi/agent/settings.json` | Global Pi | Theme and Pi settings |
-| `~/.pi/agent/themes/` | Global Pi | Themes |
-| `~/.pi/agent/extensions/` | Global Pi | Extensions, including Command Deck chat editor |
-| `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
-| `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
-| `~/.pi/agent/extensions/pi-permission-system/config.json` | Global Pi | Permission policy |
-| `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter |
-| `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon |
-| `~/.pi/agent/managed-skills/` | Global Pi | Generated skills |
-| `~/.pi/agent/btw/config.json` | Global Pi | BTW side-question config |
-| `~/.pi/agent/goal-loop/` | Global Pi | Goal config, state, archive, logs |
+| Installed first-party package | Pi-managed | Repository-owned extensions, themes, and skills |
+| Required companion packages | Pi-managed | MCP, permissions, context mode, subagents, routing, and utility extensions |
+| `~/.pi/agent/settings.json` | Global user | Theme and Pi settings |
+| `~/.pi/agent/extensions/` | Global user | Legacy/manual loaders and extension-local policy |
+| `~/.pi/agent/agents/` | Global user | Trusted reusable subagent roles |
+| `~/.pi/agent/subagents.json` | Global user | Subagent defaults |
+| `~/.pi/agent/headroom/config.json` | Global user | Headroom adapter config |
+| `~/.pi/agent/hindsight/config.json` | Global user | Hindsight daemon config |
+| `~/.pi/agent/managed-skills/` | Global user | Generated skills |
+| `~/.pi/agent/btw/config.json` | Global user | BTW config |
+| `~/.pi/agent/goal-loop/` | Global user | Goal config, state, archive, logs |
 | `~/.config/mcp/mcp.json` | Global shared | Preferred shared MCP config |
 | `~/.pi/agent/mcp.json` | Global Pi | Pi-specific MCP override |
 | `.mcp.json` | Project-local | Project MCP servers |
 
-Global files affect every Pi project. Project-local `.mcp.json` belongs at project root and should contain only project-specific servers. Never commit credentials; use `/login`, environment variables, or referenced provider profiles.
-
-Full paths and configuration examples: [Configuration](docs/setup/configuration.md).
+Package updates replace package-owned code, not user-owned configuration. Preserve unknown keys during approved config edits. Never commit credentials; use `/login`, environment variables, or provider profiles.
 
 ## Topic guides
 
 | Guide | Contents |
 | --- | --- |
-| [Installation](docs/setup/installation.md) | Prerequisites, Pi install, package-manifest usage, local template copy |
-| [Configuration](docs/setup/configuration.md) | Paths, scope, auth, theme, signature UI |
-| [MCP](docs/setup/mcp.md) | Global/project config, search servers, OAuth, bearer auth, commands |
+| [Installation](docs/setup/installation.md) | Package install, fresh setup, migration, rollback |
+| [Configuration](docs/setup/configuration.md) | Ownership, paths, auth, themes, signature UI |
+| [MCP](docs/setup/mcp.md) | Global/project config, search, OAuth, bearer auth |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
-| [Subagent team](docs/setup/subagents.md) | Ciung, Laya, Sangkur, Prabu, orchestration, and trust boundary |
-| [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop, prompt loop |
-| [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Scope choices, trigger prompts, tool payloads, memory hygiene, and a practical workflow |
+| [Subagent team](docs/setup/subagents.md) | Team roles, reviewed deployment, trust boundary |
+| [Local extensions](docs/setup/local-extensions.md) | Component behavior and user-owned config/state |
+| [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Memory scopes, tools, and hygiene |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
-| [Operations](docs/setup/operations.md) | Daily commands, verification, troubleshooting, maintenance |
+| [Operations](docs/setup/operations.md) | Verification, updates, rollback, troubleshooting |
 
 ## Setup skill safety model
 
-- Audit is read-only and classifies each item before proposing changes.
-- Every mutation needs explicit proposal-number approval.
-- Existing files receive private backups and rollback steps before replacement.
-- Credentials stay in `/login`, environment variables, or provider profiles.
+- Audit is read-only and classifies package resources, duplicate loaders, config, and state.
+- Every mutation requires explicit proposal-number approval.
+- Targets are re-read before mutation; unexpected drift stops the workflow.
+- Approved removal candidates receive private backups and rollback steps.
+- Settings/config/state/secrets are never package-overwritten.
+- Existing theme changes are separate optional proposals.
+- Missing or version-drifted companions are changed only after approval.
 
 ## Core operating rules
 
-- Install npm Pi packages only with `pi install npm:<package>` commands from canonical manifest.
-- Install GitHub Pi packages with `pi install git:github.com/<owner>/<repo>` when explicitly documented.
-- Install skills with `npx skills` or `npx skills@latest`; do not manually copy skill files.
-- Copy reviewed reusable agent templates to `~/.pi/agent/agents/`; never trust project-defined agents from an untrusted repository.
-- Copy repo-owned local extension templates from `pi/extensions/`.
-- Preserve unknown keys when editing existing JSON/JSONC configuration.
-- Back up config before mutation and stop if installed state differs unexpectedly.
-- Keep credentials in `/login`, environment variables, or provider profile config—not this repository.
-- Run `/reload` after changing extensions, themes, MCP, permissions, skills, or related config.
+- Install the first-party package from a reviewed Git tag.
+- Install the nine required companions as separate Pi package sources through the approval-gated setup skill.
+- Do not manually copy package-owned extensions, themes, or bundled skills.
+- Install unrelated skills with `npx skills` or `npx skills@latest`.
+- Deploy reviewed global agent templates through the bundled skill because agents are not package resources.
+- Keep credentials in `/login`, environment variables, or provider profiles.
+- Preserve user-owned config/state and unknown keys.
+- Back up before approved mutation and stop on unexpected drift.
+- Run `/reload` after package, extension, theme, MCP, permission, or skill changes.
 
 ## Minimal verification
 
@@ -186,10 +181,11 @@ Inside Pi:
 /reload
 /mcp
 /mcp tools
+/agents
 /settings
 ```
 
-Check expected startup extensions/skills, select `irfan-pi` or optional `irfan-sumi`, and inspect permission prompts before mutating files. For component checks and troubleshooting, use [Operations](docs/setup/operations.md).
+Confirm the first-party package and companion package sources, expected commands/tools/skills/themes, current selected theme, and permission prompts. Existing devices should also confirm that no command or tool is registered twice. See [Operations](docs/setup/operations.md).
 
 ## Updating setup
 
@@ -199,4 +195,4 @@ pi update --extensions
 pi list
 ```
 
-After any extension/config change, run `/reload` or restart Pi. Repository changes alone do not update files already copied under `~/.pi/agent/`.
+Use reviewed release tags for reproducible installs. An update changes package-owned resources only; configuration migration remains proposal-driven. Run `/reload` or restart Pi, verify, and retain migration backups until the setup is accepted.

@@ -1,0 +1,62 @@
+{
+  "name": "@irfansofyana/pi-setup",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Irfan's installable Pi coding-agent setup",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent"
+  ],
+  "files": [
+    "pi/extensions",
+    "pi/themes",
+    "pi/agents",
+    "skills",
+    "docs/setup",
+    "README.md",
+    "AGENTS.md"
+  ],
+  "engines": {
+    "node": ">=22.19.0",
+    "pi": ">=0.84.1"
+  },
+  "scripts": {
+    "test": "npm run test:package && npm run test:extensions && npm run test:signature && npm run test:agents",
+    "test:package": "node --test tests/package-contract.test.mjs",
+    "test:extensions": "node --test pi/extensions/*/*.test.ts",
+    "test:signature": "node --test pi/extensions/pi-signature.test.ts",
+    "test:agents": "node --test pi/agents/agent-templates.test.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./pi/extensions/pi-signature.ts",
+      "./pi/extensions/*/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "themes": [
+      "./pi/themes/*.json"
+    ]
+  },
+  "piSetup": {
+    "defaultTheme": "irfan-sumi",
+    "requiredPackages": [
+      "npm:pi-mcp-adapter@2.21.1",
+      "npm:@tintinweb/pi-subagents@0.14.3",
+      "npm:@gotgenes/pi-permission-system@24.0.0",
+      "npm:context-mode@1.0.169",
+      "npm:@juicesharp/rpiv-ask-user-question@2.4.0",
+      "npm:pi-markdown-preview@0.11.3",
+      "npm:@juicesharp/rpiv-todo@2.4.0",
+      "npm:pi-9router-ext@0.2.3",
+      "npm:pi-stats-ext@0.2.0"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

@@ -38,7 +38,7 @@ headroom --version
 
 ## Install this Pi extension
 
-From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
+This extension loads from the first-party Pi package described in the [setup installation guide](../../../docs/setup/installation.md#install-the-package). Do not copy it into `~/.pi/agent/extensions/`; preserve the user-owned Headroom config when migrating a legacy copy.
 
 Reload Pi:
 

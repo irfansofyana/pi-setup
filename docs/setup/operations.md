@@ -31,6 +31,8 @@ pi --version
 pi list
 ```
 
+Confirm `pi list` shows the tagged first-party package and each required companion as a separate source. Companion packages are expected; audit them for missing or version-drifted sources, not aggregate duplication.
+
 Inside Pi:
 
 ```text
@@ -78,9 +80,9 @@ Use the notion-cli skill to list Notion API endpoints.
 | Skills do not trigger | Restart Pi or `/reload`; confirm skill in startup header |
 | Headroom offline | Run `/headroom doctor`, then `/headroom start` |
 | Hindsight offline | Run `/hindsight diagnose`, check daemon port/config |
-| Duplicate `/caveman` | Remove old external package or local duplicate; keep only repo template |
+| Duplicate command/tool such as `/caveman` | Use the bundled `pi-setup` skill to identify first-party package and manual loaders; back up and remove only the explicitly approved manual duplicate |
 | Transcript blinks or will not scroll | Update `pi-signature.ts`; offscreen header animation must pause to preserve scrollback |
-| Theme not applied | Confirm `irfan-pi.json` copied and selected in `/settings` |
+| Theme not applied | Confirm the first-party package exposes the theme and inspect `/settings`; do not overwrite settings or copy a theme manually |
 
 ## Maintenance
 
@@ -92,4 +94,11 @@ pi list
 
 After changing extensions, themes, MCP config, permission policy, or skills: run `/reload` or restart Pi. After changing environment variables, restart Pi so process inherits new values; `/reload` alone does not refresh shell environment.
 
-Repository template updates do not update installed copies automatically. Back up installed config, compare source and destination, copy selected changes, then re-run verification.
+First-party package updates change repository-owned extensions, themes, and skills. Companion packages update independently. Neither path should rewrite user-owned settings/config/state; re-run the bundled `pi-setup` audit and approve any migration separately.
+
+## Migration rollback
+
+- Keep private migration backups until package resources and user-owned state pass verification.
+- Restore only the failed component's approved legacy loader; do not restore stale settings/config over newer user data.
+- Run `/reload` or restart Pi and repeat the component checks.
+- If package ownership, removal mechanics, or rollback safety is uncertain, stop and leave the item `blocked`.

@@ -2,11 +2,11 @@
 
 Local Pi extension template that adds a Pi-working-root-scoped `/goal` command inspired by Codex Goal mode and Claude Code `/goal`.
 
-Requires Pi >=0.80.4 and subagent package from [canonical README manifest](../../../README.md#required-npm-package-manifest). It uses `agent_end` only to record the result of a run, then uses `agent_settled` for one authoritative decision after retries, compaction, and queued follow-ups have finished.
+Requires Pi >=0.80.4 and the separately managed `@tintinweb/pi-subagents` companion. It uses `agent_end` only to record the result of a run, then uses `agent_settled` for one authoritative decision after retries, compaction, and queued follow-ups have finished.
 
 ## Install
 
-From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
+This extension loads from the first-party Pi package described in the [setup installation guide](../../../docs/setup/installation.md#install-the-package). Preserve user-owned Goal Loop config, state, archives, and logs when migrating a legacy copy.
 
 Reload Pi:
 

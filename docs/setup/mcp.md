@@ -1,6 +1,6 @@
 # MCP
 
-Install MCP adapter from [README required npm package manifest](../../README.md#required-npm-package-manifest). Keep shared servers global and project-only servers in project root.
+The MCP adapter is a separately managed [required companion package](../../README.md#required-npm-package-manifest). Keep shared servers global and project-only servers in project root; first-party or companion package updates do not overwrite either config.
 
 ## Configuration precedence and scope
 

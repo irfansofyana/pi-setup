@@ -1,15 +1,14 @@
 # Installation
 
-Use [README package manifest](../../README.md#required-npm-package-manifest) as canonical npm package list. This guide covers prerequisites, Pi installation, and repo-owned local templates without repeating that manifest.
+Install this repository as one first-party Pi package. It declares repository-owned extensions, themes, and skills. The exact [required companion packages](../../README.md#required-npm-package-manifest) remain separate Pi package sources and are installed by the setup skill only after approval.
 
 ## Prerequisites
 
-- Node.js/npm on `PATH`
+- Node.js `>=22.19.0` and npm on `PATH`
 - Git
-- `pipx` or `uv` for Headroom/Hindsight helper tools
-- LLM provider configured by `/login` or environment variables
-- API keys only for providers you use
-- Shell profile such as `~/.zshrc` or `~/.bashrc`
+- Pi coding agent `>=0.84.1`
+- `pipx` or `uv` for optional Headroom/Hindsight helper tools
+- Provider credentials through `/login`, environment variables, or provider profiles
 
 ## Install Pi
 
@@ -23,116 +22,56 @@ Verify:
 
 ```bash
 pi --version
-pi
 ```
 
-## Install required npm packages
+## Install the package
 
-Run every command in [README required npm package manifest](../../README.md#required-npm-package-manifest). Do not substitute package aliases or duplicate that manifest in topic docs.
+Install a reviewed release tag:
 
-After installation:
-
-```text
-/reload
+```bash
+pi install git:github.com/irfansofyana/pi-setup@v0.1.0
 ```
 
-Inspect package sources:
+Replace `v0.1.0` with a newer release only after reviewing it. One install provides:
+
+- all declared repository extensions under `pi/extensions/`;
+- all themes under `pi/themes/`;
+- the bundled `pi-setup` skill;
+- metadata listing the exact nine companion package sources for the setup skill.
+
+Do not clone the repository, install the setup skill separately, or copy package resources into `~/.pi/agent/` for a normal fresh setup. Companion packages are installed separately because they retain independent ownership, updates, and lifecycle scripts.
+
+Inspect the source after installation:
 
 ```bash
 pi list
 ```
 
-## Install local templates
-
-Repo-owned templates are copied rather than installed from npm.
-
-| Template | Source | Target |
-| --- | --- | --- |
-| Theme | `pi/themes/irfan-pi.json` | `~/.pi/agent/themes/irfan-pi.json` |
-| Minimalist theme | `pi/themes/irfan-sumi.json` | `~/.pi/agent/themes/irfan-sumi.json` |
-| Signature UI | `pi/extensions/pi-signature.ts` | `~/.pi/agent/extensions/pi-signature.ts` |
-| Command Deck chat editor | `pi/extensions/command-deck` | `~/.pi/agent/extensions/command-deck` |
-| Headroom | `pi/extensions/headroom` | `~/.pi/agent/extensions/headroom` |
-| Hindsight | `pi/extensions/hindsight` | `~/.pi/agent/extensions/hindsight` |
-| Managed skills | `pi/extensions/managed-skills` | `~/.pi/agent/extensions/managed-skills` |
-| Goal loop | `pi/extensions/goal-loop` | `~/.pi/agent/extensions/goal-loop` |
-| Prompt loop | `pi/extensions/loop` | `~/.pi/agent/extensions/loop` |
-| BTW | `pi/extensions/btw` | `~/.pi/agent/extensions/btw` |
-| Caveman | `pi/extensions/caveman` | `~/.pi/agent/extensions/caveman` |
-
-Deploy exact copies with private backups. Run from repository root:
-
-```bash
-set -eu
-umask 077
-mkdir -p "$HOME/.pi/agent/themes" "$HOME/.pi/agent/extensions" "$HOME/.pi/agent/backups"
-backup_root=$(mktemp -d "$HOME/.pi/agent/backups/setup-XXXXXXXX")
-
-deploy() {
-  src=$1
-  dst=$2
-  name=$3
-  had_old=0
-  if [ -e "$dst" ]; then
-    mv "$dst" "$backup_root/$name"
-    had_old=1
-  fi
-  if ! cp -R "$src" "$dst"; then
-    rm -rf "$dst"
-    if [ "$had_old" -eq 1 ]; then
-      mv "$backup_root/$name" "$dst"
-    fi
-    return 1
-  fi
-}
-
-deploy pi/themes/irfan-pi.json "$HOME/.pi/agent/themes/irfan-pi.json" irfan-pi.json
-deploy pi/themes/irfan-sumi.json "$HOME/.pi/agent/themes/irfan-sumi.json" irfan-sumi.json
-deploy pi/extensions/pi-signature.ts "$HOME/.pi/agent/extensions/pi-signature.ts" pi-signature.ts
-deploy pi/extensions/command-deck "$HOME/.pi/agent/extensions/command-deck" command-deck
-deploy pi/extensions/headroom "$HOME/.pi/agent/extensions/headroom" headroom
-deploy pi/extensions/hindsight "$HOME/.pi/agent/extensions/hindsight" hindsight
-deploy pi/extensions/managed-skills "$HOME/.pi/agent/extensions/managed-skills" managed-skills
-deploy pi/extensions/goal-loop "$HOME/.pi/agent/extensions/goal-loop" goal-loop
-deploy pi/extensions/loop "$HOME/.pi/agent/extensions/loop" loop
-deploy pi/extensions/btw "$HOME/.pi/agent/extensions/btw" btw
-deploy pi/extensions/caveman "$HOME/.pi/agent/extensions/caveman" caveman
-
-printf 'Backups: %s\n' "$backup_root"
-```
-
-Keep backup directory until `/reload` and component verification pass. Restore failed components from their named backup entries. Do **not** copy entire `pi/` directory into `~/.pi/`.
-
-## Install Headroom CLI
-
-Headroom CLI comes from Python packaging. npm `headroom-ai` is SDK-only.
-
-```bash
-pipx install "headroom-ai[proxy]"
-# or
-uv tool install "headroom-ai[proxy]"
-```
-
-## Initial Pi setup
-
-Start Pi:
+Then start Pi and reload:
 
 ```bash
 pi
 ```
 
-Then run:
+```text
+/reload
+```
+
+## Fresh setup
+
+Inside Pi, authenticate and run the package commands:
 
 ```text
 /login
-/reload
-/mcp setup
-/settings
+/pi-setup-init
+/pi-setup-doctor
 ```
 
-Select `irfan-pi` for the original blue/cobalt UI or `irfan-sumi` for the minimalist ink-and-amber UI. Existing `irfan-pi` users should follow [Switch from `irfan-pi` to `irfan-sumi`](configuration.md#switch-from-irfan-pi-to-irfan-sumi).
+`/pi-setup-init` queues the bundled skill's setup/migration prompt. `/pi-setup-doctor` queues a strictly read-only audit. The commands do not mutate files or settings directly. `irfan-sumi` is the package's fresh-install setup metadata default; init should classify an absent theme selection as fresh, propose missing companion package installs and `irfan-sumi`, then wait for approval.
 
-Continue with:
+For an approved companion proposal, the skill runs `pi install <exact-source>` using the value from `piSetup.requiredPackages`, one source at a time, and verifies it with `pi list`. Example shape: `pi install npm:pi-mcp-adapter@2.21.1`. It must not silently replace a different installed source.
+
+Continue with the relevant proposals and topic docs:
 
 - [Configuration](configuration.md)
 - [MCP](mcp.md)
@@ -141,4 +80,121 @@ Continue with:
 - [Local extensions](local-extensions.md)
 - [Skills and tools](skills-and-tools.md)
 
-Run `/reload` after extension, theme, MCP, permission, or skill changes.
+## Existing-device migration
+
+Installing the first-party package is non-destructive. It does not overwrite:
+
+- `~/.pi/agent/settings.json`;
+- extension configuration, state, archives, logs, memory, or generated skills;
+- global or project MCP configuration;
+- provider auth or credential stores;
+- global subagent templates.
+
+The first-party package can initially coexist with legacy resources. That coexistence is for audit and rollback, not the desired final state: duplicate extension loaders may register the same commands or tools.
+
+### 1. Capture current state
+
+Before installing, keep a read-only record of package sources:
+
+```bash
+pi list
+```
+
+Do not move or delete existing files as a prerequisite. Install the reviewed tag with the same package command above, then start or reload Pi.
+
+### 2. Invoke the bundled migration skill
+
+Run:
+
+```text
+/pi-setup-init
+```
+
+The audit must cover:
+
+- `pi list` and the separately managed companion packages declared in `piSetup.requiredPackages`;
+- known manual extension files/directories under `~/.pi/agent/extensions/`;
+- manually copied package themes under `~/.pi/agent/themes/`;
+- selected theme and unrelated keys in `~/.pi/agent/settings.json`;
+- component config/state paths listed in [Configuration](configuration.md);
+- global and project MCP configuration;
+- trusted global agents and subagent defaults;
+- credential references by name only, with values redacted.
+
+A matching name is not enough to delete a path. The skill must distinguish a duplicate code loader from user-owned config/state. For example, `~/.pi/agent/hindsight/config.json` remains user-owned even after Hindsight code loads from the package.
+
+### 3. Review numbered proposals
+
+Each proposed mutation must include:
+
+1. evidence and classification;
+2. exact package source or filesystem target;
+3. intended action and why the package resource or companion-package version is correct;
+4. user/service impact;
+5. private backup path and retention plan;
+6. exact rollback steps;
+7. required `/reload`, shell restart, daemon restart, or Pi restart.
+
+Review required duplicate cleanup separately from optional configuration changes. On an existing device, changing the selected theme to `irfan-sumi` is always an optional, separately numbered proposal.
+
+### 4. Approve narrowly
+
+Approve explicit proposal numbers only. The skill must re-read every target, stop on drift, set restrictive backup permissions, and change only approved items.
+
+The cleanup order is:
+
+1. verify that the first-party package exposes the expected replacement resource;
+2. back up the approved legacy loader evidence;
+3. remove only that approved duplicate;
+4. reload/restart Pi;
+5. verify the component before continuing.
+
+Companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates.
+
+Do not delete configuration/state directories when removing loader duplicates. Do not replace the whole settings file to change one key. Never copy, print, or migrate credentials.
+
+### 5. Verify and retain rollback
+
+From shell:
+
+```bash
+pi list
+```
+
+Inside Pi:
+
+```text
+/reload
+/mcp
+/mcp tools
+/agents
+/settings
+```
+
+Verify expected commands, tools, skills, and themes once each; confirm component config/state still works. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
+
+## Global subagent templates
+
+Pi package resources do not natively include agents. The package includes reviewed source templates, but they are not automatically activated.
+
+Use the bundled `pi-setup` skill to audit and propose deployment to `~/.pi/agent/agents/` and narrow merges into `~/.pi/agent/subagents.json`. Deployment requires explicit approval, private backup, template review, and preservation of machine-local model choices unless replacement is approved.
+
+See [Subagent team](subagents.md#install-the-trusted-templates) for the authoritative deployment and rollback procedure.
+
+## Install Headroom CLI
+
+Headroom code is package-owned, but its Python proxy CLI remains separate. npm `headroom-ai` is SDK-only.
+
+```bash
+pipx install "headroom-ai[proxy]"
+# or
+uv tool install "headroom-ai[proxy]"
+```
+
+Hindsight daemon/profile setup is also external to Pi package installation; see [Local extensions](local-extensions.md#hindsight-memory-adapter).
+
+## Final checks
+
+Run `/reload` after package, extension, theme, MCP, permission, or skill changes. Restart Pi after environment-variable changes because `/reload` does not refresh the shell environment.
+
+For updates and rollback, see [Operations](operations.md).

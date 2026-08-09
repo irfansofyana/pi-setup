@@ -6,18 +6,11 @@ Repo-owned Pi extension implementing Cursor-style `/loop` behavior: repeat a pro
 
 - Pi `>=0.80.4`
 - repo-owned `goal-loop` extension
-- `@tintinweb/pi-subagents` RPC protocol version 2 from the canonical README package manifest
+- the separately managed `@tintinweb/pi-subagents` companion using RPC protocol version 2
 
 ## Install
 
-Use the private backup-and-replace procedure in [`docs/setup/installation.md`](../../../docs/setup/installation.md#install-local-templates), copying both local templates:
-
-```text
-pi/extensions/goal-loop
-pi/extensions/loop
-```
-
-Then run `/reload` or restart Pi.
+Prompt Loop and Goal Loop load together from the first-party Pi package described in [`docs/setup/installation.md`](../../../docs/setup/installation.md#install-the-package). Do not manually copy either loader. Existing devices use the approval-gated migration workflow before removing legacy copies, then run `/reload` or restart Pi.
 
 ## Commands
 
