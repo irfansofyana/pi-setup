@@ -59,7 +59,7 @@ Audit relevant surfaces with read-only checks:
 - Expected local template presence and source/destination drift.
 - Global versus project MCP files and server definitions.
 - Permission policy path and intent.
-- Trusted global subagent templates, settings, role skills, and project-agent trust exposure.
+- Trusted global subagent templates, settings, authority/model/context contracts, role skills, and project-agent trust exposure.
 - Theme selection and signature extension.
 - Headroom, Hindsight, managed-skills, goal-loop, prompt-loop, BTW, and Caveman files/config.
 - Requested skills and optional tools.

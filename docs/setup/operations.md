@@ -12,6 +12,7 @@
 | MCP tools | `/mcp tools` |
 | Permissions UI | `/permission-system` |
 | Subagent team/status/settings | `/agents` |
+| Allowed subagent models | `/scoped-models` |
 | Headroom status | `/headroom status` |
 | Hindsight diagnose | `/hindsight diagnose` |
 | BTW status | `/btw status` |
@@ -37,6 +38,7 @@ Inside Pi:
 /mcp
 /mcp tools
 /agents
+/scoped-models
 /settings
 ```
 

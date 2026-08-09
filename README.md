@@ -11,7 +11,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Core agent | Pi coding agent with LLM provider login via `/login` |
 | Theme/UI | `irfan-pi` and minimalist `irfan-sumi` themes, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
-| Delegation | Trusted global Ciung researcher, Laya code mapper, Sangkur worktree builder, Prabu reviewer, and structured user questions |
+| Delegation | Fresh task packets, web-only Ciung research, Laya code mapping, Sangkur worktree builds, Prabu review, and native per-invocation model selection |
 | Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
 | Context | `context-mode` and local Headroom compression/retrieval |
 | Memory | Local Hindsight adapter and generated managed skills |

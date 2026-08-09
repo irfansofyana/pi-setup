@@ -37,7 +37,8 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 
 - Keep reviewed reusable agent templates under `pi/agents/`; this path is intentionally not auto-discovered by `@tintinweb/pi-subagents`.
 - Install reusable roles globally under `~/.pi/agent/agents/`. Do not recommend invoking project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
-- Keep researcher/code-mapper/reviewer read-only, bound turns, and disable output transcripts unless a documented workflow explicitly needs them.
+- Keep Ciung mechanically web-only; keep Laya and Prabu read-only and network-free. Every role must set `inherit_context: false`, keep bounded turns, and disable output transcripts.
+- Keep canonical templates model-neutral. Per-invocation or installed-copy model choices use exact `provider/model-id`; treat `scopeModels` as a guardrail, not a security boundary.
 - Builder must use Git worktree isolation and may not push, merge, deploy, publish, or handle secrets.
 - `docs/setup/subagents.md` owns team roles, copy/rollback procedure, orchestration prompts, and trust guidance.
 
