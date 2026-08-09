@@ -21,6 +21,12 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Skills | Research, review, diagrams, frontend, sparring, docs, and Notion workflows |
 | Optional tools | Understand-Anything code graphs and Notion `ntn` CLI |
 
+### `irfan-sumi` preview
+
+![Pi using the minimalist irfan-sumi theme](docs/images/irfan-sumi-preview.png)
+
+`irfan-sumi` keeps the full Pi workflow while reducing the header and chat input to warm, quiet essentials. Existing `irfan-pi` users can follow the [switch and rollback guide](docs/setup/configuration.md#switch-from-irfan-pi-to-irfan-sumi).
+
 ## Repository layout
 
 ```text
