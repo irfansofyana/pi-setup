@@ -1,11 +1,13 @@
 # Configuration
 
-Keep global Pi configuration separate from project-local configuration. Preserve unknown keys when modifying existing files.
+Keep package-owned resources, global Pi configuration, and project-local configuration separate. Package installation does not rewrite user files. Preserve unknown keys when modifying existing files through an approved proposal.
 
 ## Configuration paths
 
 | Path | Scope | Use |
 | --- | --- | --- |
+| Installed `@irfansofyana/pi-setup` package | Pi-managed | Repository-owned extensions, themes, and skills |
+| Required companion packages | Pi-managed | Separate sources pinned by `piSetup.requiredPackages` |
 | `~/.pi/agent/settings.json` | Global Pi | Pi settings and selected theme |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
@@ -29,7 +31,7 @@ Keep global Pi configuration separate from project-local configuration. Preserve
 | `.mcp.json` | Project-local | Project MCP servers |
 | `~/.pi/agent/mcp.json` | Pi global | Pi-specific MCP override |
 
-Use global paths for behavior shared across projects. Project subagent settings override global keys. Treat project agent definitions as executable-capability configuration and use them only in trusted repositories; see [Subagent team](subagents.md). Put `.mcp.json` at project root only when servers are project-specific. See [MCP](mcp.md) for examples.
+Package-owned code may read these user-owned paths, but package updates must not replace them. Use global paths for behavior shared across projects. Project subagent settings override global keys. Treat project agent definitions as executable-capability configuration and use them only in trusted repositories; see [Subagent team](subagents.md). Put `.mcp.json` at project root only when servers are project-specific. See [MCP](mcp.md) for examples.
 
 ## Secrets and authentication
 
@@ -71,12 +73,12 @@ For provider credentials, prefer environment variables or `/login`; do not hardc
 Included:
 
 - `irfan-pi`: main blue/cobalt theme with inline color variables and export colors; standalone with no runtime dependencies.
-- `irfan-sumi`: optional ink-black, warm-neutral, and amber theme. Activates Command Deck's borderless two-line editor and Pi Signature's one-line breathing `π` header without changing `irfan-pi`.
+- `irfan-sumi`: ink-black, warm-neutral, and amber theme and the fresh-install setup metadata default. Activates Command Deck's borderless two-line editor and Pi Signature's one-line breathing `π` header without changing `irfan-pi`.
 - `irfan-gruvbox`: alternate Gruvbox Dark theme with OMP-inspired neutral tool cards, readable code output, and softer greens.
 - `command-deck`: custom `CustomEditor` chat input with labeled borders, placeholder, state labels, spinner, hints, and responsive fallback. Uses Pi public APIs; does not patch `pi-tui`.
 - `pi-signature.ts`: animated gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, and compact footer statuses. Under `irfan-sumi`, the ornament collapses into a one-line signature whose amber `π` slowly breathes, plus a quiet `working` pulse. Header animation uses cached normal-render line count to pause outside live viewport without polling full TUI tree, preserving terminal scrollback and idle performance.
 
-Install theme and signature with private backup-and-replace procedure in [Installation](installation.md#install-local-templates). Do not overwrite existing targets with raw `cp`.
+The first-party package exposes themes, Command Deck, and Pi Signature directly. Do not copy package-owned resources into `~/.pi/agent/`. Existing manual copies are migration candidates handled by the approval-gated procedure in [Installation](installation.md#existing-device-migration); user settings remain user-owned.
 
 Select theme in `/settings`, or merge these settings into existing Pi settings:
 
@@ -87,17 +89,14 @@ Select theme in `/settings`, or merge these settings into existing Pi settings:
 }
 ```
 
-`command-deck` owns chat-editor layout and state labels. It keeps the labeled frame for other themes and automatically switches to a compact prompt rail for `irfan-sumi`. `editorPaddingX` controls its text padding. Install it from `pi/extensions/command-deck/` as described in [Installation](installation.md#install-local-templates).
+`command-deck` owns chat-editor layout and state labels. It keeps the labeled frame for other themes and automatically switches to a compact prompt rail for `irfan-sumi`. `editorPaddingX` controls its text padding. It loads from the first-party package.
 
 ### Switch from `irfan-pi` to `irfan-sumi`
 
 The themes coexist. Switching to `irfan-sumi` does not overwrite or remove `irfan-pi`.
 
-1. Update the repository, then deploy these three current templates using the backup procedure in [Install local templates](installation.md#install-local-templates):
-   - `pi/themes/irfan-sumi.json`
-   - `pi/extensions/pi-signature.ts`
-   - `pi/extensions/command-deck/`
-2. Start Pi and reload the templates:
+1. Confirm the first-party package is installed and up to date with `pi list`. Do not replace any manually copied theme or extension during this step.
+2. Start Pi and reload package resources:
 
    ```text
    /reload
@@ -109,7 +108,7 @@ The themes coexist. Switching to `irfan-sumi` does not overwrite or remove `irfa
    /settings
    ```
 
-4. Set **Theme** to `irfan-sumi`. Pi persists the choice in `~/.pi/agent/settings.json`.
+4. Set **Theme** to `irfan-sumi`. Pi persists the choice in `~/.pi/agent/settings.json`. On an existing device, do this only after approving the separate theme-change proposal.
 
 Alternatively, while Pi is stopped, change only the existing `theme` field:
 

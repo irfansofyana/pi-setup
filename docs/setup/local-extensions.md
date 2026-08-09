@@ -1,6 +1,6 @@
 # Local Extensions
 
-Copy repo-owned templates from `pi/extensions/` into `~/.pi/agent/extensions/`. Install required npm dependencies from [README package manifest](../../README.md#required-npm-package-manifest); this guide does not duplicate canonical package commands.
+The first-party Pi package loads repository-owned extensions directly. Required third-party companions remain separate Pi-managed sources declared in `piSetup.requiredPackages`. Do not manually copy first-party code into `~/.pi/agent/extensions/`. This guide owns component behavior and user-owned configuration/state; see [Installation](installation.md#existing-device-migration) for approval-gated legacy cleanup.
 
 ## Command Deck chat editor
 
@@ -15,7 +15,7 @@ Features:
 
 Requires Pi `>=0.80.10`. Pi supplies `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`; no extra runtime package is required.
 
-Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates). The source template is [`pi/extensions/command-deck`](../../pi/extensions/command-deck).
+Command Deck loads from the first-party package. A legacy manual copy at `~/.pi/agent/extensions/command-deck` is a duplicate-loader candidate, but may be backed up and removed only through an approved migration proposal.
 
 Run `/reload` after installation. If another extension replaces the editor, load order determines which editor is active.
 
@@ -42,7 +42,7 @@ pipx install "headroom-ai[proxy]"
 uv tool install "headroom-ai[proxy]"
 ```
 
-Deploy adapter with private backup-and-replace procedure in [Installation](installation.md#install-local-templates).
+The Headroom adapter loads from the first-party package. Its CLI and `~/.pi/agent/headroom/config.json` remain external/user-owned and must survive package updates and duplicate cleanup.
 
 npm `headroom-ai` is SDK-only.
 
@@ -132,7 +132,7 @@ Keep backup private with `umask 077` or equivalent. Profile naming convention: u
 
 For API-key OpenAI, set `HINDSIGHT_API_LLM_PROVIDER=openai` and pass `HINDSIGHT_API_LLM_API_KEY` through environment/profile config, not this repo.
 
-Install adapter with private backup-and-replace procedure in [Installation](installation.md#install-local-templates).
+The Hindsight adapter loads from the first-party package. Preserve `~/.pi/agent/hindsight/config.json` and Hindsight profile/daemon state when migrating a legacy manual loader.
 
 Commands:
 
@@ -180,7 +180,7 @@ Purpose: OMP-inspired generated reusable skills for Pi. Provides `manage_skill` 
 
 Requires Pi `>=0.80.4`; `autoContinue` uses `agent_settled` so hidden capture waits for retries, compaction, and queued follow-ups to finish.
 
-Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates).
+The Managed Skills extension loads from the first-party package. Preserve its user-owned config and generated skills during updates and migration.
 
 Commands:
 
@@ -241,7 +241,7 @@ Run `/reload` after creating, updating, deleting, or copying managed skills.
 
 Purpose: local `/btw` side-question channel for quick context-aware questions while the main Pi agent keeps working.
 
-Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates).
+BTW loads from the first-party package. Preserve its optional user-owned config during updates and migration.
 
 Commands:
 
@@ -287,7 +287,7 @@ Run `/reload` after install or config changes. See [extension README](../../pi/e
 
 Purpose: local terse-response style extension, replacing old external `pi-caveman` Git package.
 
-Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates).
+Caveman loads from the first-party package. An old external package or manual Caveman loader can register the same command; remove it only after aggregate verification, private backup, and explicit proposal approval.
 
 Commands:
 
@@ -317,9 +317,9 @@ If old upstream config exists at `~/.pi/agent/caveman.json`, local extension rea
 
 Purpose: Pi-working-root-scoped `/goal` command with persisted state, completion receipts, usage limits, verification evidence, and auto-continue loops.
 
-Requires Pi `>=0.80.4` and subagent package from [README manifest](../../README.md#required-npm-package-manifest). Extension records run output at `agent_end`, calls separate evaluator, and makes one continuation decision at `agent_settled`.
+Requires Pi `>=0.80.4` and the separately managed `@tintinweb/pi-subagents` companion. Extension records run output at `agent_end`, calls separate evaluator, and makes one continuation decision at `agent_settled`.
 
-Install with private backup-and-replace procedure in [Installation](installation.md#install-local-templates).
+Goal Loop loads from the first-party package. Preserve `~/.pi/agent/goal-loop/` config, state, archive, and logs when removing a legacy manual loader.
 
 Commands:
 
@@ -373,7 +373,7 @@ Completion writes idempotent snapshot under `~/.pi/agent/goal-loop/archive/` bef
 
 Only finalized assistant usage from accepted autonomous runs accumulates (`input`, `output`, cache fields, `totalTokens`, and `cost.total`). Reasoning is already included in output and is not added twice; ordinary user turns do not count. Reaching opt-in token budget produces `token_budget_limited`. Correlated terminal HTTP 429 produces `usage_limited`, while successful retry remains transient.
 
-Existing installations should recopy template, then run `/reload` or restart Pi.
+Existing installations should update the first-party package, run the bundled migration audit for duplicates, then `/reload` or restart Pi. Do not re-copy the template.
 
 Extension does not bypass Pi permissions. It does not schedule work after Pi exits or execute verification commands independently. Same-worktree detection still requires launching concurrent sessions from distinct Git worktree roots.
 
@@ -381,9 +381,9 @@ Extension does not bypass Pi permissions. It does not schedule work after Pi exi
 
 Purpose: repo-owned Cursor-style `/loop` for repeated local prompts. It runs once immediately, then continues on fixed intervals or agent-selected time/safe-event wakes until agent declares completion, user stops it, or Pi exits.
 
-Requires Pi `>=0.80.4`, repo-owned Goal Loop template, and `@tintinweb/pi-subagents` RPC protocol version 2 from [README package manifest](../../README.md#required-npm-package-manifest).
+Requires Pi `>=0.80.4`, package-owned Goal Loop, and the separately managed `@tintinweb/pi-subagents` companion using RPC protocol version 2.
 
-Use private backup-and-replace procedure in [Installation](installation.md#install-local-templates). Copy both `pi/extensions/goal-loop/` and `pi/extensions/loop/`, then run `/reload` or restart Pi.
+Prompt Loop and Goal Loop load together from the first-party package. Existing devices should use the approval-gated migration audit to remove only verified legacy loaders, then run `/reload` or restart Pi.
 
 Commands:
 

@@ -14,7 +14,7 @@ It never writes user-authored skill directories such as `~/.pi/agent/skills`, `.
 
 ## Install
 
-From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
+This extension loads from the first-party Pi package described in the [setup installation guide](../../../docs/setup/installation.md#install-the-package). Preserve generated skills and user-owned config when migrating a legacy copy.
 
 Reload Pi:
 

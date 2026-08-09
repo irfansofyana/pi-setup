@@ -6,7 +6,7 @@ Purpose: terse Pi answers on demand, with local config and no external Git packa
 
 ## Install
 
-From repository root, use canonical private backup-and-replace procedure in [setup installation guide](../../../docs/setup/installation.md#install-local-templates).
+This extension loads from the first-party Pi package described in the [setup installation guide](../../../docs/setup/installation.md#install-the-package). Remove an old external or manual loader only through the approval-gated migration workflow.
 
 Then reload Pi:
 

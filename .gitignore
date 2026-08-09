@@ -1,6 +1,7 @@
 # Pi runtime data
 data/
 .understand-anything/
+node_modules/
 
 # OS files
 .DS_Store

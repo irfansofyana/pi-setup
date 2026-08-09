@@ -24,7 +24,7 @@ The main Pi session remains coordinator. Specialists return evidence and branche
 
 ## Prerequisites
 
-Install the package from the canonical [README manifest](../../README.md#required-npm-package-manifest). Install the role skills from [Skills and optional tools](skills-and-tools.md):
+`@tintinweb/pi-subagents` is a separately managed [required companion package](../../README.md#required-npm-package-manifest). Pi package resources do not natively include agents, so continue to review and deploy the global templates in this guide. Install the role skills from [Skills and optional tools](skills-and-tools.md):
 
 ```bash
 npx skills add irfansofyana/ai-marketplace --global --skill 9router-web-researcher

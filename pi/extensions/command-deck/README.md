@@ -16,10 +16,4 @@ Uses Pi's public `CustomEditor` extension API. It does not patch Pi or `@earendi
 
 Requires Pi `>=0.80.10`. Pi supplies `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`; no extra runtime package is required.
 
-Install by copying this directory to:
-
-```text
-~/.pi/agent/extensions/command-deck/
-```
-
-Run `/reload` after installation. Re-copy repo template after updates.
+Command Deck loads from the first-party Pi package described in the [setup installation guide](../../../docs/setup/installation.md#install-the-package). Do not copy it into `~/.pi/agent/extensions/`; a legacy manual copy is an approval-gated migration candidate. Run `/reload` after package installation or update.

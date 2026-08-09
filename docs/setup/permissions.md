@@ -1,6 +1,6 @@
 # Permissions
 
-Install permission extension from [README required npm package manifest](../../README.md#required-npm-package-manifest).
+The permission extension is a separately managed [required companion package](../../README.md#required-npm-package-manifest). The setup skill proposes its exact source on a fresh setup and waits for approval.
 
 ## Global policy path
 
