@@ -49,6 +49,7 @@ Repo-owned templates are copied rather than installed from npm.
 | Template | Source | Target |
 | --- | --- | --- |
 | Theme | `pi/themes/irfan-pi.json` | `~/.pi/agent/themes/irfan-pi.json` |
+| Minimalist theme | `pi/themes/irfan-sumi.json` | `~/.pi/agent/themes/irfan-sumi.json` |
 | Signature UI | `pi/extensions/pi-signature.ts` | `~/.pi/agent/extensions/pi-signature.ts` |
 | Command Deck chat editor | `pi/extensions/command-deck` | `~/.pi/agent/extensions/command-deck` |
 | Headroom | `pi/extensions/headroom` | `~/.pi/agent/extensions/headroom` |
@@ -86,6 +87,7 @@ deploy() {
 }
 
 deploy pi/themes/irfan-pi.json "$HOME/.pi/agent/themes/irfan-pi.json" irfan-pi.json
+deploy pi/themes/irfan-sumi.json "$HOME/.pi/agent/themes/irfan-sumi.json" irfan-sumi.json
 deploy pi/extensions/pi-signature.ts "$HOME/.pi/agent/extensions/pi-signature.ts" pi-signature.ts
 deploy pi/extensions/command-deck "$HOME/.pi/agent/extensions/command-deck" command-deck
 deploy pi/extensions/headroom "$HOME/.pi/agent/extensions/headroom" headroom

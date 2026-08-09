@@ -10,6 +10,7 @@ Provides:
 - Spinner and scroll indicators
 - Responsive narrow-terminal fallback
 - `@` file, `/` command, and newline hints
+- Borderless prompt rail and compact lowercase status when `irfan-sumi` is active
 
 Uses Pi's public `CustomEditor` extension API. It does not patch Pi or `@earendil-works/pi-tui`.
 

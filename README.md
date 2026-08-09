@@ -9,7 +9,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with LLM provider login via `/login` |
-| Theme/UI | `irfan-pi` theme, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
+| Theme/UI | `irfan-pi` and minimalist `irfan-sumi` themes, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
 | Delegation | Subagent workflows and structured user questions |
 | Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
@@ -27,6 +27,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 pi/
   themes/
     irfan-pi.json            # main theme
+    irfan-sumi.json          # minimalist ink-and-amber alternate
     irfan-gruvbox.json       # alternate Gruvbox theme
     gruvbox-dark.json        # alternate/base theme
   extensions/
@@ -177,7 +178,7 @@ Inside Pi:
 /settings
 ```
 
-Check expected startup extensions/skills, select `irfan-pi`, and inspect permission prompts before mutating files. For component checks and troubleshooting, use [Operations](docs/setup/operations.md).
+Check expected startup extensions/skills, select `irfan-pi` or optional `irfan-sumi`, and inspect permission prompts before mutating files. For component checks and troubleshooting, use [Operations](docs/setup/operations.md).
 
 ## Updating setup
 

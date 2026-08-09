@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme,
 import { truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 
 const AUTHOR_CREDIT = "crafted from Irfan's Pi setup";
+const MINIMAL_THEME = "irfan-sumi";
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 
@@ -166,6 +167,11 @@ function signatureLines(owner: string, theme: Theme, width: number, frame = 0): 
 	const title = `${BOLD}${theme.fg("accent", owner)}${RESET}`;
 	const credit = theme.fg("muted", AUTHOR_CREDIT);
 
+	if (theme.name === MINIMAL_THEME) {
+		const mark = theme.bold(theme.fg("accent", "π"));
+		return [truncateToWidth(` ${mark}  ${title} ${theme.fg("dim", "·")} ${credit}`, width, "")];
+	}
+
 	if (width < 34) {
 		const mark = theme.bold(theme.fg("accent", "π"));
 		return [center(`${mark} ${title}`, width), center(credit, width)];
@@ -199,8 +205,10 @@ function signatureHeader(owner: string) {
 
 		return {
 			render(width: number): string[] {
-				animationVisible = width >= 34;
-				return ["", ...signatureLines(owner, theme, width, frame), ""];
+				const minimal = theme.name === MINIMAL_THEME;
+				animationVisible = width >= 34 && !minimal;
+				const lines = signatureLines(owner, theme, width, frame);
+				return minimal ? lines : ["", ...lines, ""];
 			},
 			invalidate() {},
 			dispose() {
@@ -231,6 +239,14 @@ function funnySpinner(theme: Theme): WorkingIndicatorOptions {
 			}),
 		),
 		intervalMs: 500,
+	};
+}
+
+function workingIndicator(theme: Theme): WorkingIndicatorOptions {
+	if (theme.name !== MINIMAL_THEME) return funnySpinner(theme);
+	return {
+		frames: ["·", "∙", "•", "∙"].map((mark) => `${theme.fg("accent", mark)} ${theme.fg("muted", "working")}`),
+		intervalMs: 220,
 	};
 }
 
@@ -398,13 +414,13 @@ export default function piSignature(pi: ExtensionAPI) {
 		const owner = detectOwner(ctx);
 		ctx.ui.setHeader(signatureHeader(owner));
 		ctx.ui.setWorkingMessage("");
-		ctx.ui.setWorkingIndicator(funnySpinner(ctx.ui.theme));
+		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
 		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx));
 		ctx.ui.setTitle(`π · ${owner} · Irfan's Pi setup`);
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		ctx.ui.setWorkingIndicator(funnySpinner(ctx.ui.theme));
+		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
 	});
 }

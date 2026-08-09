@@ -26,6 +26,7 @@ const emit = async (event, value = { type: event }) => {
 
 const themePath = process.env.PI_THEME ?? path.resolve(new URL("../../themes/irfan-pi.json", import.meta.url).pathname);
 const theme = loadThemeFromPath(themePath);
+const minimalTheme = theme.name === "irfan-sumi";
 let editorFactory;
 const context = {
 	mode: "tui",
@@ -73,11 +74,16 @@ for (const rows of [4, 8, 10, 11, 17, 18, 24, 60]) {
 tui.terminal.rows = 24;
 
 const wide = editor.render(80).map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""));
-assert.match(wide[0], /ASK/);
-assert.match(wide[0], /READY/);
+if (minimalTheme) {
+	assert.doesNotMatch(wide.join("\n"), /ASK|┌|┐|└|┘|│/);
+	assert.match(wide.at(-1), /ready/);
+} else {
+	assert.match(wide[0], /ASK/);
+	assert.match(wide[0], /READY/);
+}
 assert(wide.some((line) => line.includes("Ask, build, or investigate")));
 assert(wide.some((line) => line.includes("@ files") && line.includes("/ commands")));
-assert.equal(wide.length, 5, "24-row terminal should render three editor rows plus borders");
+assert.equal(wide.length, minimalTheme ? 2 : 5, "24-row terminal should use the expected editor chrome");
 if (process.env.SHOW_DECK === "1") console.log(wide.join("\n"));
 editor.handleInput("x");
 assert.equal(editor.getText(), "x", "custom editor should preserve normal input handling");
@@ -85,15 +91,29 @@ assert(!editor.render(80).some((line) => line.includes("@ files")), "hint should
 editor.setText("");
 
 tui.terminal.rows = 8;
-assert.equal(editor.render(80).length, 3, "short terminal should collapse to one editor row");
+assert.equal(editor.render(80).length, minimalTheme ? 2 : 3, "short terminal should collapse to one editor row");
 tui.terminal.rows = 24;
 
+const renderedText = () =>
+	editor
+		.render(80)
+		.map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""))
+		.join("\n");
+const statePattern = (state) => new RegExp(minimalTheme ? state.toLowerCase() : state);
+
+editor.setText("keep @ files literal");
+assert.match(renderedText(), /keep @ files literal/, "user text that resembles the hint must remain prompt content");
+editor.setText("first\n\nthird");
+const multiline = renderedText().split("\n");
+const firstLine = multiline.findIndex((line) => line.includes("first"));
+const thirdLine = multiline.findIndex((line) => line.includes("third"));
+assert(firstLine >= 0 && thirdLine - firstLine >= 2, "interior blank prompt lines must remain visible");
+editor.setText("");
+
 await emit("agent_start");
-let top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /THINKING/);
+assert.match(renderedText(), statePattern("THINKING"));
 await emit("tool_execution_start", { type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
-top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /TOOLS/);
+assert.match(renderedText(), statePattern("TOOLS"));
 await emit("tool_execution_end", {
 	type: "tool_execution_end",
 	toolCallId: "tool-1",
@@ -101,21 +121,16 @@ await emit("tool_execution_end", {
 	result: {},
 	isError: true,
 });
-top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /ERROR/);
+assert.match(renderedText(), statePattern("ERROR"));
 editor.handleInput("x");
-top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /THINKING/, "typing should clear a latched tool error");
+assert.match(renderedText(), statePattern("THINKING"), "typing should clear a latched tool error");
 await emit("agent_end", { type: "agent_end", messages: [] });
-top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /THINKING/, "agent_end should stay busy until automatic continuations settle");
+assert.match(renderedText(), statePattern("THINKING"), "agent_end should stay busy until automatic continuations settle");
 await emit("agent_settled", { type: "agent_settled" });
-top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /READY/);
+assert.match(renderedText(), statePattern("READY"));
 
 editor.setText("!pwd");
-top = editor.render(80)[0].replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-assert.match(top, /BASH/);
+assert.match(renderedText(), statePattern("BASH"));
 editor.setText("A long prompt with emoji 🧭 and wide text 界 ".repeat(100));
 for (let width = 1; width <= 240; width++) {
 	for (const line of editor.render(width)) {

@@ -32,3 +32,13 @@ test("header visibility reads the cached normal-render line count", () => {
 	assert.match(cache, /Array\.isArray/);
 	assert.doesNotMatch(cache, /\.render\s*\(/);
 });
+
+test("irfan-sumi uses the compact signature and disables logo animation", () => {
+	const lines = functionSource("signatureLines");
+	const header = functionSource("signatureHeader");
+	const indicator = functionSource("workingIndicator");
+	assert.match(lines, /theme\.name === MINIMAL_THEME/);
+	assert.match(header, /animationVisible = width >= 34 && !minimal/);
+	assert.match(indicator, /theme\.name !== MINIMAL_THEME/);
+	assert.match(indicator, /"working"/);
+});

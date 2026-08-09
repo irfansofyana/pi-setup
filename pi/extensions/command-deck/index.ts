@@ -12,6 +12,7 @@ const WIDE_LABEL_WIDTH = 28;
 const HINT_MIN_WIDTH = 34;
 const DECK_LABEL = "ASK";
 const PLACEHOLDER = "Ask, build, or investigate…";
+const MINIMAL_THEME = "irfan-sumi";
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const ANSI_RESET = "\x1b[0m";
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -108,6 +109,35 @@ function stateStyle(theme: Theme, state: DeckState, focused: boolean): Style {
 	if (state === "error") return (text) => theme.fg("error", text);
 	if (state === "bash") return (text) => theme.fg("warning", text);
 	return focused ? (text) => theme.fg("accent", text) : (text) => theme.fg("muted", text);
+}
+
+function renderMinimalEditor(
+	width: number,
+	content: string[],
+	hint: string | undefined,
+	scrollUp: string | undefined,
+	scrollDown: string | undefined,
+	state: DeckState,
+	spinnerFrame: string,
+	theme: Theme,
+	railStyle: Style,
+	activeStyle: Style,
+): string[] {
+	const promptWidth = Math.max(0, width - 4);
+	const prompt = content.map((line, index) => {
+		const marker = index === 0 ? railStyle("›") : " ";
+		return fitLine(` ${marker} ${truncateToWidth(line, promptWidth, "")}`, width);
+	});
+	const stateText = activeStyle(stateLabel(state, spinnerFrame).toLowerCase());
+	const scrollText = [scrollUp ? `↑${scrollUp}` : "", scrollDown ? `↓${scrollDown}` : ""].filter(Boolean).join(" ");
+	if (hint) {
+		const left = `   ${scrollText ? `${scrollText} · ` : ""}${hint}`;
+		const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(stateText) - 1);
+		return [...prompt, fitLine(`${left}${" ".repeat(gap)}${stateText} `, width)];
+	}
+	const statusPrefix = scrollText ? ` ${theme.fg("dim", scrollText)} ` : " ";
+	const ruleWidth = Math.max(1, width - visibleWidth(statusPrefix) - visibleWidth(stateText) - 2);
+	return [...prompt, fitLine(`${statusPrefix}${theme.fg("borderMuted", "─".repeat(ruleWidth))} ${stateText} `, width)];
 }
 
 export default function commandDeck(pi: ExtensionAPI) {
@@ -249,12 +279,30 @@ export default function commandDeck(pi: ExtensionAPI) {
 				if (empty && content[0]) content[0] = addPlaceholder(content[0], theme);
 
 				const minimumRows = targetRestingRows(this.tui.terminal.rows);
-				while (content.length < minimumRows) content.push(" ".repeat(innerWidth));
-
 				const hintAllowed = empty && !isWorking && frameWidth >= HINT_MIN_WIDTH && minimumRows >= 2;
+				let hint: string | undefined;
 				if (hintAllowed) {
 					const newlineKey = this.deckKeybindings.getKeys("tui.input.newLine")[0] ?? "shift+enter";
-					const hint = `@ files · / commands · ${formatBinding(String(newlineKey))} newline`;
+					hint = `@ files · / commands · ${formatBinding(String(newlineKey))} newline`;
+				}
+
+				if (theme.name === MINIMAL_THEME) {
+					return renderMinimalEditor(
+						width,
+						content,
+						hint ? theme.fg("dim", hint) : undefined,
+						scrollUp,
+						scrollDown,
+						state,
+						SPINNER_FRAMES[spinnerIndex]!,
+						theme,
+						baseStyle,
+						activeStyle,
+					);
+				}
+
+				while (content.length < minimumRows) content.push(" ".repeat(innerWidth));
+				if (hint) {
 					const padding = " ".repeat(Math.min(this.getPaddingX(), Math.max(0, innerWidth - 1)));
 					content[Math.max(content.length - 1, 0)] = `${padding}${theme.fg("dim", hint)}`;
 				}
