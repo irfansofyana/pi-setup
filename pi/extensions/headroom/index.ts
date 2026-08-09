@@ -418,7 +418,11 @@ export async function waitForHealth(
     if (healthy) return performance.now() < deadline;
     const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) return false;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(500, remainingMs)));
+    const retryDelayMs = Math.min(500, remainingMs);
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    // A timeout scheduled for the exact remaining budget can wake fractionally early.
+    // Do not start another probe when this sleep was intended to reach the deadline.
+    if (retryDelayMs === remainingMs) return false;
   }
   return false;
 }
