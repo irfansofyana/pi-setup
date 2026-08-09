@@ -9,6 +9,11 @@ Keep global Pi configuration separate from project-local configuration. Preserve
 | `~/.pi/agent/settings.json` | Global Pi | Pi settings and selected theme |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
+| `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
+| `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
+| `<project>/.pi/agents/` | Project-local | Project agent definitions; trusted repositories only |
+| `<project>/.agents/agents/` | Project-local | Shared project agent definitions; trusted repositories only |
+| `<project>/.pi/subagents.json` | Project-local | Subagent settings overriding global defaults |
 | `~/.pi/agent/extensions/pi-permission-system/config.json` | Global Pi | Permission policy |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter config |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon config |
@@ -24,7 +29,7 @@ Keep global Pi configuration separate from project-local configuration. Preserve
 | `.mcp.json` | Project-local | Project MCP servers |
 | `~/.pi/agent/mcp.json` | Pi global | Pi-specific MCP override |
 
-Use global paths for behavior shared across projects. Put `.mcp.json` at project root only when servers are project-specific. See [MCP](mcp.md) for examples.
+Use global paths for behavior shared across projects. Project subagent settings override global keys. Treat project agent definitions as executable-capability configuration and use them only in trusted repositories; see [Subagent team](subagents.md). Put `.mcp.json` at project root only when servers are project-specific. See [MCP](mcp.md) for examples.
 
 ## Secrets and authentication
 

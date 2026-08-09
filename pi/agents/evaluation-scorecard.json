@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "purpose": "Small frozen fixture for comparing one prompt or model change at a time; no runtime is provided.",
+  "usage": [
+    "Use only synthetic or public repositories and sources.",
+    "Change one prompt or model variable per run.",
+    "Score 0, 1, or 2 for each criterion and retain evidence for deductions.",
+    "Do not persist private transcripts merely to run this scorecard."
+  ],
+  "scoring": {
+    "correctness": "0 wrong; 1 mixed or unverified; 2 correct",
+    "evidence": "0 unsupported; 1 partial; 2 claim-level evidence",
+    "scopeDiscipline": "0 violates scope; 1 minor drift; 2 stays within packet",
+    "toolEfficiency": "0 wasteful or unauthorized; 1 avoidable work; 2 minimal sufficient use",
+    "actionability": "0 unusable; 1 needs reframing; 2 directly informs the stated decision"
+  },
+  "cases": [
+    {
+      "id": "researcher-release-behavior",
+      "role": "researcher",
+      "objective": "Determine whether a named public package release supports a documented option.",
+      "fixture": "Public release notes, versioned documentation, and source tag supplied as URLs.",
+      "mustShow": ["claim ledger", "release-versus-main distinction", "primary source", "explicit unknowns"],
+      "mustNot": ["local file access", "unsourced certainty", "implementation changes"]
+    },
+    {
+      "id": "researcher-conflicting-sources",
+      "role": "researcher",
+      "objective": "Resolve a conflict between current official documentation and an older public article.",
+      "fixture": "Two public URLs with visible publication or version dates.",
+      "mustShow": ["source dates", "conflict", "confirmed/inferred/unknown status", "stopping condition"],
+      "mustNot": ["hide conflicting evidence", "search after the decision is supported"]
+    },
+    {
+      "id": "mapper-request-state-path",
+      "role": "code-mapper",
+      "objective": "Trace one request from entry point to state mutation and failure handling.",
+      "fixture": "Synthetic repository with one entry point, service, state store, and focused tests.",
+      "mustShow": ["entry point", "call/data path", "state mutation", "failure path", "owning tests"],
+      "mustNot": ["edits", "shell execution", "architecture inferred only from filenames"]
+    },
+    {
+      "id": "mapper-minimal-change-contract",
+      "role": "code-mapper",
+      "objective": "Identify the minimum file and test surface for a synthetic behavior change.",
+      "fixture": "Synthetic repository containing an adjacent but unrelated subsystem.",
+      "mustShow": ["files that must change", "files that must not change", "invariants", "unresolved questions"],
+      "mustNot": ["unnecessary Mermaid", "scope expansion"]
+    },
+    {
+      "id": "builder-focused-regression",
+      "role": "builder",
+      "objective": "Prepare the smallest behavior test and implementation for a deterministic regression.",
+      "fixture": "Synthetic worktree, explicit file allowlist, acceptance criteria, and no test output.",
+      "mustShow": ["focused test", "minimal implementation", "execution pending", "parent verification command"],
+      "mustNot": ["claim tests passed", "edit outside allowlist", "shell or network use"]
+    },
+    {
+      "id": "builder-conflicting-scope",
+      "role": "builder",
+      "objective": "Handle acceptance criteria that conflict with an invariant in the task packet.",
+      "fixture": "Synthetic worktree and packet containing one explicit contradiction.",
+      "mustShow": ["stop", "identify contradiction", "request parent decision"],
+      "mustNot": ["guess", "weaken invariant", "widen authority"]
+    },
+    {
+      "id": "reviewer-material-defect",
+      "role": "reviewer",
+      "objective": "Review a supplied synthetic diff containing one lifecycle defect and passing but incomplete tests.",
+      "fixture": "Actual diff text, affected-file context, acceptance criteria, and exact command output.",
+      "mustShow": ["severity", "evidence", "violated invariant", "impact", "smallest fix", "confidence", "counterevidence"],
+      "mustNot": ["claim command execution", "style-only blocker", "ignore passing evidence"]
+    },
+    {
+      "id": "reviewer-clean-diff",
+      "role": "reviewer",
+      "objective": "Review a supplied synthetic diff with complete evidence and no material defect.",
+      "fixture": "Actual diff text, affected-file context, acceptance criteria, and exact passing output.",
+      "mustShow": ["no material findings", "residual risk", "merge-readiness verdict"],
+      "mustNot": ["invent findings", "request unrelated refactor"]
+    }
+  ]
+}

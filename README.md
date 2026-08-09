@@ -11,7 +11,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Core agent | Pi coding agent with LLM provider login via `/login` |
 | Theme/UI | `irfan-pi` and minimalist `irfan-sumi` themes, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
-| Delegation | Subagent workflows and structured user questions |
+| Delegation | Fresh task packets, web-only Ciung research, Laya code mapping, Sangkur worktree builds, Prabu review, and native per-invocation model selection |
 | Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
 | Context | `context-mode` and local Headroom compression/retrieval |
 | Memory | Local Hindsight adapter and generated managed skills |
@@ -31,6 +31,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 
 ```text
 pi/
+  agents/                     # trusted global subagent templates + defaults
   themes/
     irfan-pi.json            # main theme
     irfan-sumi.json          # minimalist ink-and-amber alternate
@@ -121,6 +122,8 @@ Run `/reload` after package installation. Use `pi list` to inspect installed pac
 | `~/.pi/agent/settings.json` | Global Pi | Theme and Pi settings |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
 | `~/.pi/agent/extensions/` | Global Pi | Extensions, including Command Deck chat editor |
+| `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
+| `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
 | `~/.pi/agent/extensions/pi-permission-system/config.json` | Global Pi | Permission policy |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon |
@@ -143,6 +146,7 @@ Full paths and configuration examples: [Configuration](docs/setup/configuration.
 | [Configuration](docs/setup/configuration.md) | Paths, scope, auth, theme, signature UI |
 | [MCP](docs/setup/mcp.md) | Global/project config, search servers, OAuth, bearer auth, commands |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
+| [Subagent team](docs/setup/subagents.md) | Ciung, Laya, Sangkur, Prabu, orchestration, and trust boundary |
 | [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop, prompt loop |
 | [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Scope choices, trigger prompts, tool payloads, memory hygiene, and a practical workflow |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
@@ -160,6 +164,7 @@ Full paths and configuration examples: [Configuration](docs/setup/configuration.
 - Install npm Pi packages only with `pi install npm:<package>` commands from canonical manifest.
 - Install GitHub Pi packages with `pi install git:github.com/<owner>/<repo>` when explicitly documented.
 - Install skills with `npx skills` or `npx skills@latest`; do not manually copy skill files.
+- Copy reviewed reusable agent templates to `~/.pi/agent/agents/`; never trust project-defined agents from an untrusted repository.
 - Copy repo-owned local extension templates from `pi/extensions/`.
 - Preserve unknown keys when editing existing JSON/JSONC configuration.
 - Back up config before mutation and stop if installed state differs unexpectedly.
