@@ -130,7 +130,9 @@ Then run:
 /settings
 ```
 
-Select `irfan-pi`. Continue with:
+Select `irfan-pi` for the original blue/cobalt UI or `irfan-sumi` for the minimalist ink-and-amber UI. Existing `irfan-pi` users should follow [Switch from `irfan-pi` to `irfan-sumi`](configuration.md#switch-from-irfan-pi-to-irfan-sumi).
+
+Continue with:
 
 - [Configuration](configuration.md)
 - [MCP](mcp.md)
