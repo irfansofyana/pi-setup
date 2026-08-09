@@ -30,6 +30,7 @@ Before auditing:
    - paths/auth/theme: `docs/setup/configuration.md`
    - MCP: `docs/setup/mcp.md`
    - permissions: `docs/setup/permissions.md`
+   - subagent team: `docs/setup/subagents.md`
    - local extensions: `docs/setup/local-extensions.md`
    - skills/tools: `docs/setup/skills-and-tools.md`
    - verification/troubleshooting: `docs/setup/operations.md`
@@ -58,6 +59,7 @@ Audit relevant surfaces with read-only checks:
 - Expected local template presence and source/destination drift.
 - Global versus project MCP files and server definitions.
 - Permission policy path and intent.
+- Trusted global subagent templates, settings, role skills, and project-agent trust exposure.
 - Theme selection and signature extension.
 - Headroom, Hindsight, managed-skills, goal-loop, prompt-loop, BTW, and Caveman files/config.
 - Requested skills and optional tools.
@@ -100,7 +102,7 @@ After explicit approval:
 5. Preserve unknown config keys and unrelated entries. Merge narrowly; do not replace whole config when targeted edit works.
 6. Install npm Pi packages only by executing exact canonical commands read from README manifest.
 7. Install skills only with documented `npx skills` or `npx skills@latest` commands. Never manually copy installed skill files.
-8. Copy repo-owned local extensions only from documented template paths.
+8. Copy repo-owned local extensions and trusted global agent templates only from their documented template paths.
 9. Never expose, generate, or write credentials. Ask user to use `/login`, environment variables, or provider profile config.
 10. Verify each mutation before starting the next one. If verification fails, restore that mutation from backup when restoration is safe and deterministic. If rollback could lose data or fails, stop, mark the item `blocked`, and ask the user before further action.
 11. Stop on command failure, validation failure, permission denial, or undocumented state. Do not continue with later mutations until user reviews impact.

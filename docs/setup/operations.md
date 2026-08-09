@@ -11,6 +11,7 @@
 | MCP setup | `/mcp setup` |
 | MCP tools | `/mcp tools` |
 | Permissions UI | `/permission-system` |
+| Subagent team/status/settings | `/agents` |
 | Headroom status | `/headroom status` |
 | Hindsight diagnose | `/hindsight diagnose` |
 | BTW status | `/btw status` |
@@ -35,6 +36,7 @@ Inside Pi:
 /reload
 /mcp
 /mcp tools
+/agents
 /settings
 ```
 
@@ -42,6 +44,8 @@ Smoke-test prompts:
 
 ```text
 /btw what is current task context?
+Ask code-mapper to explain this repository's setup-document ownership. Do not edit anything.
+Run researcher and code-mapper in parallel for this task, then reconcile their findings before proposing changes.
 Use 9router-web-researcher to find current Pi MCP adapter docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.

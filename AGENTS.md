@@ -5,7 +5,7 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 ## Documentation ownership
 
 - `README.md` owns canonical nine-package npm manifest, minimal fresh-machine bootstrap, concise feature summary, configuration-scope summary, and stable topic index.
-- `docs/setup/` owns detailed setup, configuration, MCP, permissions, local-extension, skills/tools, operations, and troubleshooting guidance.
+- `docs/setup/` owns detailed setup, configuration, MCP, permissions, subagents, local-extension, skills/tools, operations, and troubleshooting guidance.
 - `skills/pi-setup/SKILL.md` references `README.md` and relevant topic docs; it must not duplicate package manifests or detailed commands.
 - Keep `README.md` between 180 and 250 lines. Move growing operational detail into existing `docs/setup/` topic files instead of adding new README sections.
 - Keep README-to-topic links and topic filenames stable. Update links deliberately when a rename is unavoidable.
@@ -32,6 +32,14 @@ This repository documents a personal Pi coding-agent setup. Keep changes focused
 - After extension/config changes, mention `/reload` or restarting Pi.
 - For provider credentials, prefer environment variables or `/login`; do not hardcode secrets.
 - For MCP configs, prefer `~/.config/mcp/mcp.json` for shared global config and `.mcp.json` for project-specific config.
+
+## Subagent templates
+
+- Keep reviewed reusable agent templates under `pi/agents/`; this path is intentionally not auto-discovered by `@tintinweb/pi-subagents`.
+- Install reusable roles globally under `~/.pi/agent/agents/`. Do not recommend invoking project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
+- Keep researcher/code-mapper/reviewer read-only, bound turns, and disable output transcripts unless a documented workflow explicitly needs them.
+- Builder must use Git worktree isolation and may not push, merge, deploy, publish, or handle secrets.
+- `docs/setup/subagents.md` owns team roles, copy/rollback procedure, orchestration prompts, and trust guidance.
 
 ## Current required Pi extensions
 

@@ -137,6 +137,7 @@ Continue with:
 - [Configuration](configuration.md)
 - [MCP](mcp.md)
 - [Permissions](permissions.md)
+- [Subagent team](subagents.md)
 - [Local extensions](local-extensions.md)
 - [Skills and tools](skills-and-tools.md)
 
