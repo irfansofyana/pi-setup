@@ -11,7 +11,7 @@ Personal Pi coding-agent setup: theme, extensions, MCP, memory, context compress
 | Core agent | Pi coding agent with LLM provider login via `/login` |
 | Theme/UI | `irfan-pi` and minimalist `irfan-sumi` themes, `command-deck` chat editor, and `pi-signature.ts` header/footer extension |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
-| Delegation | Trusted global researcher, code-mapper, worktree builder, reviewer, and structured user questions |
+| Delegation | Trusted global Ciung Wanara researcher, Mundinglaya code mapper, Sangkuriang worktree builder, Siliwangi reviewer, and structured user questions |
 | Guardrails | Permission gates, todos, persisted goals, and local Cursor-style prompt loops |
 | Context | `context-mode` and local Headroom compression/retrieval |
 | Memory | Local Hindsight adapter and generated managed skills |
@@ -146,7 +146,7 @@ Full paths and configuration examples: [Configuration](docs/setup/configuration.
 | [Configuration](docs/setup/configuration.md) | Paths, scope, auth, theme, signature UI |
 | [MCP](docs/setup/mcp.md) | Global/project config, search servers, OAuth, bearer auth, commands |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
-| [Subagent team](docs/setup/subagents.md) | Researcher, code mapper, worktree builder, reviewer, orchestration, and trust boundary |
+| [Subagent team](docs/setup/subagents.md) | Ciung Wanara, Mundinglaya, Sangkuriang, Siliwangi, orchestration, and trust boundary |
 | [Local extensions](docs/setup/local-extensions.md) | Command Deck chat editor, Headroom, Hindsight, managed skills, BTW, Caveman, goal loop, prompt loop |
 | [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Scope choices, trigger prompts, tool payloads, memory hygiene, and a practical workflow |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |

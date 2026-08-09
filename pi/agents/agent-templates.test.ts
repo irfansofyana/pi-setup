@@ -25,6 +25,19 @@ test("ships the four trusted global agent templates", () => {
   }
 });
 
+test("uses the faithful Sundanese legend identities without changing role ids", () => {
+  const identities = {
+    researcher: "Ciung Wanara",
+    "code-mapper": "Mundinglaya",
+    builder: "Sangkuriang",
+    reviewer: "Siliwangi",
+  } as const;
+
+  for (const [role, displayName] of Object.entries(identities)) {
+    assert.match(frontmatter(role), new RegExp(`^display_name: ${displayName}$`, "m"));
+  }
+});
+
 test("read-only specialists cannot write and have bounded turns", () => {
   for (const role of ["researcher", "code-mapper", "reviewer"] as const) {
     const fm = frontmatter(role);
