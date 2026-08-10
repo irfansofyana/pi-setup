@@ -12,6 +12,7 @@
     "pi/extensions",
     "pi/themes",
     "pi/agents",
+    "templates",
     "skills",
     "docs/setup",
     "README.md",

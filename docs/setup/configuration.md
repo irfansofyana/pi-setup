@@ -13,6 +13,7 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
 | `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
 | `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
+| `~/.pi/agent/APPEND_SYSTEM.md` | Global Pi | User-owned additions to Pi's default system prompt, including the optional managed automatic-delegation block |
 | `<project>/.pi/agents/` | Project-local | Project agent definitions; trusted repositories only |
 | `<project>/.agents/agents/` | Project-local | Shared project agent definitions; trusted repositories only |
 | `<project>/.pi/subagents.json` | Project-local | Subagent settings overriding global defaults |

@@ -120,6 +120,16 @@ Treat model scoping as an operator guardrail, not a compliance boundary. Confirm
 
 Run `/reload` or restart Pi. Open `/agents` and confirm all four roles appear as global agents.
 
+## Enable selective automatic delegation
+
+Installing the role templates gives Main Pi available workers, but it does not teach the coordinator when to use them. The package therefore ships [`templates/global/APPEND_SYSTEM.md`](../../templates/global/APPEND_SYSTEM.md) as an inert source template for an optional global routing policy.
+
+Use `/pi-setup-init` to audit and propose deployment. After explicit approval, the setup skill performs a marker-managed merge into `~/.pi/agent/APPEND_SYSTEM.md`. It appends the complete block when no managed markers exist or replaces exactly one ordered marker pair and its enclosed content. Duplicate, unmatched, or reversed markers fail closed as `blocked`. Every unrelated line remains user-owned and unchanged. If the target already exists, create a private backup before mutation and retain it until verification is accepted.
+
+The policy makes routine delegation autonomous: Main Pi announces useful delegation and proceeds instead of asking whether to use a subagent. It stays direct for focused work, starts with no more than two agents, parallelizes only independent work, and preserves parent ownership of tests, Git integration, deployment, publication, and the final answer.
+
+Run `/reload` or start a new Pi session after an approved merge. Verify with a read-only task that has real codebase uncertainty but does not name a role; Main Pi should choose Laya without asking for delegation permission. A simple known-file request should remain in the main session.
+
 ## Task packets and completion gates
 
 Because every role starts with fresh context, give it a self-contained packet instead of relying on conversation inheritance:

@@ -12,7 +12,7 @@ Use this repository's documentation as source of truth. Audit first, present num
 Locate the package root without assuming a username, checkout, or absolute path:
 
 1. Resolve this skill's own location and walk upward.
-2. Select the nearest directory containing `package.json`, `AGENTS.md`, `README.md`, `docs/setup/`, `pi/extensions/`, and `pi/themes/`.
+2. Select the nearest directory containing `package.json`, `AGENTS.md`, `README.md`, `docs/setup/`, `pi/extensions/`, `pi/themes/`, and `templates/global/APPEND_SYSTEM.md`.
 3. Confirm root `package.json` has package name `@irfansofyana/pi-setup` and a `pi` manifest.
 4. If invoked from a source checkout, it may be the root only when all markers match.
 5. If no matching root exists, ask for the installed package or repository path and stop without mutation.
@@ -64,6 +64,7 @@ Audit relevant surfaces:
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
 - Component config/state for Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, permissions, and MCP.
 - Trusted global subagent templates and `subagents.json`; remember package resources do not natively include agents.
+- Global `~/.pi/agent/APPEND_SYSTEM.md`, including whether the marker-managed automatic-delegation block matches `templates/global/APPEND_SYSTEM.md`; preserve all content outside the managed markers.
 - Requested optional skills/tools and external service prerequisites.
 - Credential variable names/references without reading or printing values.
 
@@ -108,6 +109,7 @@ Separate proposal groups:
 - duplicate legacy manual loader cleanup;
 - optional settings/config changes, including theme;
 - global subagent template deployment;
+- global automatic-delegation prompt deployment or marker-managed merge;
 - external service setup requiring manual auth/credentials.
 
 Ask the user to approve specific proposal numbers. General setup intent, package installation, or audit approval is not mutation approval.
@@ -125,9 +127,10 @@ For each approved proposal, one at a time:
 7. Remove legacy manual code/theme loaders only when they are proven duplicates. Never remove a component config/state directory merely because code is now package-owned.
 8. Keep companion packages as separate Pi-managed sources. Install or update only an explicitly approved exact source; never remove one as a first-party-package duplicate.
 9. For global agents, follow `docs/setup/subagents.md`: review templates, back up existing files, preserve machine-local model choices unless approved, and merge `subagents.json` narrowly.
-10. Never expose, generate, copy, or write credentials. Ask the user to complete `/login`, environment, or provider-profile steps.
-11. Reload/restart and verify this mutation before continuing. On failure, restore only its approved legacy loader when rollback is safe and deterministic; never overwrite newer user data with stale config.
-12. Stop on command failure, validation failure, permission denial, or undocumented state.
+10. For automatic delegation, read `templates/global/APPEND_SYSTEM.md` and inspect `~/.pi/agent/APPEND_SYSTEM.md` before mutation. With zero managed markers, append the complete template block. With exactly one ordered start/end marker pair, replace that pair and its enclosed content only. For duplicate, unmatched, or reversed markers, classify the mutation `blocked` and make no change. Never replace unrelated global prompt content.
+11. Never expose, generate, copy, or write credentials. Ask the user to complete `/login`, environment, or provider-profile steps.
+12. Reload/restart and verify this mutation before continuing. On failure, restore only its approved legacy loader when rollback is safe and deterministic; never overwrite newer user data with stale config.
+13. Stop on command failure, validation failure, permission denial, or undocumented state.
 
 ## 8. Re-audit and report
 
@@ -152,5 +155,7 @@ Do not claim success when verification is incomplete. Keep backups until the use
 - Backup precedes every approved destructive action.
 - Existing theme selection never changes implicitly.
 - Agent templates never become active merely because the package is installed.
+- The automatic-delegation template never becomes active merely because the package is installed; deployment to the global user-owned prompt requires explicit approval.
+- Automatic-delegation updates replace only the complete managed marker block and preserve every unrelated line in `APPEND_SYSTEM.md`.
 - Unknown commands or ambiguous ownership fail closed.
 - Credential values never appear in audit, proposal, backup output, or report.

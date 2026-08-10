@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 const root = path.resolve(import.meta.dirname, "..");
+const execFileAsync = promisify(execFile);
 
 async function readJson(relativePath) {
   return JSON.parse(await readFile(path.join(root, relativePath), "utf8"));
@@ -33,6 +36,38 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(manifest.files.includes("pi/themes"));
   assert.ok(manifest.files.includes("pi/agents"));
   assert.ok(manifest.files.includes("skills"));
+});
+
+test("package ships an approval-gated global automatic-delegation prompt", async () => {
+  const manifest = await readJson("package.json");
+  const templatePath = "templates/global/APPEND_SYSTEM.md";
+  const template = await readFile(path.join(root, templatePath), "utf8");
+  const setupSkill = await readFile(path.join(root, "skills/pi-setup/SKILL.md"), "utf8");
+
+  assert.ok(manifest.files.includes("templates"));
+  assert.match(template, /pi-setup:auto-delegation:start/);
+  assert.match(template, /pi-setup:auto-delegation:end/);
+  assert.match(template, /does not need to request delegation/i);
+  assert.match(template, /at most two agents initially/i);
+  for (const role of ["Ciung", "Laya", "Sangkur", "Prabu"]) {
+    assert.match(template, new RegExp(role));
+  }
+  assert.match(setupSkill, /APPEND_SYSTEM\.md/);
+  assert.match(setupSkill, /marker-managed merge/i);
+  assert.match(setupSkill, /exactly one ordered start\/end marker pair/i);
+  assert.match(setupSkill, /zero managed markers/i);
+  assert.match(setupSkill, /classify .*blocked.*make no change/i);
+});
+
+test("npm pack includes the automatic-delegation template", async () => {
+  const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json"], {
+    cwd: root,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  const [pack] = JSON.parse(stdout);
+  const paths = pack.files.map((file) => file.path);
+
+  assert.ok(paths.includes("templates/global/APPEND_SYSTEM.md"));
 });
 
 test("irfan-sumi is the documented package default without mutating settings on install", async () => {
