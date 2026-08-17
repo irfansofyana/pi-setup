@@ -1,5 +1,4 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { ScrollView, Text, type Component } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
 	input: number;
@@ -158,7 +157,15 @@ function textFromContent(content: unknown): string {
 		.map((part) => {
 			if (!part || typeof part !== "object") return "";
 			const record = part as Record<string, unknown>;
-			return typeof record.text === "string" ? record.text : "";
+			if (typeof record.text === "string") return record.text;
+			if (record.type === "thinking" && typeof record.thinking === "string") return `[thinking] ${record.thinking}`;
+			if (record.type === "toolCall") {
+				const name = typeof record.name === "string" ? record.name : "unknown-tool";
+				const args = record.arguments === undefined ? "" : ` ${JSON.stringify(record.arguments)}`;
+				return `[toolCall ${name}]${args}`;
+			}
+			if (record.type === "image") return `[image ${typeof record.mimeType === "string" ? record.mimeType : "unknown"}]`;
+			return "";
 		})
 		.join("\n");
 }
@@ -182,9 +189,19 @@ function contentSize(value: unknown): { chars: number; bytes: number } {
 }
 
 function messageSize(message: Record<string, unknown>): { chars: number; bytes: number } {
+	if (excludedFromContext(message)) return { chars: 0, bytes: 0 };
 	if (message.role === "bashExecution") return contentSize(`${String(message.command ?? "")}\n${String(message.output ?? "")}`);
 	if (message.role === "compactionSummary" || message.role === "branchSummary") return contentSize(message.summary);
 	return contentSize(message.content);
+}
+
+function entrySize(entry: unknown): { chars: number; bytes: number } {
+	const record = recordOf(entry);
+	const message = messageOf(entry);
+	if (message) return messageSize(message);
+	if (record?.type === "custom_message") return contentSize(record.content);
+	if (record?.type === "compaction" || record?.type === "branch_summary") return contentSize(record.summary);
+	return { chars: 0, bytes: 0 };
 }
 
 function excludedFromContext(message: Record<string, unknown>): boolean {
@@ -206,7 +223,10 @@ function sumSizes(a: { chars: number; bytes: number }, b: { chars: number; bytes
 
 function promptEstimate(options: ContextReportSource["getSystemPromptOptions"] extends () => infer T ? T : never): PromptEstimate {
 	const customPrompt = contentSize(options.customPrompt);
-	const snippets = Object.values(options.toolSnippets ?? {});
+	const selectedTools = options.selectedTools ?? ["read", "bash", "edit", "write"];
+	const snippets = Object.entries(options.toolSnippets ?? {})
+		.filter(([name]) => selectedTools.includes(name))
+		.map(([, value]) => value);
 	const toolSnippets = snippets.reduce((size, value) => sumSizes(size, contentSize(value)), { chars: 0, bytes: 0 });
 	const guidelines = (options.promptGuidelines ?? []).reduce((size, value) => sumSizes(size, contentSize(value)), { chars: 0, bytes: 0 });
 	const appendPrompt = contentSize(options.appendSystemPrompt);
@@ -236,7 +256,7 @@ function promptEstimate(options: ContextReportSource["getSystemPromptOptions"] e
 	const totalBytes = customPrompt.bytes + toolSnippets.bytes + guidelines.bytes + appendPrompt.bytes + contextFiles.contentBytes + skills.metadataBytes;
 	return {
 		customPrompt,
-		selectedTools: { count: (options.selectedTools ?? []).length, names: [...(options.selectedTools ?? [])] },
+		selectedTools: { count: selectedTools.length, names: [...selectedTools] },
 		toolSnippets: { count: snippets.length, ...toolSnippets },
 		guidelines: { count: (options.promptGuidelines ?? []).length, ...guidelines },
 		appendPrompt,
@@ -346,19 +366,21 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 					tool.calls++;
 					toolMap.set(name, tool);
 				}
-			} else if (message.role === "toolResult") {
+			} else if (message.role === "toolResult" || message.role === "bashExecution") {
 				if (usageIsPresent(message.usage)) {
 					if (targetUsage) addUsage(targetUsage, message.usage);
 					if (collectFacts) usageSources.toolResult++;
 				}
 				if (!collectFacts) continue;
-				const name = typeof message.toolName === "string" ? message.toolName : "unknown-tool";
+				const name = message.role === "bashExecution" ? "bash" : typeof message.toolName === "string" ? message.toolName : "unknown-tool";
 				const tool = toolMap.get(name) ?? { name, calls: 0, results: 0, resultChars: 0, resultBytes: 0, errors: 0, excludedFromContext: 0, largeResults: 0, largestResultChars: 0 };
-				const size = contentSize(message.content);
+				const size = message.role === "bashExecution"
+					? contentSize(`${String(message.command ?? "")}\n${String(message.output ?? "")}`)
+					: contentSize(message.content);
 				tool.results++;
 				tool.resultChars += size.chars;
 				tool.resultBytes += size.bytes;
-				if (message.isError === true) tool.errors++;
+				if (message.isError === true || message.cancelled === true || (typeof message.exitCode === "number" && message.exitCode !== 0)) tool.errors++;
 				if (excludedFromContext(message)) tool.excludedFromContext++;
 				if (size.chars > LARGE_TOOL_RESULT_CHARS) tool.largeResults++;
 				tool.largestResultChars = Math.max(tool.largestResultChars, size.chars);
@@ -374,11 +396,11 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 
 	const activeEstimate = activeEntries.reduce(
 		(total, entry) => {
-			const message = messageOf(entry);
-			const size = message ? messageSize(message) : contentSize(recordOf(entry)?.summary);
+			const record = recordOf(entry);
+			const size = entrySize(entry);
 			return {
 				entries: total.entries + 1,
-				messages: total.messages + (message ? 1 : 0),
+				messages: total.messages + (record?.type === "message" || record?.type === "custom_message" ? 1 : 0),
 				chars: total.chars + size.chars,
 				bytes: total.bytes + size.bytes,
 			};
@@ -396,8 +418,8 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 	const toolChars = [...toolMap.values()].reduce((total, tool) => total + tool.resultChars, 0);
 	const largestToolResult = Math.max(0, ...[...toolMap.values()].map((tool) => tool.largestResultChars));
 	const promptOverhead: ContextFlag = promptOverheadObserved === null
-		? { status: "unknown", observed: null, threshold: ">25% of current context token estimate", note: "not comparable while current context estimate is unknown" }
-		: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context token estimate" };
+		? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "not comparable while current context estimate is unknown" }
+		: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context token estimate (raw contributor estimate)" };
 	const toolBloatObserved = toolChars;
 	const toolBloat: ContextFlag = toolChars > TOOL_BLOAT_CHARS || largestToolResult > LARGE_TOOL_RESULT_CHARS
 		? { status: "critical", observed: toolBloatObserved, threshold: ">50,000 aggregate chars or any result >20,000 chars", note: `aggregate=${formatNumber(toolChars)} chars; largest=${formatNumber(largestToolResult)} chars` }
@@ -444,7 +466,8 @@ function usageLine(label: string, usage: UsageTotals): string {
 }
 
 function flagLine(label: string, flag: ContextFlag): string {
-	const observed = flag.observed === null ? "unknown" : `${formatNumber(flag.observed)}${label === "context pressure" ? "%" : "%"}`;
+	const unit = label === "tool bloat" ? " chars" : "%";
+	const observed = flag.observed === null ? "unknown" : `${formatNumber(flag.observed)}${unit}`;
 	return `${label}: ${flag.status}; observed=${observed}; threshold=${flag.threshold}${flag.note ? `; ${flag.note}` : ""}`;
 }
 
@@ -491,8 +514,8 @@ function reportLines(report: ContextReport): string[] {
 		`append prompt: ${formatNumber(report.prompt.appendPrompt.chars)} chars / ${formatBytes(report.prompt.appendPrompt.bytes)}`,
 		`context files: ${report.prompt.contextFiles.count}; paths=${formatNumber(report.prompt.contextFiles.pathChars)} chars; content estimate=${formatNumber(report.prompt.contextFiles.contentChars)} chars / ${formatBytes(report.prompt.contextFiles.contentBytes)}`,
 		`skills: ${report.prompt.skills.count} (${report.prompt.skills.names.slice(0, 12).join(", ") || "none"}); metadata estimate=${formatNumber(report.prompt.skills.metadataChars)} chars / ${formatBytes(report.prompt.skills.metadataBytes)}`,
-		`prompt contributor total estimate: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)}; ~${formatNumber(report.prompt.estimatedTokens)} tokens (chars÷4 estimate)`,
-		`active entries/messages estimate: entries=${report.activeEstimate.entries} messages=${report.activeEstimate.messages}; ${formatNumber(report.activeEstimate.chars)} chars / ${formatBytes(report.activeEstimate.bytes)}; ~${formatNumber(report.activeEstimate.estimatedTokens)} tokens (chars÷4 estimate)`,
+		`raw contributor size estimate: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)}; ~${formatNumber(report.prompt.estimatedTokens)} tokens (chars÷4 estimate; excludes prompt wrappers/defaults/turn mutations)`,
+		`active entries/messages text estimate: entries=${report.activeEstimate.entries} messages=${report.activeEstimate.messages}; ${formatNumber(report.activeEstimate.chars)} chars / ${formatBytes(report.activeEstimate.bytes)}; ~${formatNumber(report.activeEstimate.estimatedTokens)} tokens (chars÷4 estimate; excluded bash omitted)`,
 		"",
 		"Press q, Escape, or Ctrl-C to close.",
 	);
@@ -505,26 +528,46 @@ export function formatContextReport(report: ContextReport, maxLines = MAX_REPORT
 	return [...lines.slice(0, Math.max(1, maxLines - 1)), `… report bounded at ${maxLines} lines`].join("\n");
 }
 
-export class ContextReportComponent implements Component {
-	private readonly scroll: ScrollView;
-	constructor(private readonly text: string, private readonly done: () => void, private readonly theme: Theme) {
-		const themed = text.split("\n").map((line) => {
+type ContextTui = {
+	height?: number;
+	requestRender?: () => void;
+};
+
+export class ContextReportComponent {
+	private readonly lines: string[];
+	private readonly done: () => void;
+	private readonly requestRender: () => void;
+	private readonly viewport: number;
+	private offset = 0;
+
+	constructor(text: string, done: () => void, theme: Theme, tui?: ContextTui) {
+		this.done = done;
+		this.requestRender = tui?.requestRender?.bind(tui) ?? (() => {});
+		this.viewport = Math.max(8, Math.floor((tui?.height ?? 32) * 0.86));
+		this.lines = text.split("\n").map((line) => {
 			if (line === "/context — active-session diagnostics (read-only)" || /^[A-Z][^:]+$/.test(line)) return theme.fg("accent", line);
 			if (/^(context pressure|prompt overhead|tool bloat): (critical|watch)/.test(line)) return theme.fg("warning", line);
 			return line;
-		}).join("\n");
-		this.scroll = new ScrollView(new Text(themed, 1, 1), { scrollbar: "always", overscroll: "contain" });
+		});
 	}
-	render(width: number): string[] { return this.scroll.render(width); }
-	invalidate(): void { this.scroll.invalidate(); }
+
+	render(width: number): string[] {
+		const visible = this.lines.slice(this.offset, this.offset + this.viewport);
+		return visible.map((line) => line.length <= width ? line : `${line.slice(0, Math.max(0, width - 1))}…`);
+	}
+
+	invalidate(): void {}
+
 	handleInput(data: string): void {
 		if (data === "q" || data === "Q" || data === "\x1b" || data === "\x03") return this.done();
-		if (data === "\u001b[A" || data === "k") this.scroll.scrollBy(-1);
-		else if (data === "\u001b[B" || data === "j") this.scroll.scrollBy(1);
-		else if (data === "\u001b[5~") this.scroll.scrollBy(-10);
-		else if (data === "\u001b[6~") this.scroll.scrollBy(10);
-		else if (data === "g" || data === "\u001b[H") this.scroll.scrollToStart();
-		else if (data === "G" || data === "\u001b[F") this.scroll.scrollToEnd();
+		const previous = this.offset;
+		if (data === "\u001b[A" || data === "k") this.offset = Math.max(0, this.offset - 1);
+		else if (data === "\u001b[B" || data === "j") this.offset = Math.min(Math.max(0, this.lines.length - this.viewport), this.offset + 1);
+		else if (data === "\u001b[5~") this.offset = Math.max(0, this.offset - 10);
+		else if (data === "\u001b[6~") this.offset = Math.min(Math.max(0, this.lines.length - this.viewport), this.offset + 10);
+		else if (data === "g" || data === "\u001b[H") this.offset = 0;
+		else if (data === "G" || data === "\u001b[F") this.offset = Math.max(0, this.lines.length - this.viewport);
+		if (this.offset !== previous) this.requestRender();
 	}
 }
 
@@ -534,11 +577,19 @@ export function registerContextCommand(pi: Pick<ExtensionAPI, "registerCommand">
 		handler: async (_args, ctx) => {
 			const report = collectContextReport(ctx as unknown as ContextReportSource);
 			const text = formatContextReport(report);
-			if (ctx.mode !== "tui") {
+			if (ctx.mode === "print") {
 				console.log(text);
 				return;
 			}
-			await ctx.ui.custom((_tui, theme, _keybindings, done) => new ContextReportComponent(text, () => done(undefined), theme), {
+			if (ctx.mode === "rpc") {
+				ctx.ui.notify(text, "info");
+				return;
+			}
+			if (ctx.mode === "json") {
+				console.error(text);
+				return;
+			}
+			await ctx.ui.custom((tui, theme, _keybindings, done) => new ContextReportComponent(text, () => done(undefined), theme, tui), {
 				overlay: true,
 				overlayOptions: { width: "92%", maxHeight: "86%", minWidth: 50, anchor: "center" },
 			});

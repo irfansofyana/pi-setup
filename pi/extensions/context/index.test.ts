@@ -88,7 +88,7 @@ test("groups provider-model facts and summarizes tool results, errors, and exclu
 		sessionManager: {
 			getEntries: () => [
 				message("a", { role: "assistant", provider: "p1", model: "m1", usage: usage(10), content: [{ type: "toolCall", name: "bash", id: "1", arguments: {} }] }),
-				message("r", { role: "toolResult", toolName: "bash", isError: true, excludeFromContext: true, content: [{ type: "text", text: huge }] }),
+				message("r", { role: "bashExecution", command: "printf output", output: huge, exitCode: 1, excludeFromContext: true }),
 				message("b", { role: "assistant", provider: "p2", model: "m2", usage: usage(20), content: [] }),
 			],
 			buildContextEntries: () => [],
@@ -100,8 +100,23 @@ test("groups provider-model facts and summarizes tool results, errors, and exclu
 	assert.equal(report.turns[0]?.toolResults, 1);
 	assert.equal(report.tools[0]?.errors, 1);
 	assert.equal(report.tools[0]?.excludedFromContext, 1);
-	assert.equal(report.tools[0]?.largestResultChars, 20_001);
+	assert.equal(report.tools[0]?.largestResultChars, 20_015);
 	assert.equal(report.flags.toolBloat.status, "critical");
+});
+
+test("estimates active context content while omitting excluded bash output", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [],
+			buildContextEntries: () => [
+				message("a", { role: "assistant", content: [{ type: "toolCall", name: "read", arguments: { path: "src/index.ts" } }] }),
+				{ type: "custom_message", id: "custom", content: [{ type: "text", text: "extension context" }] },
+				message("b", { role: "bashExecution", command: "cat secret", output: "must not count", excludeFromContext: true }),
+			],
+		},
+	}));
+	assert.ok(report.activeEstimate.chars >= "[toolCall read] {\"path\":\"src/index.ts\"}".length + "extension context".length);
+	assert.equal(report.activeEstimate.chars, "[toolCall read] {\"path\":\"src/index.ts\"}".length + "extension context".length);
 });
 
 test("estimates prompt contributors without exposing raw content and raises transparent flags", () => {
@@ -164,4 +179,28 @@ test("falls back to readable console text outside TUI and does not append a mess
 	}
 	assert.equal(output.length, 1);
 	assert.match(output[0]!, /active-session diagnostics/);
+});
+
+test("uses protocol-safe output paths outside TUI", async () => {
+	let command: { handler: (args: string, ctx: any) => Promise<void> } | undefined;
+	registerContextCommand({ registerCommand(_name: string, value: any) { command = value; } } as any);
+	const notices: string[] = [];
+	await command!.handler("", {
+		mode: "rpc",
+		...source(),
+		ui: { notify(value: string) { notices.push(value); } },
+	});
+	assert.equal(notices.length, 1);
+	assert.match(notices[0]!, /active-session diagnostics/);
+
+	const errors: string[] = [];
+	const originalError = console.error;
+	console.error = (value?: unknown) => errors.push(String(value));
+	try {
+		await command!.handler("", { mode: "json", ...source(), ui: {} });
+	} finally {
+		console.error = originalError;
+	}
+	assert.equal(errors.length, 1);
+	assert.match(errors[0]!, /active-session diagnostics/);
 });

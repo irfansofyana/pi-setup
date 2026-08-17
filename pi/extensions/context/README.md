@@ -11,6 +11,6 @@ Package-owned, read-only active-session diagnostics. Separate from companion `pi
 - Does not print raw system prompts, context-file contents, skill contents, or tool output. Metadata and bounded estimates only.
 - Shows only context-pressure, prompt-overhead, and tool-bloat flags with observed values and thresholds.
 
-In TUI mode, report opens in a theme-aware scrollable overlay. Press `q`, `Escape`, or `Ctrl-C` to close. Print, JSON, and RPC modes emit readable text through `console.log`.
+In TUI mode, report opens in a theme-aware scrollable overlay. Press `q`, `Escape`, or `Ctrl-C` to close. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes the report to stderr so structured stdout stays protocol-safe.
 
 Run `/reload` after package or extension updates before using `/context`.
