@@ -368,6 +368,23 @@ test("labels fork points as branch points, not branches", () => {
 	assert.doesNotMatch(formatDashboard(report), /\d+ branches/);
 });
 
+test("measures image payload bytes in tool results instead of a placeholder", () => {
+	const imgData = "x".repeat(1_000);
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("a", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(10), content: [{ type: "toolCall", name: "screenshot", id: "1", arguments: {} }] }),
+				message("r", { role: "toolResult", toolName: "screenshot", content: [{ type: "image", data: imgData, mimeType: "image/png" }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const tool = report.tools.find((t) => t.name === "screenshot");
+	assert.ok(tool);
+	assert.equal(tool?.resultChars, 1_000);
+	assert.equal(tool?.resultBytes, 1_000);
+});
+
 test("toggles between dashboard and details on [d]", () => {
 	const theme = { fg: (_name: string, value: string) => value };
 	const report = collectContextReport(source());

@@ -160,24 +160,25 @@ function usageIsPresent(value: unknown): boolean {
 	return Boolean(value && typeof value === "object" && Object.values(value as Record<string, unknown>).some((item) => typeof item === "number"));
 }
 
+function blockText(part: unknown): string {
+	if (typeof part === "string") return part;
+	if (!part || typeof part !== "object") return "";
+	const record = part as Record<string, unknown>;
+	if (typeof record.text === "string") return record.text;
+	if (record.type === "thinking" && typeof record.thinking === "string") return `[thinking] ${record.thinking}`;
+	if (record.type === "toolCall") {
+		const name = typeof record.name === "string" ? record.name : "unknown-tool";
+		const args = record.arguments === undefined ? "" : ` ${JSON.stringify(record.arguments)}`;
+		return `[toolCall ${name}]${args}`;
+	}
+	if (record.type === "image") return `[image ${typeof record.mimeType === "string" ? record.mimeType : "unknown"}]`;
+	return "";
+}
+
 function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => {
-			if (!part || typeof part !== "object") return "";
-			const record = part as Record<string, unknown>;
-			if (typeof record.text === "string") return record.text;
-			if (record.type === "thinking" && typeof record.thinking === "string") return `[thinking] ${record.thinking}`;
-			if (record.type === "toolCall") {
-				const name = typeof record.name === "string" ? record.name : "unknown-tool";
-				const args = record.arguments === undefined ? "" : ` ${JSON.stringify(record.arguments)}`;
-				return `[toolCall ${name}]${args}`;
-			}
-			if (record.type === "image") return `[image ${typeof record.mimeType === "string" ? record.mimeType : "unknown"}]`;
-			return "";
-		})
-		.join("\n");
+	return content.map(blockText).join("\n");
 }
 
 function byteLength(value: string): number {
@@ -194,8 +195,25 @@ function messageOf(entry: unknown): Record<string, unknown> | undefined {
 }
 
 function contentSize(value: unknown): { chars: number; bytes: number } {
-	const text = textFromContent(value);
-	return { chars: text.length, bytes: byteLength(text) };
+	if (typeof value === "string") return { chars: value.length, bytes: byteLength(value) };
+	if (!Array.isArray(value)) return { chars: 0, bytes: 0 };
+	let chars = 0;
+	let bytes = 0;
+	for (const part of value) {
+		const record = recordOf(part);
+		if (record?.type === "image") {
+			// Measure the stored payload, not the placeholder marker, so large
+			// image results are reflected in sizes and the bloat threshold.
+			const data = typeof record.data === "string" ? record.data : "";
+			chars += data.length;
+			bytes += byteLength(data);
+			continue;
+		}
+		const text = blockText(part);
+		chars += text.length;
+		bytes += byteLength(text);
+	}
+	return { chars, bytes };
 }
 
 function excludedFromContext(message: Record<string, unknown>): boolean {
@@ -494,7 +512,7 @@ function formatBytes(value: number): string {
 }
 
 function usageLine(label: string, usage: UsageTotals): string {
-	return `${label}: input=${formatNumber(usage.input)} output=${formatNumber(usage.output)} cacheRead=${formatNumber(usage.cacheRead)} cacheWrite=${formatNumber(usage.cacheWrite)} totalTokens=${formatNumber(usage.totalTokens)} cost.total=${formatCost(usage.costTotal)} (provider-reported; not billing accounting)`;
+	return `${label}: input=${formatNumber(usage.input)} output=${formatNumber(usage.output)} cacheRead=${formatNumber(usage.cacheRead)} cacheWrite=${formatNumber(usage.cacheWrite)} totalTokens=${formatNumber(usage.totalTokens)} cost.total=${formatCost(usage.costTotal)} (tokens provider-reported; cost model-derived, not billing accounting)`;
 }
 
 type Paint = (color: ThemeColor, text: string) => string;
