@@ -20,6 +20,7 @@ function source(overrides: Partial<ContextReportSource> = {}): ContextReportSour
 			buildContextEntries: () => [],
 		},
 		getSystemPromptOptions: () => ({ cwd: "/tmp", selectedTools: [] }),
+		getSystemPrompt: () => "You are a test assistant. Be concise.",
 		...overrides,
 	};
 }
@@ -123,6 +124,7 @@ test("estimates active context content while omitting excluded bash output", () 
 test("estimates prompt contributors without exposing raw content and raises transparent flags", () => {
 	const report = collectContextReport(source({
 		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
+		getSystemPrompt: () => "x".repeat(400),
 		getSystemPromptOptions: () => ({
 			cwd: "/tmp",
 			customPrompt: "secret prompt that must not be printed".repeat(20),
@@ -261,8 +263,18 @@ test("marks prompt contributors unavailable instead of fabricating zero-sized da
 	}));
 	assert.equal(report.prompt.unavailable, true);
 	assert.equal(report.prompt.selectedTools.count, 0);
-	assert.equal(report.flags.promptOverhead.status, "unknown");
+	// Prompt overhead now derives from the assembled system prompt, so an
+	// unavailable contributor breakdown no longer forces it to "unknown".
+	assert.equal(report.flags.promptOverhead.status, "clear");
 	assert.match(formatContextReport(report), /Prompt contributors: unavailable/);
+});
+
+test("reports prompt overhead unknown when the system prompt is unavailable", () => {
+	const report = collectContextReport(source({
+		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
+		getSystemPrompt: () => { throw new Error("not exposed"); },
+	}));
+	assert.equal(report.flags.promptOverhead.status, "unknown");
 });
 
 test("counts explicitly invoked skills from <skill> blocks in user messages", () => {
@@ -297,6 +309,8 @@ test("dashboard surfaces the gauge, flags, and skills summary", () => {
 	assert.match(dashboard, /active-session diagnostics/);
 	assert.match(dashboard, /▓/);
 	assert.match(dashboard, /▒/);
+	assert.match(dashboard, /system prompt/);
+	assert.match(dashboard, /conversation/);
 	assert.match(dashboard, /skills used  research ×1/);
 	assert.match(dashboard, /context pressure/);
 	assert.match(dashboard, /spend  in /);

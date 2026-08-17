@@ -73,6 +73,7 @@ export interface ContextReport {
 		freeTokens: number | null;
 		unknown: boolean;
 	};
+	systemPrompt: { chars: number; bytes: number; estimatedTokens: number };
 	sessionUsage: UsageTotals;
 	activeBranchUsage: UsageTotals;
 	usageSources: { assistant: number; toolResult: number; compaction: number; branchSummary: number };
@@ -104,6 +105,7 @@ export interface ContextReportSource {
 		buildContextEntries: () => unknown[];
 	};
 	getSystemPromptOptions: () => BuildSystemPromptOptions;
+	getSystemPrompt: () => string;
 }
 
 const ZERO_USAGE: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, costTotal: 0 };
@@ -428,6 +430,17 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 		{ entries: 0, messages: 0, chars: 0, bytes: 0 },
 	);
 	const context = contextPercent(ctx.getContextUsage(), ctx.model);
+
+	let systemPrompt = { chars: 0, bytes: 0, estimatedTokens: 0 };
+	try {
+		const text = ctx.getSystemPrompt();
+		if (typeof text === "string") {
+			systemPrompt = { chars: text.length, bytes: byteLength(text), estimatedTokens: Math.ceil(text.length / 4) };
+		}
+	} catch {
+		// getSystemPrompt unavailable in this context; zeros are a chars÷4 estimate.
+	}
+
 	let options: PromptEstimate;
 	let promptUnavailable = false;
 	try {
@@ -437,14 +450,12 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 		promptUnavailable = true;
 	}
 	options = { ...options, unavailable: promptUnavailable };
-	const promptOverheadObserved = context.tokens !== null && !promptUnavailable ? options.estimatedTokens / Math.max(1, context.tokens) * 100 : null;
+	const promptOverheadObserved = context.tokens !== null && systemPrompt.estimatedTokens > 0 ? systemPrompt.estimatedTokens / Math.max(1, context.tokens) * 100 : null;
 	const toolChars = [...toolMap.values()].reduce((total, tool) => total + tool.resultChars, 0);
 	const largestToolResult = Math.max(0, ...[...toolMap.values()].map((tool) => tool.largestResultChars));
-	const promptOverhead: ContextFlag = promptUnavailable
-		? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "system-prompt options unavailable; prompt contributors not estimated" }
-		: promptOverheadObserved === null
-			? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "not comparable while current context estimate is unknown" }
-			: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context token estimate (raw contributor estimate)" };
+	const promptOverhead: ContextFlag = promptOverheadObserved === null
+		? { status: "unknown", observed: null, threshold: ">25% of current context tokens (system-prompt chars÷4 estimate)", note: "not comparable while current context or system prompt is unknown" }
+		: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context tokens (system-prompt chars÷4 estimate)" };
 	const toolBloatObserved = toolChars;
 	const toolBloat: ContextFlag = toolChars > TOOL_BLOAT_CHARS || largestToolResult > LARGE_TOOL_RESULT_CHARS
 		? { status: "critical", observed: toolBloatObserved, threshold: ">50,000 aggregate chars or any result >20,000 chars", note: `aggregate=${formatNumber(toolChars)} chars; largest=${formatNumber(largestToolResult)} chars` }
@@ -452,6 +463,7 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 
 	return {
 		context,
+		systemPrompt,
 		sessionUsage,
 		activeBranchUsage,
 		usageSources,
@@ -533,7 +545,7 @@ function flagDetail(label: string, flag: ContextFlag, paint: Paint): string {
 }
 
 function breakdownRow(glyph: string, color: ThemeColor, label: string, value: string, paint: Paint): string {
-	return `${paint(color, glyph)} ${label.padEnd(9)} ${value}`;
+	return `${paint(color, glyph)} ${label.padEnd(14)} ${value}`;
 }
 
 function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[] {
@@ -541,7 +553,7 @@ function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[]
 	lines.push("/context — active-session diagnostics");
 
 	const window = report.context.contextWindow;
-	const promptTokens = report.prompt.unavailable ? 0 : report.prompt.estimatedTokens;
+	const systemPromptTokens = report.systemPrompt.estimatedTokens;
 	const sessionTokens = report.activeEstimate.estimatedTokens;
 
 	const ratio = report.context.percent !== null
@@ -559,11 +571,11 @@ function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[]
 	lines.push(headline);
 
 	lines.push("");
-	lines.push(paint("muted", "estimated contributors"));
-	lines.push(breakdownRow("▓", "accent", "prompt", `${formatNumber(promptTokens)} tokens`, paint));
-	lines.push(breakdownRow("▒", "syntaxType", "session", `${formatNumber(sessionTokens)} tokens`, paint));
+	lines.push(paint("muted", "estimated contributors (chars÷4)"));
+	lines.push(breakdownRow("▓", "accent", "system prompt", `${formatNumber(systemPromptTokens)} tokens`, paint));
+	lines.push(breakdownRow("▒", "syntaxType", "conversation", `${formatNumber(sessionTokens)} tokens`, paint));
 	const toolChars = report.tools.reduce((sum, tool) => sum + tool.resultChars, 0);
-	lines.push(breakdownRow("░", "syntaxKeyword", "tools", `${formatNumber(toolChars)} chars`, paint));
+	lines.push(breakdownRow("░", "syntaxKeyword", "tool results", `${formatNumber(toolChars)} chars`, paint));
 	lines.push("");
 
 	lines.push(paint("muted", "Flags"));
