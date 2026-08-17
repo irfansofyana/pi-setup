@@ -288,24 +288,84 @@ test("counts explicitly invoked skills from <skill> blocks in user messages", ()
 });
 
 test("dashboard surfaces the last-prompt bar, spend, tools, and skills without any estimate", () => {
+	const assistant = message("a", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(800), content: [] });
 	const report = collectContextReport(source({
 		sessionManager: {
 			getEntries: () => [
 				message("u", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>' }] }),
-				message("a", { role: "assistant", provider: "openai", model: "m", usage: usage(800), content: [] }),
+				assistant,
 			],
-			buildContextEntries: () => [],
+			buildContextEntries: () => [assistant],
 		},
 	}));
 	const dashboard = formatDashboard(report);
 	assert.match(dashboard, /session facts/);
 	assert.match(dashboard, /last prompt/);
 	assert.match(dashboard, /▓/);
-	assert.match(dashboard, /input tokens/);
+	assert.match(dashboard, /prompt tokens/);
 	assert.match(dashboard, /skills  research ×1/);
 	assert.match(dashboard, /spend  in /);
 	assert.doesNotMatch(dashboard, /chars÷4/);
 	assert.doesNotMatch(dashboard, /estimated/);
+});
+
+test("counts cached tokens toward the prompt ratio instead of understating it", () => {
+	const cached = message("a", {
+		role: "assistant", provider: "openai", model: "gpt-test",
+		usage: { input: 100, output: 10, cacheRead: 700, cacheWrite: 0, totalTokens: 810, cost: { total: 0 } },
+		content: [],
+	});
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => [cached], buildContextEntries: () => [cached] },
+	}));
+	assert.equal(report.lastPrompt.promptTokens, 800);
+	assert.equal(report.lastPrompt.percent, 80);
+});
+
+test("does not fall back to abandoned-branch usage for the last prompt", () => {
+	const abandoned = message("b", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(50), content: [] });
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => [abandoned], buildContextEntries: () => [] },
+	}));
+	assert.equal(report.lastPrompt.unknown, true);
+});
+
+test("omits the prompt percent when the last turn ran a different model", () => {
+	const other = message("a", { role: "assistant", provider: "anthropic", model: "claude-test", usage: usage(100), content: [] });
+	const report = collectContextReport(source({
+		model: { provider: "openai", id: "gpt-test", contextWindow: 1000 },
+		sessionManager: { getEntries: () => [other], buildContextEntries: () => [other] },
+	}));
+	assert.equal(report.lastPrompt.percent, null);
+	assert.match(report.lastPrompt.note ?? "", /differs from current model/);
+});
+
+test("tool bloat shows the aggregate that triggered, not just the largest result", () => {
+	const entries = Array.from({ length: 6 }, (_, i) =>
+		message(`t${i}`, { role: "toolResult", toolName: "read", content: [{ type: "text", text: "x".repeat(9_000) }] }),
+	);
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => entries, buildContextEntries: () => [] },
+	}));
+	assert.equal(report.toolBloat.status, "critical");
+	assert.equal(report.toolBloat.observedChars, 54_000);
+	assert.equal(report.toolBloat.largestChars, 9_000);
+	assert.match(formatDashboard(report), /aggregate 54,000 chars/);
+});
+
+test("labels fork points as branch points, not branches", () => {
+	const fork = [
+		{ type: "custom_message", id: "root", parentId: null },
+		{ type: "custom_message", id: "x", parentId: "root" },
+		{ type: "custom_message", id: "y", parentId: "root" },
+		{ type: "custom_message", id: "z", parentId: "root" },
+	];
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => fork, buildContextEntries: () => [] },
+	}));
+	assert.equal(report.branch.branchPoints, 1);
+	assert.match(formatDashboard(report), /branch points/);
+	assert.doesNotMatch(formatDashboard(report), /\d+ branches/);
 });
 
 test("toggles between dashboard and details on [d]", () => {

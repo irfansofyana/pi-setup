@@ -66,9 +66,11 @@ export interface LastPrompt {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	promptTokens: number;
 	totalTokens: number;
 	contextWindow: number | null;
 	percent: number | null;
+	note?: string;
 	unknown: boolean;
 }
 
@@ -391,20 +393,26 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 	processEntries(sessionEntries, sessionUsage, true);
 	processEntries(activeEntries, activeBranchUsage, false);
 
-	const last = lastAssistantWithUsage(activeEntries) ?? lastAssistantWithUsage(sessionEntries);
+	const last = lastAssistantWithUsage(activeEntries);
 	const contextWindow = numberValue(ctx.model?.contextWindow) || null;
+	const modelMatches = Boolean(
+		last && (!ctx.model?.provider || ctx.model.provider === last.provider) && (!ctx.model?.id || ctx.model.id === last.model),
+	);
+	const promptTokens = last ? last.usage.input + last.usage.cacheRead + last.usage.cacheWrite : 0;
 	const lastPrompt: LastPrompt = last
 		? {
 			input: last.usage.input,
 			output: last.usage.output,
 			cacheRead: last.usage.cacheRead,
 			cacheWrite: last.usage.cacheWrite,
+			promptTokens,
 			totalTokens: last.usage.totalTokens,
 			contextWindow,
-			percent: contextWindow ? (last.usage.input / contextWindow) * 100 : null,
+			percent: contextWindow && modelMatches ? (promptTokens / contextWindow) * 100 : null,
+			note: modelMatches ? undefined : `previous turn ran ${last.provider}/${last.model} (differs from current model)`,
 			unknown: false,
 		}
-		: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, contextWindow, percent: null, unknown: true };
+		: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0, totalTokens: 0, contextWindow, percent: null, note: undefined, unknown: true };
 
 	const model = {
 		provider: typeof ctx.model?.provider === "string" && ctx.model.provider ? ctx.model.provider : (last?.provider ?? "unknown"),
@@ -518,9 +526,12 @@ function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[]
 	lines.push(singleBar(ratio, 40, paint, barFillColor(ratio)));
 	if (report.lastPrompt.unknown) {
 		lines.push("no completed turn yet");
+	} else if (report.lastPrompt.percent !== null) {
+		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} / ${formatNumber(report.lastPrompt.contextWindow)} prompt tokens · ${formatNumber(report.lastPrompt.percent)}%`);
+	} else if (report.lastPrompt.note) {
+		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} prompt tokens · ${report.lastPrompt.note}`);
 	} else {
-		const percent = report.lastPrompt.percent !== null ? ` · ${formatNumber(report.lastPrompt.percent)}%` : "";
-		lines.push(`${formatNumber(report.lastPrompt.input)} / ${formatNumber(report.lastPrompt.contextWindow)} input tokens${percent}`);
+		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} prompt tokens · window unknown`);
 	}
 	lines.push("");
 
@@ -541,14 +552,14 @@ function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[]
 	lines.push(report.skills.length
 		? `skills  ${report.skills.slice(0, 8).map((skill) => `${skill.name} ×${skill.invocations}`).join(" · ")}${report.skills.length > 8 ? " · …" : ""}`
 		: "skills  none (explicit invocations only)");
-	lines.push(`session  ${report.branch.sessionMessages} messages · ${report.branch.sessionCompactions} compactions · ${report.branch.branchPoints} branches · ${report.branch.sessionBranchSummaries} summaries`);
+	lines.push(`session  ${report.branch.sessionMessages} messages · ${report.branch.sessionCompactions} compactions · ${report.branch.branchPoints} branch points · ${report.branch.sessionBranchSummaries} summaries`);
 	lines.push(report.systemPrompt.available
 		? `prompt  ${formatNumber(report.systemPrompt.chars)} chars · ${formatBytes(report.systemPrompt.bytes)} (measured, not tokenized)`
 		: "prompt  unavailable");
 
 	if (report.toolBloat.status === "critical") {
 		lines.push("");
-		lines.push(paint("error", `tool bloat  largest result ${formatNumber(report.toolBloat.largestChars)} chars`));
+		lines.push(paint("error", `tool bloat  aggregate ${formatNumber(report.toolBloat.observedChars)} chars (limit ${formatNumber(TOOL_BLOAT_CHARS)}) · largest ${formatNumber(report.toolBloat.largestChars)} chars (limit ${formatNumber(LARGE_TOOL_RESULT_CHARS)})`));
 	}
 
 	return lines;
@@ -567,9 +578,14 @@ function detailLines(report: ContextReport, paint: Paint = noPaint): string[] {
 		lines.push("no completed assistant turn with reported usage yet");
 	} else {
 		lines.push(`input=${formatNumber(report.lastPrompt.input)} output=${formatNumber(report.lastPrompt.output)} cacheRead=${formatNumber(report.lastPrompt.cacheRead)} cacheWrite=${formatNumber(report.lastPrompt.cacheWrite)} totalTokens=${formatNumber(report.lastPrompt.totalTokens)}`);
-		lines.push(report.lastPrompt.percent !== null
-			? `input vs window: ${formatNumber(report.lastPrompt.input)} / ${formatNumber(report.lastPrompt.contextWindow)} = ${formatNumber(report.lastPrompt.percent)}%`
-			: "context window unknown; percent not shown");
+		lines.push(`prompt (input+cacheRead+cacheWrite)=${formatNumber(report.lastPrompt.promptTokens)}`);
+		if (report.lastPrompt.percent !== null) {
+			lines.push(`prompt vs window: ${formatNumber(report.lastPrompt.promptTokens)} / ${formatNumber(report.lastPrompt.contextWindow)} = ${formatNumber(report.lastPrompt.percent)}%`);
+		} else if (report.lastPrompt.note) {
+			lines.push(`percent omitted: ${report.lastPrompt.note}`);
+		} else {
+			lines.push("percent omitted: context window unknown");
+		}
 	}
 	lines.push("", header("Spend (exact provider-reported usage, all session entries)"), usageLine("all", report.sessionUsage));
 	lines.push(`usage sources: assistant=${report.usageSources.assistant} toolResult.usage=${report.usageSources.toolResult} compaction.usage=${report.usageSources.compaction} branch-summary.usage=${report.usageSources.branchSummary}; each entry counted once`);
