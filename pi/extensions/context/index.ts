@@ -1,4 +1,4 @@
-import type { BuildSystemPromptOptions, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { parseSkillBlock, type BuildSystemPromptOptions, type ExtensionAPI, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
@@ -8,25 +8,6 @@ export interface UsageTotals {
 	cacheWrite: number;
 	totalTokens: number;
 	costTotal: number;
-}
-
-export interface ContextFlag {
-	status: "clear" | "watch" | "critical" | "unknown";
-	observed: number | null;
-	threshold: string;
-	note?: string;
-}
-
-export interface ToolSummary {
-	name: string;
-	calls: number;
-	results: number;
-	resultChars: number;
-	resultBytes: number;
-	errors: number;
-	excludedFromContext: number;
-	largeResults: number;
-	largestResultChars: number;
 }
 
 export interface ModelSummary {
@@ -45,29 +26,64 @@ export interface TurnSummary {
 	toolResults: number;
 }
 
-export interface PromptEstimate {
-	customPrompt: { chars: number; bytes: number };
+export interface ToolSummary {
+	name: string;
+	calls: number;
+	results: number;
+	resultChars: number;
+	resultBytes: number;
+	errors: number;
+	excludedFromContext: number;
+	largeResults: number;
+	largestResultChars: number;
+}
+
+export interface SkillUsage {
+	name: string;
+	invocations: number;
+}
+
+export interface SizeInfo {
+	chars: number;
+	bytes: number;
+}
+
+export interface PromptMetadata {
+	customPrompt: SizeInfo;
 	selectedTools: { count: number; names: string[] };
 	toolSnippets: { count: number; chars: number; bytes: number };
 	guidelines: { count: number; chars: number; bytes: number };
-	appendPrompt: { chars: number; bytes: number };
+	appendPrompt: SizeInfo;
 	contextFiles: { count: number; pathChars: number; contentChars: number; contentBytes: number };
 	skills: { count: number; names: string[]; metadataChars: number; metadataBytes: number };
 	totalChars: number;
 	totalBytes: number;
-	estimatedTokens: number;
 	unavailable: boolean;
 }
 
+export interface LastPrompt {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	promptTokens: number;
+	totalTokens: number;
+	contextWindow: number | null;
+	percent: number | null;
+	note?: string;
+	unknown: boolean;
+}
+
+export interface ToolBloat {
+	status: "clear" | "critical";
+	observedChars: number;
+	largestChars: number;
+	threshold: string;
+}
+
 export interface ContextReport {
-	context: {
-		tokens: number | null;
-		contextWindow: number | null;
-		percent: number | null;
-		percentDerived: boolean;
-		freeTokens: number | null;
-		unknown: boolean;
-	};
+	model: { provider: string; id: string; contextWindow: number | null };
+	lastPrompt: LastPrompt;
 	sessionUsage: UsageTotals;
 	activeBranchUsage: UsageTotals;
 	usageSources: { assistant: number; toolResult: number; compaction: number; branchSummary: number };
@@ -85,25 +101,25 @@ export interface ContextReport {
 	models: ModelSummary[];
 	turns: TurnSummary[];
 	tools: ToolSummary[];
-	prompt: PromptEstimate;
-	activeEstimate: { entries: number; messages: number; chars: number; bytes: number; estimatedTokens: number };
-	flags: { contextPressure: ContextFlag; promptOverhead: ContextFlag; toolBloat: ContextFlag };
+	skills: SkillUsage[];
+	systemPrompt: { chars: number; bytes: number; available: boolean };
+	prompt: PromptMetadata;
+	toolBloat: ToolBloat;
 }
 
 export interface ContextReportSource {
-	getContextUsage: () => { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
 	model?: { contextWindow?: number; provider?: string; id?: string };
 	sessionManager: {
 		getEntries: () => unknown[];
 		buildContextEntries: () => unknown[];
 	};
 	getSystemPromptOptions: () => BuildSystemPromptOptions;
+	getSystemPrompt: () => string;
 }
 
 const ZERO_USAGE: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, costTotal: 0 };
 const LARGE_TOOL_RESULT_CHARS = 20_000;
 const TOOL_BLOAT_CHARS = 50_000;
-const PROMPT_OVERHEAD_PERCENT = 25;
 const CONTEXT_WATCH_PERCENT = 70;
 const CONTEXT_CRITICAL_PERCENT = 90;
 const MAX_REPORT_LINES = 140;
@@ -144,24 +160,25 @@ function usageIsPresent(value: unknown): boolean {
 	return Boolean(value && typeof value === "object" && Object.values(value as Record<string, unknown>).some((item) => typeof item === "number"));
 }
 
+function blockText(part: unknown): string {
+	if (typeof part === "string") return part;
+	if (!part || typeof part !== "object") return "";
+	const record = part as Record<string, unknown>;
+	if (typeof record.text === "string") return record.text;
+	if (record.type === "thinking" && typeof record.thinking === "string") return `[thinking] ${record.thinking}`;
+	if (record.type === "toolCall") {
+		const name = typeof record.name === "string" ? record.name : "unknown-tool";
+		const args = record.arguments === undefined ? "" : ` ${JSON.stringify(record.arguments)}`;
+		return `[toolCall ${name}]${args}`;
+	}
+	if (record.type === "image") return `[image ${typeof record.mimeType === "string" ? record.mimeType : "unknown"}]`;
+	return "";
+}
+
 function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
-	return content
-		.map((part) => {
-			if (!part || typeof part !== "object") return "";
-			const record = part as Record<string, unknown>;
-			if (typeof record.text === "string") return record.text;
-			if (record.type === "thinking" && typeof record.thinking === "string") return `[thinking] ${record.thinking}`;
-			if (record.type === "toolCall") {
-				const name = typeof record.name === "string" ? record.name : "unknown-tool";
-				const args = record.arguments === undefined ? "" : ` ${JSON.stringify(record.arguments)}`;
-				return `[toolCall ${name}]${args}`;
-			}
-			if (record.type === "image") return `[image ${typeof record.mimeType === "string" ? record.mimeType : "unknown"}]`;
-			return "";
-		})
-		.join("\n");
+	return content.map(blockText).join("\n");
 }
 
 function byteLength(value: string): number {
@@ -178,24 +195,25 @@ function messageOf(entry: unknown): Record<string, unknown> | undefined {
 }
 
 function contentSize(value: unknown): { chars: number; bytes: number } {
-	const text = textFromContent(value);
-	return { chars: text.length, bytes: byteLength(text) };
-}
-
-function messageSize(message: Record<string, unknown>): { chars: number; bytes: number } {
-	if (excludedFromContext(message)) return { chars: 0, bytes: 0 };
-	if (message.role === "bashExecution") return contentSize(`${String(message.command ?? "")}\n${String(message.output ?? "")}`);
-	if (message.role === "compactionSummary" || message.role === "branchSummary") return contentSize(message.summary);
-	return contentSize(message.content);
-}
-
-function entrySize(entry: unknown): { chars: number; bytes: number } {
-	const record = recordOf(entry);
-	const message = messageOf(entry);
-	if (message) return messageSize(message);
-	if (record?.type === "custom_message") return contentSize(record.content);
-	if (record?.type === "compaction" || record?.type === "branch_summary") return contentSize(record.summary);
-	return { chars: 0, bytes: 0 };
+	if (typeof value === "string") return { chars: value.length, bytes: byteLength(value) };
+	if (!Array.isArray(value)) return { chars: 0, bytes: 0 };
+	let chars = 0;
+	let bytes = 0;
+	for (const part of value) {
+		const record = recordOf(part);
+		if (record?.type === "image") {
+			// Measure the stored payload, not the placeholder marker, so large
+			// image results are reflected in sizes and the bloat threshold.
+			const data = typeof record.data === "string" ? record.data : "";
+			chars += data.length;
+			bytes += byteLength(data);
+			continue;
+		}
+		const text = blockText(part);
+		chars += text.length;
+		bytes += byteLength(text);
+	}
+	return { chars, bytes };
 }
 
 function excludedFromContext(message: Record<string, unknown>): boolean {
@@ -215,7 +233,7 @@ function sumSizes(a: { chars: number; bytes: number }, b: { chars: number; bytes
 	return { chars: a.chars + b.chars, bytes: a.bytes + b.bytes };
 }
 
-function promptEstimate(options: BuildSystemPromptOptions): PromptEstimate {
+function promptMetadata(options: BuildSystemPromptOptions): PromptMetadata {
 	const customPrompt = contentSize(options.customPrompt);
 	const selectedTools = options.selectedTools ?? [];
 	const snippets = Object.entries(options.toolSnippets ?? {})
@@ -258,7 +276,6 @@ function promptEstimate(options: BuildSystemPromptOptions): PromptEstimate {
 		skills,
 		totalChars,
 		totalBytes,
-		estimatedTokens: Math.ceil(totalChars / 4),
 		unavailable: false,
 	};
 }
@@ -281,36 +298,40 @@ function branchPoints(entries: unknown[]): number {
 	return [...children.values()].filter((count) => count > 1).length;
 }
 
-function contextPercent(usage: { tokens: number | null; contextWindow: number; percent: number | null } | undefined, model?: { contextWindow?: number }) {
-	if (!usage) return { tokens: null, contextWindow: model?.contextWindow ?? null, percent: null, percentDerived: false, freeTokens: null, unknown: true };
-	const contextWindow = numberValue(usage.contextWindow) || numberValue(model?.contextWindow) || null;
-	const tokens = typeof usage.tokens === "number" && Number.isFinite(usage.tokens) ? usage.tokens : null;
-	const percent = typeof usage.percent === "number" && Number.isFinite(usage.percent)
-		? usage.percent
-		: tokens !== null && contextWindow
-			? (tokens / contextWindow) * 100
-			: null;
-	return {
-		tokens,
-		contextWindow,
-		percent,
-		percentDerived: usage.percent == null && percent !== null,
-		freeTokens: tokens !== null && contextWindow !== null ? Math.max(0, contextWindow - tokens) : null,
-		unknown: tokens === null,
-	};
-}
-
-function contextFlag(context: ContextReport["context"]): ContextFlag {
-	if (context.percent === null) return { status: "unknown", observed: null, threshold: ">70% watch; >90% critical", note: "Pi token estimate unavailable, commonly immediately after compaction" };
-	return {
-		status: context.percent > CONTEXT_CRITICAL_PERCENT ? "critical" : context.percent > CONTEXT_WATCH_PERCENT ? "watch" : "clear",
-		observed: context.percent,
-		threshold: ">70% watch; >90% critical",
-	};
-}
-
 function modelKey(provider: string, model: string): string {
 	return `${provider}\u0000${model}`;
+}
+
+function skillInvocations(entries: unknown[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const entry of entries) {
+		const record = recordOf(entry);
+		if (record?.type !== "message") continue;
+		const message = recordOf(record.message);
+		if (!message || message.role !== "user") continue;
+		const parsed = parseSkillBlock(textFromContent(message.content));
+		if (parsed) counts.set(parsed.name, (counts.get(parsed.name) ?? 0) + 1);
+	}
+	return counts;
+}
+
+function lastAssistantWithUsage(entries: unknown[]): { provider: string; model: string; usage: UsageTotals } | undefined {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const record = recordOf(entries[i]);
+		if (record?.type !== "message") continue;
+		const message = recordOf(record.message);
+		if (!message || message.role !== "assistant") continue;
+		if (message.stopReason === "aborted" || message.stopReason === "error") continue;
+		if (!usageIsPresent(message.usage)) continue;
+		const usage = usageValue(message.usage);
+		if (usage.input <= 0 && usage.output <= 0 && usage.totalTokens <= 0) continue;
+		return {
+			provider: typeof message.provider === "string" ? message.provider : "unknown",
+			model: typeof message.model === "string" ? message.model : "unknown",
+			usage,
+		};
+	}
+	return undefined;
 }
 
 export function collectContextReport(ctx: ContextReportSource): ContextReport {
@@ -362,8 +383,6 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 					toolMap.set(name, tool);
 				}
 			} else if (message.role === "user") {
-				// A user message closes the assistant's tool flow; clear the active
-				// turn so later entries are not misattributed to the prior response.
 				currentTurn = undefined;
 			} else if (message.role === "toolResult" || message.role === "bashExecution") {
 				if (usageIsPresent(message.usage)) {
@@ -383,8 +402,6 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 				if (excludedFromContext(message)) tool.excludedFromContext++;
 				if (size.chars > LARGE_TOOL_RESULT_CHARS) tool.largeResults++;
 				tool.largestResultChars = Math.max(tool.largestResultChars, size.chars);
-				// bashExecution records user/extension shell runs (the ! command and
-				// ctx.exec()), not assistant tool results, so it never counts toward a turn.
 				if (message.role === "toolResult" && currentTurn) currentTurn.toolResults++;
 				toolMap.set(name, tool);
 			}
@@ -392,47 +409,67 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 	};
 
 	processEntries(sessionEntries, sessionUsage, true);
-	// Tool results and summary usage are deliberately handled in the same single entry pass above.
 	processEntries(activeEntries, activeBranchUsage, false);
 
-	const activeEstimate = activeEntries.reduce(
-		(total, entry) => {
-			const record = recordOf(entry);
-			const size = entrySize(entry);
-			return {
-				entries: total.entries + 1,
-				messages: total.messages + (record?.type === "message" || record?.type === "custom_message" ? 1 : 0),
-				chars: total.chars + size.chars,
-				bytes: total.bytes + size.bytes,
-			};
-		},
-		{ entries: 0, messages: 0, chars: 0, bytes: 0 },
+	const last = lastAssistantWithUsage(activeEntries);
+	const contextWindow = numberValue(ctx.model?.contextWindow) || null;
+	const modelMatches = Boolean(
+		last && (!ctx.model?.provider || ctx.model.provider === last.provider) && (!ctx.model?.id || ctx.model.id === last.model),
 	);
-	const context = contextPercent(ctx.getContextUsage(), ctx.model);
-	let options: PromptEstimate;
+	const promptTokens = last ? last.usage.input + last.usage.cacheRead + last.usage.cacheWrite : 0;
+	const lastPrompt: LastPrompt = last
+		? {
+			input: last.usage.input,
+			output: last.usage.output,
+			cacheRead: last.usage.cacheRead,
+			cacheWrite: last.usage.cacheWrite,
+			promptTokens,
+			totalTokens: last.usage.totalTokens,
+			contextWindow,
+			percent: contextWindow && modelMatches ? (promptTokens / contextWindow) * 100 : null,
+			note: modelMatches ? undefined : `previous turn ran ${last.provider}/${last.model} (differs from current model)`,
+			unknown: false,
+		}
+		: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, promptTokens: 0, totalTokens: 0, contextWindow, percent: null, note: undefined, unknown: true };
+
+	const model = {
+		provider: typeof ctx.model?.provider === "string" && ctx.model.provider ? ctx.model.provider : (last?.provider ?? "unknown"),
+		id: typeof ctx.model?.id === "string" && ctx.model.id ? ctx.model.id : (last?.model ?? "unknown"),
+		contextWindow,
+	};
+
+	let systemPrompt = { chars: 0, bytes: 0, available: false };
+	try {
+		const text = ctx.getSystemPrompt();
+		if (typeof text === "string") systemPrompt = { chars: text.length, bytes: byteLength(text), available: true };
+	} catch {
+		// getSystemPrompt unavailable in this context.
+	}
+
+	let options: PromptMetadata;
 	let promptUnavailable = false;
 	try {
-		options = promptEstimate(ctx.getSystemPromptOptions());
+		options = promptMetadata(ctx.getSystemPromptOptions());
 	} catch {
-		options = promptEstimate({ cwd: "" });
+		options = promptMetadata({ cwd: "" });
 		promptUnavailable = true;
 	}
 	options = { ...options, unavailable: promptUnavailable };
-	const promptOverheadObserved = context.tokens !== null && !promptUnavailable ? options.estimatedTokens / Math.max(1, context.tokens) * 100 : null;
+
 	const toolChars = [...toolMap.values()].reduce((total, tool) => total + tool.resultChars, 0);
 	const largestToolResult = Math.max(0, ...[...toolMap.values()].map((tool) => tool.largestResultChars));
-	const promptOverhead: ContextFlag = promptUnavailable
-		? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "system-prompt options unavailable; prompt contributors not estimated" }
-		: promptOverheadObserved === null
-			? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "not comparable while current context estimate is unknown" }
-			: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context token estimate (raw contributor estimate)" };
-	const toolBloatObserved = toolChars;
-	const toolBloat: ContextFlag = toolChars > TOOL_BLOAT_CHARS || largestToolResult > LARGE_TOOL_RESULT_CHARS
-		? { status: "critical", observed: toolBloatObserved, threshold: ">50,000 aggregate chars or any result >20,000 chars", note: `aggregate=${formatNumber(toolChars)} chars; largest=${formatNumber(largestToolResult)} chars` }
-		: { status: "clear", observed: toolBloatObserved, threshold: ">50,000 aggregate chars or any result >20,000 chars" };
+	const toolBloat: ToolBloat = toolChars > TOOL_BLOAT_CHARS || largestToolResult > LARGE_TOOL_RESULT_CHARS
+		? { status: "critical", observedChars: toolChars, largestChars: largestToolResult, threshold: ">50,000 aggregate chars or any result >20,000 chars" }
+		: { status: "clear", observedChars: toolChars, largestChars: largestToolResult, threshold: ">50,000 aggregate chars or any result >20,000 chars" };
+
+	const activeMessageCount = activeEntries.filter((entry) => {
+		const record = recordOf(entry);
+		return record?.type === "message" || record?.type === "custom_message";
+	}).length;
 
 	return {
-		context,
+		model,
+		lastPrompt,
 		sessionUsage,
 		activeBranchUsage,
 		usageSources,
@@ -440,7 +477,7 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 			sessionEntries: sessionEntries.length,
 			activeEntries: activeEntries.length,
 			sessionMessages: sessionEntries.filter((entry) => recordOf(entry)?.type === "message").length,
-			activeMessages: activeEstimate.messages,
+			activeMessages: activeMessageCount,
 			sessionCompactions: sessionEntries.filter((entry) => recordOf(entry)?.type === "compaction").length,
 			activeCompactions: activeEntries.filter((entry) => recordOf(entry)?.type === "compaction").length,
 			sessionBranchSummaries: sessionEntries.filter((entry) => recordOf(entry)?.type === "branch_summary").length,
@@ -450,9 +487,12 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 		models: [...models.values()].sort((a, b) => `${a.provider}/${a.model}`.localeCompare(`${b.provider}/${b.model}`)),
 		turns,
 		tools: [...toolMap.values()].sort((a, b) => b.resultChars - a.resultChars || a.name.localeCompare(b.name)),
+		skills: [...skillInvocations(sessionEntries).entries()]
+			.map(([name, invocations]) => ({ name, invocations }))
+			.sort((a, b) => b.invocations - a.invocations || a.name.localeCompare(b.name)),
+		systemPrompt,
 		prompt: options,
-		activeEstimate: { ...activeEstimate, estimatedTokens: Math.ceil(activeEstimate.chars / 4) },
-		flags: { contextPressure: contextFlag(context), promptOverhead, toolBloat },
+		toolBloat,
 	};
 }
 
@@ -472,74 +512,141 @@ function formatBytes(value: number): string {
 }
 
 function usageLine(label: string, usage: UsageTotals): string {
-	return `${label}: input=${formatNumber(usage.input)} output=${formatNumber(usage.output)} cacheRead=${formatNumber(usage.cacheRead)} cacheWrite=${formatNumber(usage.cacheWrite)} totalTokens=${formatNumber(usage.totalTokens)} cost.total=${formatCost(usage.costTotal)} (provider-reported/model metadata; not billing accounting)`;
+	return `${label}: input=${formatNumber(usage.input)} output=${formatNumber(usage.output)} cacheRead=${formatNumber(usage.cacheRead)} cacheWrite=${formatNumber(usage.cacheWrite)} totalTokens=${formatNumber(usage.totalTokens)} cost.total=${formatCost(usage.costTotal)} (tokens provider-reported; cost model-derived, not billing accounting)`;
 }
 
-function flagLine(label: string, flag: ContextFlag): string {
-	const unit = label === "tool bloat" ? " chars" : "%";
-	const observed = flag.observed === null ? "unknown" : `${formatNumber(flag.observed)}${unit}`;
-	return `${label}: ${flag.status}; observed=${observed}; threshold=${flag.threshold}${flag.note ? `; ${flag.note}` : ""}`;
+type Paint = (color: ThemeColor, text: string) => string;
+
+const noPaint: Paint = (_color, text) => text;
+
+function singleBar(ratio: number, width: number, paint: Paint, fill: ThemeColor = "accent"): string {
+	const clamped = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
+	const filled = Math.round(clamped * width);
+	return paint(fill, "▓".repeat(filled)) + paint("dim", "░".repeat(Math.max(0, width - filled)));
 }
 
-function reportLines(report: ContextReport): string[] {
+function barFillColor(ratio: number): ThemeColor {
+	if (!Number.isFinite(ratio)) return "dim";
+	if (ratio >= CONTEXT_CRITICAL_PERCENT / 100) return "error";
+	if (ratio >= CONTEXT_WATCH_PERCENT / 100) return "warning";
+	return "accent";
+}
+
+function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[] {
+	const lines: string[] = [];
+	lines.push("/context — session facts");
+
+	lines.push(`model  ${report.model.provider}/${report.model.id} · window ${formatNumber(report.model.contextWindow)}`);
+
+	lines.push("");
+	lines.push(paint("muted", "last prompt (previous turn, provider-reported)"));
+	const ratio = report.lastPrompt.percent !== null ? report.lastPrompt.percent / 100 : 0;
+	lines.push(singleBar(ratio, 40, paint, barFillColor(ratio)));
+	if (report.lastPrompt.unknown) {
+		lines.push("no completed turn yet");
+	} else if (report.lastPrompt.percent !== null) {
+		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} / ${formatNumber(report.lastPrompt.contextWindow)} prompt tokens · ${formatNumber(report.lastPrompt.percent)}%`);
+	} else if (report.lastPrompt.note) {
+		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} prompt tokens · ${report.lastPrompt.note}`);
+	} else {
+		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} prompt tokens · window unknown`);
+	}
+	lines.push("");
+
+	lines.push(`spend  in ${formatNumber(report.sessionUsage.input)} · out ${formatNumber(report.sessionUsage.output)} · cache ${formatNumber(report.sessionUsage.cacheRead)}/${formatNumber(report.sessionUsage.cacheWrite)} · total ${formatNumber(report.sessionUsage.totalTokens)} · $${formatCost(report.sessionUsage.costTotal)}`);
+	lines.push(`turns ${report.turns.length}${report.models.length ? ` · ${report.models.slice(0, 4).map((model) => `${model.provider}/${model.model} ×${model.calls}`).join(" · ")}${report.models.length > 4 ? " · …" : ""}` : ""}`);
+
+	if (report.tools.length) {
+		lines.push("");
+		lines.push(paint("muted", "tools (result sizes are exact chars/bytes)"));
+		for (const tool of report.tools.slice(0, 4)) {
+			const large = tool.largestResultChars > LARGE_TOOL_RESULT_CHARS ? paint("error", "  ⚠ >20k") : "";
+			lines.push(`  ${tool.name} ×${tool.calls} · ${formatNumber(tool.resultChars)} chars · ${formatBytes(tool.resultBytes)}${large}`);
+		}
+		if (report.tools.length > 4) lines.push(paint("dim", `  … ${report.tools.length - 4} more tools`));
+	}
+
+	lines.push("");
+	lines.push(report.skills.length
+		? `skills  ${report.skills.slice(0, 8).map((skill) => `${skill.name} ×${skill.invocations}`).join(" · ")}${report.skills.length > 8 ? " · …" : ""}`
+		: "skills  none (explicit invocations only)");
+	lines.push(`session  ${report.branch.sessionMessages} messages · ${report.branch.sessionCompactions} compactions · ${report.branch.branchPoints} branch points · ${report.branch.sessionBranchSummaries} summaries`);
+	lines.push(report.systemPrompt.available
+		? `prompt  ${formatNumber(report.systemPrompt.chars)} chars · ${formatBytes(report.systemPrompt.bytes)} (measured, not tokenized)`
+		: "prompt  unavailable");
+
+	if (report.toolBloat.status === "critical") {
+		lines.push("");
+		lines.push(paint("error", `tool bloat  aggregate ${formatNumber(report.toolBloat.observedChars)} chars (limit ${formatNumber(TOOL_BLOAT_CHARS)}) · largest ${formatNumber(report.toolBloat.largestChars)} chars (limit ${formatNumber(LARGE_TOOL_RESULT_CHARS)})`));
+	}
+
+	return lines;
+}
+
+function detailLines(report: ContextReport, paint: Paint = noPaint): string[] {
+	const header = (text: string) => paint("accent", text);
 	const lines: string[] = [
-		"/context — active-session diagnostics (read-only)",
-		"Exact session usage and estimates are labeled; no raw prompts, context files, or tool output are shown.",
 		"",
-		"Current context (Pi estimate)",
-		`tokens=${formatNumber(report.context.tokens)} window=${formatNumber(report.context.contextWindow)} percent=${formatNumber(report.context.percent)}${report.context.percentDerived ? " (computed)" : ""} free=${formatNumber(report.context.freeTokens)}${report.context.unknown ? " — unknown after compaction or before next response" : ""}`,
+		header("Model & window"),
+		`${report.model.provider}/${report.model.id} · window=${formatNumber(report.model.contextWindow)} (configured value, not usage)`,
 		"",
-		"Session-file spend (all entries and branches, including abandoned branches)",
-		usageLine("all session usage", report.sessionUsage),
-		`usage sources: assistant=${report.usageSources.assistant} toolResult.usage=${report.usageSources.toolResult} compaction.usage=${report.usageSources.compaction} branch-summary.usage=${report.usageSources.branchSummary}; each entry counted once`,
-		"toolResult.usage is counted only when present for nested LLM work; ordinary tool results contribute chars/bytes, not token spend.",
-		usageLine("active branch usage (subset)", report.activeBranchUsage),
-		"",
-		"Active branch context",
-		`entries=${report.branch.activeEntries} messages=${report.branch.activeMessages}; session-file entries=${report.branch.sessionEntries} messages=${report.branch.sessionMessages}; branch points=${report.branch.branchPoints}`,
-		`compactions active/session=${report.branch.activeCompactions}/${report.branch.sessionCompactions}; branch summaries active/session=${report.branch.activeBranchSummaries}/${report.branch.sessionBranchSummaries}`,
-		"",
-		"Flags (transparent thresholds only)",
-		flagLine("context pressure", report.flags.contextPressure),
-		flagLine("prompt overhead", report.flags.promptOverhead),
-		flagLine("tool bloat", report.flags.toolBloat),
-		"",
-		"Provider/model facts",
+		header("Last prompt (exact, provider-reported — previous completed turn)"),
 	];
+	if (report.lastPrompt.unknown) {
+		lines.push("no completed assistant turn with reported usage yet");
+	} else {
+		lines.push(`input=${formatNumber(report.lastPrompt.input)} output=${formatNumber(report.lastPrompt.output)} cacheRead=${formatNumber(report.lastPrompt.cacheRead)} cacheWrite=${formatNumber(report.lastPrompt.cacheWrite)} totalTokens=${formatNumber(report.lastPrompt.totalTokens)}`);
+		lines.push(`prompt (input+cacheRead+cacheWrite)=${formatNumber(report.lastPrompt.promptTokens)}`);
+		if (report.lastPrompt.percent !== null) {
+			lines.push(`prompt vs window: ${formatNumber(report.lastPrompt.promptTokens)} / ${formatNumber(report.lastPrompt.contextWindow)} = ${formatNumber(report.lastPrompt.percent)}%`);
+		} else if (report.lastPrompt.note) {
+			lines.push(`percent omitted: ${report.lastPrompt.note}`);
+		} else {
+			lines.push("percent omitted: context window unknown");
+		}
+	}
+	lines.push("", header("Spend (exact provider-reported usage, all session entries)"), usageLine("all", report.sessionUsage));
+	lines.push(`usage sources: assistant=${report.usageSources.assistant} toolResult.usage=${report.usageSources.toolResult} compaction.usage=${report.usageSources.compaction} branch-summary.usage=${report.usageSources.branchSummary}; each entry counted once`);
+	lines.push("toolResult.usage is counted only when present for nested LLM work; ordinary tool results contribute chars/bytes, not token spend.");
+	lines.push(usageLine("active branch (subset)", report.activeBranchUsage));
+	lines.push("", header("Provider/model facts"));
 	for (const model of report.models.slice(0, 16)) lines.push(`${model.provider}/${model.model}: calls=${model.calls}; ${usageLine("usage", model.usage)}`);
 	if (report.models.length > 16) lines.push(`… ${report.models.length - 16} more provider/model groups`);
-	lines.push("", "Per-turn facts (one provider response per turn; duration/exact token timing unavailable)");
-	for (const turn of report.turns.slice(-16)) lines.push(`turn ${turn.turn}: ${turn.provider}/${turn.model}; toolCalls=${turn.toolCalls} toolResults=${turn.toolResults}; totalTokens=${formatNumber(turn.usage.totalTokens)}`);
+	lines.push("", header("Per-turn facts (exact; one provider response per turn)"));
+	for (const turn of report.turns.slice(-16)) lines.push(`turn ${turn.turn}: ${turn.provider}/${turn.model}; toolCalls=${turn.toolCalls} toolResults=${turn.toolResults}; ${usageLine("usage", turn.usage)}`);
 	if (report.turns.length > 16) lines.push(`… ${report.turns.length - 16} earlier turns omitted`);
-	lines.push("", "Tool facts (result sizes are text chars/UTF-8 bytes)");
+	lines.push("", header("Tool facts (result sizes are exact chars/bytes)"));
 	for (const tool of report.tools.slice(0, 20)) lines.push(`${tool.name}: calls=${tool.calls} results=${tool.results} chars=${formatNumber(tool.resultChars)} bytes=${formatBytes(tool.resultBytes)} largest=${formatNumber(tool.largestResultChars)} errors=${tool.errors} excluded-from-context=${tool.excludedFromContext} very-large=${tool.largeResults}`);
 	if (report.tools.length > 20) lines.push(`… ${report.tools.length - 20} more tools omitted`);
 	if (report.prompt.unavailable) {
-		lines.push("", "Prompt contributors: unavailable (system-prompt options not exposed in this context)");
+		lines.push("", header("Prompt contributors: unavailable (system-prompt options not exposed in this context)"));
 	} else {
+		lines.push("", header("Prompt contributors (exact chars/bytes; no token estimate)"));
 		lines.push(
-			"",
-			"Prompt contributors (metadata/estimates; raw content intentionally omitted)",
 			`custom prompt: ${formatNumber(report.prompt.customPrompt.chars)} chars / ${formatBytes(report.prompt.customPrompt.bytes)}`,
 			`selected tools: ${report.prompt.selectedTools.count} (${report.prompt.selectedTools.names.slice(0, 12).join(", ") || "none"}${report.prompt.selectedTools.names.length > 12 ? ", …" : ""})`,
 			`tool snippets: ${report.prompt.toolSnippets.count}; ${formatNumber(report.prompt.toolSnippets.chars)} chars / ${formatBytes(report.prompt.toolSnippets.bytes)}`,
 			`guidelines: ${report.prompt.guidelines.count}; ${formatNumber(report.prompt.guidelines.chars)} chars / ${formatBytes(report.prompt.guidelines.bytes)}`,
 			`append prompt: ${formatNumber(report.prompt.appendPrompt.chars)} chars / ${formatBytes(report.prompt.appendPrompt.bytes)}`,
-			`context files: ${report.prompt.contextFiles.count}; paths=${formatNumber(report.prompt.contextFiles.pathChars)} chars; content estimate=${formatNumber(report.prompt.contextFiles.contentChars)} chars / ${formatBytes(report.prompt.contextFiles.contentBytes)}`,
-			`skills: ${report.prompt.skills.count} (${report.prompt.skills.names.slice(0, 12).join(", ") || "none"}); metadata estimate=${formatNumber(report.prompt.skills.metadataChars)} chars / ${formatBytes(report.prompt.skills.metadataBytes)}`,
-			`raw contributor size estimate: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)}; ~${formatNumber(report.prompt.estimatedTokens)} tokens (chars÷4 estimate; excludes prompt wrappers/defaults/turn mutations)`,
+			`context files: ${report.prompt.contextFiles.count}; paths=${formatNumber(report.prompt.contextFiles.pathChars)} chars; content=${formatNumber(report.prompt.contextFiles.contentChars)} chars / ${formatBytes(report.prompt.contextFiles.contentBytes)}`,
+			`skills: ${report.prompt.skills.count} (${report.prompt.skills.names.slice(0, 12).join(", ") || "none"}); metadata=${formatNumber(report.prompt.skills.metadataChars)} chars / ${formatBytes(report.prompt.skills.metadataBytes)}`,
+			`total contributor text: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)} (measured, not tokenized)`,
 		);
 	}
-	lines.push(
-		`active entries/messages text estimate: entries=${report.activeEstimate.entries} messages=${report.activeEstimate.messages}; ${formatNumber(report.activeEstimate.chars)} chars / ${formatBytes(report.activeEstimate.bytes)}; ~${formatNumber(report.activeEstimate.estimatedTokens)} tokens (chars÷4 estimate; excluded bash omitted)`,
-		"",
-		"Press q, Escape, or Ctrl-C to close.",
-	);
+	lines.push("", header("Assembled system prompt (measured, not tokenized)"));
+	lines.push(report.systemPrompt.available ? `chars=${formatNumber(report.systemPrompt.chars)} bytes=${formatBytes(report.systemPrompt.bytes)}` : "unavailable in this context");
+	lines.push("", header("Active branch"));
+	lines.push(`entries=${report.branch.activeEntries} messages=${report.branch.activeMessages}; session-file entries=${report.branch.sessionEntries} messages=${report.branch.sessionMessages}; branch points=${report.branch.branchPoints}`);
+	lines.push(`compactions active/session=${report.branch.activeCompactions}/${report.branch.sessionCompactions}; branch summaries active/session=${report.branch.activeBranchSummaries}/${report.branch.sessionBranchSummaries}`);
 	return lines;
 }
 
+export function formatDashboard(report: ContextReport): string {
+	return dashboardLines(report).join("\n");
+}
+
 export function formatContextReport(report: ContextReport, maxLines = MAX_REPORT_LINES): string {
-	const lines = reportLines(report);
+	const lines = [...dashboardLines(report), ...detailLines(report)];
 	if (lines.length <= maxLines) return lines.join("\n");
 	return [...lines.slice(0, Math.max(1, maxLines - 1)), `… report bounded at ${maxLines} lines`].join("\n");
 }
@@ -550,27 +657,31 @@ type ContextTui = {
 };
 
 export class ContextReportComponent {
-	private readonly lines: string[];
+	private readonly dashboard: string[];
+	private readonly details: string[];
 	private readonly done: () => void;
 	private readonly requestRender: () => void;
 	private readonly viewport: number;
+	private showDetails = false;
 	private offset = 0;
 	private wrapped: string[] = [];
 
-	constructor(text: string, done: () => void, theme: Theme, tui?: ContextTui) {
+	constructor(report: ContextReport, done: () => void, theme: Theme, tui?: ContextTui) {
 		this.done = done;
 		this.requestRender = tui?.requestRender?.bind(tui) ?? (() => {});
 		this.viewport = Math.max(8, Math.floor((tui?.height ?? 32) * 0.86));
-		this.lines = text.split("\n").map((line) => {
-			if (line === "/context — active-session diagnostics (read-only)" || /^[A-Z][^:]+$/.test(line)) return theme.fg("accent", line);
-			if (/^(context pressure|prompt overhead|tool bloat): (critical|watch)/.test(line)) return theme.fg("warning", line);
-			return line;
-		});
+		const paint: Paint = (color, text) => theme.fg(color, text);
+		this.dashboard = [...dashboardLines(report, paint), "", paint("dim", "[j/k] scroll · [d] details · [q] close")];
+		this.details = [...detailLines(report, paint), "", paint("dim", "[j/k] scroll · [d] dashboard · [q] close")];
+	}
+
+	private currentLines(): string[] {
+		return this.showDetails ? this.details : this.dashboard;
 	}
 
 	render(width: number): string[] {
 		const usable = Math.max(1, width);
-		this.wrapped = this.lines.flatMap((line) => wrapTextWithAnsi(line, usable));
+		this.wrapped = this.currentLines().flatMap((line) => wrapTextWithAnsi(line, usable));
 		this.offset = Math.min(this.offset, this.maxOffset());
 		return this.wrapped.slice(this.offset, this.offset + this.viewport);
 	}
@@ -583,6 +694,12 @@ export class ContextReportComponent {
 
 	handleInput(data: string): void {
 		if (data === "q" || data === "Q" || data === "\x1b" || data === "\x03") return this.done();
+		if (data === "d" || data === "D") {
+			this.showDetails = !this.showDetails;
+			this.offset = 0;
+			this.requestRender();
+			return;
+		}
 		const previous = this.offset;
 		const max = this.maxOffset();
 		if (data === "\u001b[A" || data === "k") this.offset = Math.max(0, this.offset - 1);
@@ -597,23 +714,22 @@ export class ContextReportComponent {
 
 export function registerContextCommand(pi: Pick<ExtensionAPI, "registerCommand">): void {
 	pi.registerCommand("context", {
-		description: "Show read-only active-session diagnostics",
+		description: "Show exact read-only session facts (reported, no estimates)",
 		handler: async (_args, ctx) => {
 			const report = collectContextReport(ctx as unknown as ContextReportSource);
-			const text = formatContextReport(report);
 			if (ctx.mode === "print") {
-				console.log(text);
+				console.log(formatContextReport(report));
 				return;
 			}
 			if (ctx.mode === "rpc") {
-				ctx.ui.notify(text, "info");
+				ctx.ui.notify(formatDashboard(report), "info");
 				return;
 			}
 			if (ctx.mode === "json") {
-				console.error(text);
+				console.error(formatDashboard(report));
 				return;
 			}
-			await ctx.ui.custom((tui, theme, _keybindings, done) => new ContextReportComponent(text, () => done(undefined), theme, tui), {
+			await ctx.ui.custom((tui, theme, _keybindings, done) => new ContextReportComponent(report, () => done(undefined), theme, tui), {
 				overlay: true,
 				overlayOptions: { width: "92%", maxHeight: "86%", minWidth: 50, anchor: "center" },
 			});
@@ -624,4 +740,3 @@ export function registerContextCommand(pi: Pick<ExtensionAPI, "registerCommand">
 export default function contextExtension(pi: ExtensionAPI): void {
 	registerContextCommand(pi);
 }
-

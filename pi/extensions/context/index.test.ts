@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import contextExtension, { collectContextReport, ContextReportComponent, formatContextReport, registerContextCommand, type ContextReportSource } from "./index.ts";
+import contextExtension, { collectContextReport, ContextReportComponent, formatContextReport, formatDashboard, registerContextCommand, type ContextReportSource } from "./index.ts";
 
 function usage(totalTokens: number, cost = totalTokens / 1000) {
 	return { input: totalTokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens, cost: { total: cost } };
@@ -13,13 +13,13 @@ function message(id: string, value: Record<string, unknown>) {
 
 function source(overrides: Partial<ContextReportSource> = {}): ContextReportSource {
 	return {
-		getContextUsage: () => ({ tokens: 800, contextWindow: 1000, percent: 80 }),
 		model: { provider: "openai", id: "gpt-test", contextWindow: 1000 },
 		sessionManager: {
 			getEntries: () => [],
 			buildContextEntries: () => [],
 		},
 		getSystemPromptOptions: () => ({ cwd: "/tmp", selectedTools: [] }),
+		getSystemPrompt: () => "You are a test assistant. Be concise.",
 		...overrides,
 	};
 }
@@ -57,8 +57,6 @@ test("aggregates session-file usage across abandoned branches without double cou
 	assert.equal(report.sessionUsage.totalTokens, 240);
 	assert.equal(report.sessionUsage.input, 240);
 	assert.equal(report.activeBranchUsage.totalTokens, 120);
-	assert.equal(report.context.freeTokens, 200);
-	assert.equal(report.flags.contextPressure.status, "watch");
 	assert.equal(report.usageSources.assistant, 2);
 	assert.equal(report.usageSources.toolResult, 1);
 	assert.equal(report.usageSources.compaction, 1);
@@ -67,20 +65,17 @@ test("aggregates session-file usage across abandoned branches without double cou
 	assert.equal(report.branch.activeEntries, 2);
 	assert.equal(report.branch.sessionCompactions, 1);
 	assert.equal(report.branch.activeCompactions, 0);
+	assert.equal(report.lastPrompt.unknown, false);
+	assert.equal(report.lastPrompt.input, 100);
+	assert.equal(report.lastPrompt.percent, 10);
 });
 
-test("reports context unknown after compaction and preserves window", () => {
-	const report = collectContextReport(source({
-		getContextUsage: () => undefined,
-		model: { contextWindow: 128000 },
-	}));
-	assert.equal(report.context.tokens, null);
-	assert.equal(report.context.contextWindow, 128000);
-	assert.equal(report.context.percent, null);
-	assert.equal(report.context.freeTokens, null);
-	assert.equal(report.context.unknown, true);
-	assert.equal(report.flags.contextPressure.status, "unknown");
-	assert.match(formatContextReport(report), /unknown after compaction/);
+test("reports last prompt unknown when no assistant has reported usage and preserves window", () => {
+	const report = collectContextReport(source({ model: { contextWindow: 128000 } }));
+	assert.equal(report.lastPrompt.unknown, true);
+	assert.equal(report.lastPrompt.contextWindow, 128000);
+	assert.equal(report.lastPrompt.percent, null);
+	assert.match(formatContextReport(report), /no completed assistant turn with reported usage yet/);
 });
 
 test("groups provider-model facts and summarizes tool results, errors, and exclusions", () => {
@@ -102,10 +97,10 @@ test("groups provider-model facts and summarizes tool results, errors, and exclu
 	assert.equal(report.tools[0]?.errors, 1);
 	assert.equal(report.tools[0]?.excludedFromContext, 1);
 	assert.equal(report.tools[0]?.largestResultChars, 20_001);
-	assert.equal(report.flags.toolBloat.status, "critical");
+	assert.equal(report.toolBloat.status, "critical");
 });
 
-test("estimates active context content while omitting excluded bash output", () => {
+test("counts active-branch messages including custom messages without token estimation", () => {
 	const report = collectContextReport(source({
 		sessionManager: {
 			getEntries: () => [],
@@ -116,13 +111,15 @@ test("estimates active context content while omitting excluded bash output", () 
 			],
 		},
 	}));
-	assert.ok(report.activeEstimate.chars >= "[toolCall read] {\"path\":\"src/index.ts\"}".length + "extension context".length);
-	assert.equal(report.activeEstimate.chars, "[toolCall read] {\"path\":\"src/index.ts\"}".length + "extension context".length);
+	assert.equal(report.branch.activeMessages, 3);
+	assert.equal(report.branch.activeEntries, 3);
+	// No token estimate is exposed anywhere in the report.
+	assert.equal("estimatedTokens" in report, false);
 });
 
-test("estimates prompt contributors without exposing raw content and raises transparent flags", () => {
+test("measures prompt contributors without exposing raw content or estimating tokens", () => {
 	const report = collectContextReport(source({
-		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
+		getSystemPrompt: () => "x".repeat(400),
 		getSystemPromptOptions: () => ({
 			cwd: "/tmp",
 			customPrompt: "secret prompt that must not be printed".repeat(20),
@@ -137,9 +134,10 @@ test("estimates prompt contributors without exposing raw content and raises tran
 	assert.equal(report.prompt.selectedTools.count, 2);
 	assert.equal(report.prompt.contextFiles.count, 1);
 	assert.ok(report.prompt.totalChars > 0);
-	assert.equal(report.flags.promptOverhead.status, "watch");
+	assert.equal(report.systemPrompt.chars, 400);
+	assert.equal(report.systemPrompt.available, true);
 	const formatted = formatContextReport(report);
-	assert.match(formatted, /raw content intentionally omitted/);
+	assert.match(formatted, /measured, not tokenized/);
 	assert.equal(formatted.includes("secret prompt that must not be printed"), false);
 });
 
@@ -173,13 +171,13 @@ test("falls back to readable console text outside TUI and does not append a mess
 		await command!.handler("", {
 			mode: "print",
 			...source(),
-			ui: { custom() { throw new Error("TUI must not be used"); } },
-		});
+			ui: { custom() { throw new Error("TUI must not be used"); } } },
+		);
 	} finally {
 		console.log = originalLog;
 	}
 	assert.equal(output.length, 1);
-	assert.match(output[0]!, /active-session diagnostics/);
+	assert.match(output[0]!, /session facts/);
 });
 
 test("uses protocol-safe output paths outside TUI", async () => {
@@ -192,7 +190,7 @@ test("uses protocol-safe output paths outside TUI", async () => {
 		ui: { notify(value: string) { notices.push(value); } },
 	});
 	assert.equal(notices.length, 1);
-	assert.match(notices[0]!, /active-session diagnostics/);
+	assert.match(notices[0]!, /session facts/);
 
 	const errors: string[] = [];
 	const originalError = console.error;
@@ -203,7 +201,7 @@ test("uses protocol-safe output paths outside TUI", async () => {
 		console.error = originalError;
 	}
 	assert.equal(errors.length, 1);
-	assert.match(errors[0]!, /active-session diagnostics/);
+	assert.match(errors[0]!, /session facts/);
 });
 
 test("preserves sub-cent cost totals instead of collapsing them to one decimal", () => {
@@ -218,18 +216,22 @@ test("preserves sub-cent cost totals instead of collapsing them to one decimal",
 	assert.doesNotMatch(formatted, /cost\.total=0\.0(?!\d)/);
 });
 
-test("wraps long lines to the terminal width instead of discarding their tails", () => {
+test("wraps report lines to the terminal width without overflowing", () => {
 	const theme = { fg: (_name: string, value: string) => `\x1b[33m${value}\x1b[0m` };
-	const header = "/context — active-session diagnostics (read-only)";
-	const long = "field=value ".repeat(20);
-	const component = new ContextReportComponent(`${header}\n${long}`, () => {}, theme as any, { height: 32 });
-	const lines = component.render(16);
-	for (const rendered of lines) {
-		assert.ok(visibleWidth(rendered) <= 16, `line visible width ${visibleWidth(rendered)} exceeds 16`);
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("a", { role: "assistant", provider: "openai", model: "a-very-long-model-name-that-wraps", usage: usage(10), content: [] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
+	for (const width of [10, 16, 24, 40]) {
+		for (const rendered of component.render(width)) {
+			assert.ok(visibleWidth(rendered) <= width, `width ${width}: line visible width ${visibleWidth(rendered)} exceeds ${width}`);
+		}
 	}
-	const plain = lines.map((rendered) => rendered.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")).join("");
-	assert.ok(plain.includes("diagnostics"), "themed header content preserved");
-	assert.ok(plain.includes("field=value"), "wrapped tail content preserved");
 });
 
 test("does not attribute standalone shell output to the prior assistant turn", () => {
@@ -252,11 +254,158 @@ test("does not attribute standalone shell output to the prior assistant turn", (
 
 test("marks prompt contributors unavailable instead of fabricating zero-sized data", () => {
 	const report = collectContextReport(source({
-		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
 		getSystemPromptOptions: () => { throw new Error("not exposed in this context"); },
 	}));
 	assert.equal(report.prompt.unavailable, true);
 	assert.equal(report.prompt.selectedTools.count, 0);
-	assert.equal(report.flags.promptOverhead.status, "unknown");
 	assert.match(formatContextReport(report), /Prompt contributors: unavailable/);
+});
+
+test("marks the assembled system prompt unavailable when it cannot be read", () => {
+	const report = collectContextReport(source({
+		getSystemPrompt: () => { throw new Error("not exposed"); },
+	}));
+	assert.equal(report.systemPrompt.available, false);
+	assert.equal(report.systemPrompt.chars, 0);
+});
+
+test("counts explicitly invoked skills from <skill> blocks in user messages", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("u1", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>\n\nfind foo' }] }),
+				message("a1", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [] }),
+				message("u2", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>' }] }),
+				message("u3", { role: "user", content: [{ type: "text", text: '<skill name="code-review" location="/y">\nbody\n</skill>' }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	assert.deepEqual(report.skills, [
+		{ name: "research", invocations: 2 },
+		{ name: "code-review", invocations: 1 },
+	]);
+});
+
+test("does not count malformed skill tags as invocations", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("u1", { role: "user", content: [{ type: "text", text: '<skill name="not-a-real-block" just some prose' }] }),
+				message("a1", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	assert.deepEqual(report.skills, []);
+});
+
+test("dashboard surfaces the last-prompt bar, spend, tools, and skills without any estimate", () => {
+	const assistant = message("a", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(800), content: [] });
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("u", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>' }] }),
+				assistant,
+			],
+			buildContextEntries: () => [assistant],
+		},
+	}));
+	const dashboard = formatDashboard(report);
+	assert.match(dashboard, /session facts/);
+	assert.match(dashboard, /last prompt/);
+	assert.match(dashboard, /▓/);
+	assert.match(dashboard, /prompt tokens/);
+	assert.match(dashboard, /skills  research ×1/);
+	assert.match(dashboard, /spend  in /);
+	assert.doesNotMatch(dashboard, /chars÷4/);
+	assert.doesNotMatch(dashboard, /estimated/);
+});
+
+test("counts cached tokens toward the prompt ratio instead of understating it", () => {
+	const cached = message("a", {
+		role: "assistant", provider: "openai", model: "gpt-test",
+		usage: { input: 100, output: 10, cacheRead: 700, cacheWrite: 0, totalTokens: 810, cost: { total: 0 } },
+		content: [],
+	});
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => [cached], buildContextEntries: () => [cached] },
+	}));
+	assert.equal(report.lastPrompt.promptTokens, 800);
+	assert.equal(report.lastPrompt.percent, 80);
+});
+
+test("does not fall back to abandoned-branch usage for the last prompt", () => {
+	const abandoned = message("b", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(50), content: [] });
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => [abandoned], buildContextEntries: () => [] },
+	}));
+	assert.equal(report.lastPrompt.unknown, true);
+});
+
+test("omits the prompt percent when the last turn ran a different model", () => {
+	const other = message("a", { role: "assistant", provider: "anthropic", model: "claude-test", usage: usage(100), content: [] });
+	const report = collectContextReport(source({
+		model: { provider: "openai", id: "gpt-test", contextWindow: 1000 },
+		sessionManager: { getEntries: () => [other], buildContextEntries: () => [other] },
+	}));
+	assert.equal(report.lastPrompt.percent, null);
+	assert.match(report.lastPrompt.note ?? "", /differs from current model/);
+});
+
+test("tool bloat shows the aggregate that triggered, not just the largest result", () => {
+	const entries = Array.from({ length: 6 }, (_, i) =>
+		message(`t${i}`, { role: "toolResult", toolName: "read", content: [{ type: "text", text: "x".repeat(9_000) }] }),
+	);
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => entries, buildContextEntries: () => [] },
+	}));
+	assert.equal(report.toolBloat.status, "critical");
+	assert.equal(report.toolBloat.observedChars, 54_000);
+	assert.equal(report.toolBloat.largestChars, 9_000);
+	assert.match(formatDashboard(report), /aggregate 54,000 chars/);
+});
+
+test("labels fork points as branch points, not branches", () => {
+	const fork = [
+		{ type: "custom_message", id: "root", parentId: null },
+		{ type: "custom_message", id: "x", parentId: "root" },
+		{ type: "custom_message", id: "y", parentId: "root" },
+		{ type: "custom_message", id: "z", parentId: "root" },
+	];
+	const report = collectContextReport(source({
+		sessionManager: { getEntries: () => fork, buildContextEntries: () => [] },
+	}));
+	assert.equal(report.branch.branchPoints, 1);
+	assert.match(formatDashboard(report), /branch points/);
+	assert.doesNotMatch(formatDashboard(report), /\d+ branches/);
+});
+
+test("measures image payload bytes in tool results instead of a placeholder", () => {
+	const imgData = "x".repeat(1_000);
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("a", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(10), content: [{ type: "toolCall", name: "screenshot", id: "1", arguments: {} }] }),
+				message("r", { role: "toolResult", toolName: "screenshot", content: [{ type: "image", data: imgData, mimeType: "image/png" }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const tool = report.tools.find((t) => t.name === "screenshot");
+	assert.ok(tool);
+	assert.equal(tool?.resultChars, 1_000);
+	assert.equal(tool?.resultBytes, 1_000);
+});
+
+test("toggles between dashboard and details on [d]", () => {
+	const theme = { fg: (_name: string, value: string) => value };
+	const report = collectContextReport(source());
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
+	assert.match(component.render(80).join("\n"), /session facts/);
+	assert.doesNotMatch(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
+	component.handleInput("d");
+	assert.match(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
+	component.handleInput("d");
+	assert.doesNotMatch(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
 });

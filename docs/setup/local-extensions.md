@@ -30,7 +30,7 @@ Set `PI_ROOT` explicitly when Pi is installed elsewhere. Optional `PI_THEME` poi
 
 ## Context diagnostics
 
-Package-owned `/context` is a read-only active-session report, separate from companion `pi-stats-ext` (`/pi-stats`). It distinguishes session-file spend across all branches from current `buildContextEntries()` context, includes provider/model and tool facts, and reports prompt contributor metadata/estimates without dumping raw prompt, context-file, skill, or tool output content. Thresholds cover context pressure, prompt overhead, and tool bloat only.
+Package-owned `/context` is a read-only active-session report, separate from companion `pi-stats-ext` (`/pi-stats`). It distinguishes session-file spend across all branches from current `buildContextEntries()` context, includes provider/model and tool facts, and reports prompt contributor char/byte sizes without dumping raw prompt, context-file, skill, or tool output content. It makes no token estimates — the only token figures are provider-reported — and flags only a tool-bloat threshold.
 
 TUI opens a theme-aware scrollable overlay; `q`, `Escape`, or `Ctrl-C` closes it. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes to stderr so structured stdout stays protocol-safe. The command does not call models, append messages, mutate session/config, or write cache. Run `/reload` after package updates.
 

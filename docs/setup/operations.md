@@ -46,7 +46,7 @@ Inside Pi:
 /settings
 ```
 
-`/context` verification: confirm report separates all session-file branches from active context, labels exact usage versus estimates, and shows only context-pressure, prompt-overhead, and tool-bloat thresholds. In TUI, close with `q`, `Escape`, or `Ctrl-C`; in print/RPC modes, confirm readable console output.
+`/context` verification: confirm the report separates all session-file branches from active context, shows only provider-reported token usage and measured char/byte sizes (no token estimates), and flags only a tool-bloat threshold. In TUI, close with `q`, `Escape`, or `Ctrl-C`; in print/RPC modes, confirm readable console output.
 
 Smoke-test prompts:
 
