@@ -89,7 +89,7 @@ test("groups provider-model facts and summarizes tool results, errors, and exclu
 		sessionManager: {
 			getEntries: () => [
 				message("a", { role: "assistant", provider: "p1", model: "m1", usage: usage(10), content: [{ type: "toolCall", name: "bash", id: "1", arguments: {} }] }),
-				message("r", { role: "bashExecution", command: "printf output", output: huge, exitCode: 1, excludeFromContext: true }),
+				message("r", { role: "toolResult", toolName: "bash", isError: true, excludeFromContext: true, content: [{ type: "text", text: huge }] }),
 				message("b", { role: "assistant", provider: "p2", model: "m2", usage: usage(20), content: [] }),
 			],
 			buildContextEntries: () => [],
@@ -101,7 +101,7 @@ test("groups provider-model facts and summarizes tool results, errors, and exclu
 	assert.equal(report.turns[0]?.toolResults, 1);
 	assert.equal(report.tools[0]?.errors, 1);
 	assert.equal(report.tools[0]?.excludedFromContext, 1);
-	assert.equal(report.tools[0]?.largestResultChars, 20_015);
+	assert.equal(report.tools[0]?.largestResultChars, 20_001);
 	assert.equal(report.flags.toolBloat.status, "critical");
 });
 
@@ -218,15 +218,36 @@ test("preserves sub-cent cost totals instead of collapsing them to one decimal",
 	assert.doesNotMatch(formatted, /cost\.total=0\.0(?!\d)/);
 });
 
-test("truncates ANSI-themed lines by visible width without cutting the reset sequence", () => {
+test("wraps long lines to the terminal width instead of discarding their tails", () => {
 	const theme = { fg: (_name: string, value: string) => `\x1b[33m${value}\x1b[0m` };
-	const text = "/context — active-session diagnostics (read-only)\n" + "y".repeat(100);
-	const component = new ContextReportComponent(text, () => {}, theme as any, { height: 32 });
-	const lines = component.render(20);
-	for (const line of lines) {
-		assert.ok(visibleWidth(line) <= 20, `line visible width ${visibleWidth(line)} exceeds 20`);
+	const header = "/context — active-session diagnostics (read-only)";
+	const long = "field=value ".repeat(20);
+	const component = new ContextReportComponent(`${header}\n${long}`, () => {}, theme as any, { height: 32 });
+	const lines = component.render(16);
+	for (const rendered of lines) {
+		assert.ok(visibleWidth(rendered) <= 16, `line visible width ${visibleWidth(rendered)} exceeds 16`);
 	}
-	assert.ok(lines[0]!.includes("\x1b[0m"), "reset sequence must survive truncation");
+	const plain = lines.map((rendered) => rendered.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")).join("");
+	assert.ok(plain.includes("diagnostics"), "themed header content preserved");
+	assert.ok(plain.includes("field=value"), "wrapped tail content preserved");
+});
+
+test("does not attribute standalone shell output to the prior assistant turn", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("a", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [{ type: "toolCall", name: "read", id: "1", arguments: {} }] }),
+				message("r", { role: "toolResult", toolName: "read", isError: false, content: [{ type: "text", text: "ok" }] }),
+				message("b", { role: "bashExecution", command: "ls", output: "a\nb", exitCode: 0 }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	assert.equal(report.turns.length, 1);
+	assert.equal(report.turns[0]?.toolCalls, 1);
+	assert.equal(report.turns[0]?.toolResults, 1, "standalone shell output must not count as the assistant's tool result");
+	const bash = report.tools.find((tool) => tool.name === "bash");
+	assert.equal(bash?.largestResultChars, 6, "user shell size accounts for command and output");
 });
 
 test("marks prompt contributors unavailable instead of fabricating zero-sized data", () => {

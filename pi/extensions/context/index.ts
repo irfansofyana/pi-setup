@@ -1,5 +1,5 @@
 import type { BuildSystemPromptOptions, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
 	input: number;
@@ -361,6 +361,10 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 					tool.calls++;
 					toolMap.set(name, tool);
 				}
+			} else if (message.role === "user") {
+				// A user message closes the assistant's tool flow; clear the active
+				// turn so later entries are not misattributed to the prior response.
+				currentTurn = undefined;
 			} else if (message.role === "toolResult" || message.role === "bashExecution") {
 				if (usageIsPresent(message.usage)) {
 					if (targetUsage) addUsage(targetUsage, message.usage);
@@ -379,7 +383,9 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 				if (excludedFromContext(message)) tool.excludedFromContext++;
 				if (size.chars > LARGE_TOOL_RESULT_CHARS) tool.largeResults++;
 				tool.largestResultChars = Math.max(tool.largestResultChars, size.chars);
-				if (currentTurn) currentTurn.toolResults++;
+				// bashExecution records user/extension shell runs (the ! command and
+				// ctx.exec()), not assistant tool results, so it never counts toward a turn.
+				if (message.role === "toolResult" && currentTurn) currentTurn.toolResults++;
 				toolMap.set(name, tool);
 			}
 		}
@@ -549,6 +555,7 @@ export class ContextReportComponent {
 	private readonly requestRender: () => void;
 	private readonly viewport: number;
 	private offset = 0;
+	private wrapped: string[] = [];
 
 	constructor(text: string, done: () => void, theme: Theme, tui?: ContextTui) {
 		this.done = done;
@@ -562,8 +569,14 @@ export class ContextReportComponent {
 	}
 
 	render(width: number): string[] {
-		const visible = this.lines.slice(this.offset, this.offset + this.viewport);
-		return visible.map((line) => (visibleWidth(line) <= width ? line : truncateToWidth(line, width, "…")));
+		const usable = Math.max(1, width);
+		this.wrapped = this.lines.flatMap((line) => wrapTextWithAnsi(line, usable));
+		this.offset = Math.min(this.offset, this.maxOffset());
+		return this.wrapped.slice(this.offset, this.offset + this.viewport);
+	}
+
+	private maxOffset(): number {
+		return Math.max(0, this.wrapped.length - this.viewport);
 	}
 
 	invalidate(): void {}
@@ -571,12 +584,13 @@ export class ContextReportComponent {
 	handleInput(data: string): void {
 		if (data === "q" || data === "Q" || data === "\x1b" || data === "\x03") return this.done();
 		const previous = this.offset;
+		const max = this.maxOffset();
 		if (data === "\u001b[A" || data === "k") this.offset = Math.max(0, this.offset - 1);
-		else if (data === "\u001b[B" || data === "j") this.offset = Math.min(Math.max(0, this.lines.length - this.viewport), this.offset + 1);
+		else if (data === "\u001b[B" || data === "j") this.offset = Math.min(max, this.offset + 1);
 		else if (data === "\u001b[5~") this.offset = Math.max(0, this.offset - 10);
-		else if (data === "\u001b[6~") this.offset = Math.min(Math.max(0, this.lines.length - this.viewport), this.offset + 10);
+		else if (data === "\u001b[6~") this.offset = Math.min(max, this.offset + 10);
 		else if (data === "g" || data === "\u001b[H") this.offset = 0;
-		else if (data === "G" || data === "\u001b[F") this.offset = Math.max(0, this.lines.length - this.viewport);
+		else if (data === "G" || data === "\u001b[F") this.offset = max;
 		if (this.offset !== previous) this.requestRender();
 	}
 }
