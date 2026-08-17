@@ -13,7 +13,6 @@ function message(id: string, value: Record<string, unknown>) {
 
 function source(overrides: Partial<ContextReportSource> = {}): ContextReportSource {
 	return {
-		getContextUsage: () => ({ tokens: 800, contextWindow: 1000, percent: 80 }),
 		model: { provider: "openai", id: "gpt-test", contextWindow: 1000 },
 		sessionManager: {
 			getEntries: () => [],
@@ -58,8 +57,6 @@ test("aggregates session-file usage across abandoned branches without double cou
 	assert.equal(report.sessionUsage.totalTokens, 240);
 	assert.equal(report.sessionUsage.input, 240);
 	assert.equal(report.activeBranchUsage.totalTokens, 120);
-	assert.equal(report.context.freeTokens, 200);
-	assert.equal(report.flags.contextPressure.status, "watch");
 	assert.equal(report.usageSources.assistant, 2);
 	assert.equal(report.usageSources.toolResult, 1);
 	assert.equal(report.usageSources.compaction, 1);
@@ -68,20 +65,17 @@ test("aggregates session-file usage across abandoned branches without double cou
 	assert.equal(report.branch.activeEntries, 2);
 	assert.equal(report.branch.sessionCompactions, 1);
 	assert.equal(report.branch.activeCompactions, 0);
+	assert.equal(report.lastPrompt.unknown, false);
+	assert.equal(report.lastPrompt.input, 100);
+	assert.equal(report.lastPrompt.percent, 10);
 });
 
-test("reports context unknown after compaction and preserves window", () => {
-	const report = collectContextReport(source({
-		getContextUsage: () => undefined,
-		model: { contextWindow: 128000 },
-	}));
-	assert.equal(report.context.tokens, null);
-	assert.equal(report.context.contextWindow, 128000);
-	assert.equal(report.context.percent, null);
-	assert.equal(report.context.freeTokens, null);
-	assert.equal(report.context.unknown, true);
-	assert.equal(report.flags.contextPressure.status, "unknown");
-	assert.match(formatContextReport(report), /unknown after compaction/);
+test("reports last prompt unknown when no assistant has reported usage and preserves window", () => {
+	const report = collectContextReport(source({ model: { contextWindow: 128000 } }));
+	assert.equal(report.lastPrompt.unknown, true);
+	assert.equal(report.lastPrompt.contextWindow, 128000);
+	assert.equal(report.lastPrompt.percent, null);
+	assert.match(formatContextReport(report), /no completed assistant turn with reported usage yet/);
 });
 
 test("groups provider-model facts and summarizes tool results, errors, and exclusions", () => {
@@ -103,10 +97,10 @@ test("groups provider-model facts and summarizes tool results, errors, and exclu
 	assert.equal(report.tools[0]?.errors, 1);
 	assert.equal(report.tools[0]?.excludedFromContext, 1);
 	assert.equal(report.tools[0]?.largestResultChars, 20_001);
-	assert.equal(report.flags.toolBloat.status, "critical");
+	assert.equal(report.toolBloat.status, "critical");
 });
 
-test("estimates active context content while omitting excluded bash output", () => {
+test("counts active-branch messages including custom messages without token estimation", () => {
 	const report = collectContextReport(source({
 		sessionManager: {
 			getEntries: () => [],
@@ -117,13 +111,14 @@ test("estimates active context content while omitting excluded bash output", () 
 			],
 		},
 	}));
-	assert.ok(report.activeEstimate.chars >= "[toolCall read] {\"path\":\"src/index.ts\"}".length + "extension context".length);
-	assert.equal(report.activeEstimate.chars, "[toolCall read] {\"path\":\"src/index.ts\"}".length + "extension context".length);
+	assert.equal(report.branch.activeMessages, 3);
+	assert.equal(report.branch.activeEntries, 3);
+	// No token estimate is exposed anywhere in the report.
+	assert.equal("estimatedTokens" in report, false);
 });
 
-test("estimates prompt contributors without exposing raw content and raises transparent flags", () => {
+test("measures prompt contributors without exposing raw content or estimating tokens", () => {
 	const report = collectContextReport(source({
-		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
 		getSystemPrompt: () => "x".repeat(400),
 		getSystemPromptOptions: () => ({
 			cwd: "/tmp",
@@ -139,9 +134,10 @@ test("estimates prompt contributors without exposing raw content and raises tran
 	assert.equal(report.prompt.selectedTools.count, 2);
 	assert.equal(report.prompt.contextFiles.count, 1);
 	assert.ok(report.prompt.totalChars > 0);
-	assert.equal(report.flags.promptOverhead.status, "watch");
+	assert.equal(report.systemPrompt.chars, 400);
+	assert.equal(report.systemPrompt.available, true);
 	const formatted = formatContextReport(report);
-	assert.match(formatted, /raw content intentionally omitted/);
+	assert.match(formatted, /measured, not tokenized/);
 	assert.equal(formatted.includes("secret prompt that must not be printed"), false);
 });
 
@@ -175,13 +171,13 @@ test("falls back to readable console text outside TUI and does not append a mess
 		await command!.handler("", {
 			mode: "print",
 			...source(),
-			ui: { custom() { throw new Error("TUI must not be used"); } },
-		});
+			ui: { custom() { throw new Error("TUI must not be used"); } } },
+		);
 	} finally {
 		console.log = originalLog;
 	}
 	assert.equal(output.length, 1);
-	assert.match(output[0]!, /active-session diagnostics/);
+	assert.match(output[0]!, /session facts/);
 });
 
 test("uses protocol-safe output paths outside TUI", async () => {
@@ -194,7 +190,7 @@ test("uses protocol-safe output paths outside TUI", async () => {
 		ui: { notify(value: string) { notices.push(value); } },
 	});
 	assert.equal(notices.length, 1);
-	assert.match(notices[0]!, /active-session diagnostics/);
+	assert.match(notices[0]!, /session facts/);
 
 	const errors: string[] = [];
 	const originalError = console.error;
@@ -205,7 +201,7 @@ test("uses protocol-safe output paths outside TUI", async () => {
 		console.error = originalError;
 	}
 	assert.equal(errors.length, 1);
-	assert.match(errors[0]!, /active-session diagnostics/);
+	assert.match(errors[0]!, /session facts/);
 });
 
 test("preserves sub-cent cost totals instead of collapsing them to one decimal", () => {
@@ -258,23 +254,19 @@ test("does not attribute standalone shell output to the prior assistant turn", (
 
 test("marks prompt contributors unavailable instead of fabricating zero-sized data", () => {
 	const report = collectContextReport(source({
-		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
 		getSystemPromptOptions: () => { throw new Error("not exposed in this context"); },
 	}));
 	assert.equal(report.prompt.unavailable, true);
 	assert.equal(report.prompt.selectedTools.count, 0);
-	// Prompt overhead now derives from the assembled system prompt, so an
-	// unavailable contributor breakdown no longer forces it to "unknown".
-	assert.equal(report.flags.promptOverhead.status, "clear");
 	assert.match(formatContextReport(report), /Prompt contributors: unavailable/);
 });
 
-test("reports prompt overhead unknown when the system prompt is unavailable", () => {
+test("marks the assembled system prompt unavailable when it cannot be read", () => {
 	const report = collectContextReport(source({
-		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
 		getSystemPrompt: () => { throw new Error("not exposed"); },
 	}));
-	assert.equal(report.flags.promptOverhead.status, "unknown");
+	assert.equal(report.systemPrompt.available, false);
+	assert.equal(report.systemPrompt.chars, 0);
 });
 
 test("counts explicitly invoked skills from <skill> blocks in user messages", () => {
@@ -295,35 +287,35 @@ test("counts explicitly invoked skills from <skill> blocks in user messages", ()
 	]);
 });
 
-test("dashboard surfaces the gauge, flags, and skills summary", () => {
+test("dashboard surfaces the last-prompt bar, spend, tools, and skills without any estimate", () => {
 	const report = collectContextReport(source({
 		sessionManager: {
 			getEntries: () => [
 				message("u", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>' }] }),
-				message("a", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [] }),
+				message("a", { role: "assistant", provider: "openai", model: "m", usage: usage(800), content: [] }),
 			],
 			buildContextEntries: () => [],
 		},
 	}));
 	const dashboard = formatDashboard(report);
-	assert.match(dashboard, /active-session diagnostics/);
+	assert.match(dashboard, /session facts/);
+	assert.match(dashboard, /last prompt/);
 	assert.match(dashboard, /▓/);
-	assert.match(dashboard, /▒/);
-	assert.match(dashboard, /system prompt/);
-	assert.match(dashboard, /conversation/);
-	assert.match(dashboard, /skills used  research ×1/);
-	assert.match(dashboard, /context pressure/);
+	assert.match(dashboard, /input tokens/);
+	assert.match(dashboard, /skills  research ×1/);
 	assert.match(dashboard, /spend  in /);
+	assert.doesNotMatch(dashboard, /chars÷4/);
+	assert.doesNotMatch(dashboard, /estimated/);
 });
 
 test("toggles between dashboard and details on [d]", () => {
 	const theme = { fg: (_name: string, value: string) => value };
 	const report = collectContextReport(source());
 	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
-	assert.match(component.render(80).join("\n"), /active-session diagnostics/);
-	assert.doesNotMatch(component.render(80).join("\n"), /Session-file spend/);
+	assert.match(component.render(80).join("\n"), /session facts/);
+	assert.doesNotMatch(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
 	component.handleInput("d");
-	assert.match(component.render(80).join("\n"), /Session-file spend/);
+	assert.match(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
 	component.handleInput("d");
-	assert.doesNotMatch(component.render(80).join("\n"), /Session-file spend/);
+	assert.doesNotMatch(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
 });

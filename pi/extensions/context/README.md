@@ -1,16 +1,17 @@
 # `/context`
 
-Package-owned, read-only active-session diagnostics. Separate from companion `pi-stats-ext` and `/pi-stats`.
+Package-owned, read-only active-session facts. Separate from companion `pi-stats-ext` and `/pi-stats`.
 
 ## Behavior
 
 - Registers exactly `/context`.
-- Reports Pi context usage, session-file usage across all branches, active-branch entries, provider/model groups, tool result sizes/errors, explicitly invoked skills, and prompt contributor estimates.
-- Labels provider-reported usage/cost separately from character/token estimates. Cost is metadata, not billing accounting.
-- Reads `getEntries()`, `buildContextEntries()`, `getContextUsage()`, and `getSystemPromptOptions()` only. It does not append chat messages, call a model, mutate session/config, or write cache/files.
-- Does not print raw system prompts, context-file contents, skill contents, or tool output. Metadata and bounded estimates only.
-- Shows only context-pressure, prompt-overhead, and tool-bloat flags with observed values and thresholds.
+- Reports only exact, verifiable facts: provider-reported token/cost usage (per turn, per model, summed), the last completed turn's input size against the configured context window, tool result sizes in chars/bytes, explicitly invoked skills, and prompt contributor char/byte sizes.
+- Makes no token estimates. The only token numbers are the ones the provider reports (`input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`). The system prompt and prompt contributors are measured as chars/bytes, never converted to tokens.
+- Labels provider-reported cost as metadata, not billing accounting.
+- Reads `getEntries()`, `buildContextEntries()`, `getSystemPrompt()`, and `getSystemPromptOptions()` only. It does not append chat messages, call a model, mutate session/config, or write cache/files.
+- Does not print raw system prompts, context-file contents, skill contents, or tool output. Metadata and counts only.
+- Flags a large tool result only when it exceeds exact char thresholds (aggregate >50,000 chars or a single result >20,000 chars).
 
-In TUI mode, a compact dashboard opens by default — context gauge, estimated contributors, flags, skill usage, spend, and models. Press `d` to toggle the full detail view; scroll with `j`/`k`, `g`/`G`, page-up/down; press `q`, `Escape`, or `Ctrl-C` to close. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes the report to stderr so structured stdout stays protocol-safe.
+In TUI mode, a compact dashboard opens by default — model/window, last-prompt bar (exact, previous turn), spend, turns/models, tool sizes, skills, session shape, and prompt size. Press `d` to toggle the full detail view; scroll with `j`/`k`, `g`/`G`, page-up/down; press `q`, `Escape`, or `Ctrl-C` to close. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes the report to stderr so structured stdout stays protocol-safe.
 
 Run `/reload` after package or extension updates before using `/context`.
