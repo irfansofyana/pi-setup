@@ -1,4 +1,4 @@
-import type { BuildSystemPromptOptions, ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { parseSkillBlock, type BuildSystemPromptOptions, type ExtensionAPI, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
@@ -309,8 +309,8 @@ function skillInvocations(entries: unknown[]): Map<string, number> {
 		if (record?.type !== "message") continue;
 		const message = recordOf(record.message);
 		if (!message || message.role !== "user") continue;
-		const match = textFromContent(message.content).match(/^\s*<skill name="([^"]+)"/);
-		if (match?.[1]) counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
+		const parsed = parseSkillBlock(textFromContent(message.content));
+		if (parsed) counts.set(parsed.name, (counts.get(parsed.name) ?? 0) + 1);
 	}
 	return counts;
 }

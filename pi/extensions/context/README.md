@@ -5,9 +5,9 @@ Package-owned, read-only active-session facts. Separate from companion `pi-stats
 ## Behavior
 
 - Registers exactly `/context`.
-- Reports only exact, verifiable facts: provider-reported token/cost usage (per turn, per model, summed), the last completed turn's prompt size (input + cache read/write) against the configured context window, tool result sizes in chars/bytes, explicitly invoked skills, and prompt contributor char/byte sizes.
-- Makes no token estimates. The only token numbers are the ones the provider reports (`input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`). The system prompt and prompt contributors are measured as chars/bytes, never converted to tokens.
-- Labels provider-reported cost as metadata, not billing accounting.
+- Reports only exact, verifiable facts: provider-reported token usage (per turn, per model, summed), model-derived cost, the last completed turn's prompt size (input + cache read/write) against the configured context window, tool result sizes in chars/bytes, explicitly invoked skills, and prompt contributor char/byte sizes.
+- Makes no token estimates. The only token figures are provider-reported fields (`input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`) plus the configured context window; the system prompt and prompt contributors are measured as chars/bytes, never converted to tokens.
+- Labels cost as model-derived metadata, not provider billing accounting.
 - Reads `getEntries()`, `buildContextEntries()`, `getSystemPrompt()`, and `getSystemPromptOptions()` only. It does not append chat messages, call a model, mutate session/config, or write cache/files.
 - Does not print raw system prompts, context-file contents, skill contents, or tool output. Metadata and counts only.
 - Flags a large tool result only when it exceeds exact char thresholds (aggregate >50,000 chars or a single result >20,000 chars).

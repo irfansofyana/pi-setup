@@ -287,6 +287,19 @@ test("counts explicitly invoked skills from <skill> blocks in user messages", ()
 	]);
 });
 
+test("does not count malformed skill tags as invocations", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("u1", { role: "user", content: [{ type: "text", text: '<skill name="not-a-real-block" just some prose' }] }),
+				message("a1", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	assert.deepEqual(report.skills, []);
+});
+
 test("dashboard surfaces the last-prompt bar, spend, tools, and skills without any estimate", () => {
 	const assistant = message("a", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(800), content: [] });
 	const report = collectContextReport(source({
