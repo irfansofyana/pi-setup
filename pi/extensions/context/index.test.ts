@@ -228,3 +228,14 @@ test("truncates ANSI-themed lines by visible width without cutting the reset seq
 	}
 	assert.ok(lines[0]!.includes("\x1b[0m"), "reset sequence must survive truncation");
 });
+
+test("marks prompt contributors unavailable instead of fabricating zero-sized data", () => {
+	const report = collectContextReport(source({
+		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
+		getSystemPromptOptions: () => { throw new Error("not exposed in this context"); },
+	}));
+	assert.equal(report.prompt.unavailable, true);
+	assert.equal(report.prompt.selectedTools.count, 0);
+	assert.equal(report.flags.promptOverhead.status, "unknown");
+	assert.match(formatContextReport(report), /Prompt contributors: unavailable/);
+});

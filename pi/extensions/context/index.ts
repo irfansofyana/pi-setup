@@ -1,4 +1,4 @@
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { BuildSystemPromptOptions, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
@@ -56,6 +56,7 @@ export interface PromptEstimate {
 	totalChars: number;
 	totalBytes: number;
 	estimatedTokens: number;
+	unavailable: boolean;
 }
 
 export interface ContextReport {
@@ -96,15 +97,7 @@ export interface ContextReportSource {
 		getEntries: () => unknown[];
 		buildContextEntries: () => unknown[];
 	};
-	getSystemPromptOptions: () => {
-		customPrompt?: string;
-		selectedTools?: string[];
-		toolSnippets?: Record<string, string>;
-		promptGuidelines?: string[];
-		appendSystemPrompt?: string;
-		contextFiles?: Array<{ path: string; content: string }>;
-		skills?: Array<{ name: string; description: string }>;
-	};
+	getSystemPromptOptions: () => BuildSystemPromptOptions;
 }
 
 const ZERO_USAGE: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, costTotal: 0 };
@@ -222,9 +215,9 @@ function sumSizes(a: { chars: number; bytes: number }, b: { chars: number; bytes
 	return { chars: a.chars + b.chars, bytes: a.bytes + b.bytes };
 }
 
-function promptEstimate(options: ContextReportSource["getSystemPromptOptions"] extends () => infer T ? T : never): PromptEstimate {
+function promptEstimate(options: BuildSystemPromptOptions): PromptEstimate {
 	const customPrompt = contentSize(options.customPrompt);
-	const selectedTools = options.selectedTools ?? ["read", "bash", "edit", "write"];
+	const selectedTools = options.selectedTools ?? [];
 	const snippets = Object.entries(options.toolSnippets ?? {})
 		.filter(([name]) => selectedTools.includes(name))
 		.map(([, value]) => value);
@@ -266,6 +259,7 @@ function promptEstimate(options: ContextReportSource["getSystemPromptOptions"] e
 		totalChars,
 		totalBytes,
 		estimatedTokens: Math.ceil(totalChars / 4),
+		unavailable: false,
 	};
 }
 
@@ -409,18 +403,23 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 		{ entries: 0, messages: 0, chars: 0, bytes: 0 },
 	);
 	const context = contextPercent(ctx.getContextUsage(), ctx.model);
-	let options: ReturnType<typeof promptEstimate>;
+	let options: PromptEstimate;
+	let promptUnavailable = false;
 	try {
 		options = promptEstimate(ctx.getSystemPromptOptions());
 	} catch {
 		options = promptEstimate({ cwd: "" });
+		promptUnavailable = true;
 	}
-	const promptOverheadObserved = context.tokens !== null ? options.estimatedTokens / Math.max(1, context.tokens) * 100 : null;
+	options = { ...options, unavailable: promptUnavailable };
+	const promptOverheadObserved = context.tokens !== null && !promptUnavailable ? options.estimatedTokens / Math.max(1, context.tokens) * 100 : null;
 	const toolChars = [...toolMap.values()].reduce((total, tool) => total + tool.resultChars, 0);
 	const largestToolResult = Math.max(0, ...[...toolMap.values()].map((tool) => tool.largestResultChars));
-	const promptOverhead: ContextFlag = promptOverheadObserved === null
-		? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "not comparable while current context estimate is unknown" }
-		: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context token estimate (raw contributor estimate)" };
+	const promptOverhead: ContextFlag = promptUnavailable
+		? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "system-prompt options unavailable; prompt contributors not estimated" }
+		: promptOverheadObserved === null
+			? { status: "unknown", observed: null, threshold: ">25% of current context token estimate (raw contributor estimate)", note: "not comparable while current context estimate is unknown" }
+			: { status: promptOverheadObserved > PROMPT_OVERHEAD_PERCENT ? "watch" : "clear", observed: promptOverheadObserved, threshold: ">25% of current context token estimate (raw contributor estimate)" };
 	const toolBloatObserved = toolChars;
 	const toolBloat: ContextFlag = toolChars > TOOL_BLOAT_CHARS || largestToolResult > LARGE_TOOL_RESULT_CHARS
 		? { status: "critical", observed: toolBloatObserved, threshold: ">50,000 aggregate chars or any result >20,000 chars", note: `aggregate=${formatNumber(toolChars)} chars; largest=${formatNumber(largestToolResult)} chars` }
@@ -509,17 +508,23 @@ function reportLines(report: ContextReport): string[] {
 	lines.push("", "Tool facts (result sizes are text chars/UTF-8 bytes)");
 	for (const tool of report.tools.slice(0, 20)) lines.push(`${tool.name}: calls=${tool.calls} results=${tool.results} chars=${formatNumber(tool.resultChars)} bytes=${formatBytes(tool.resultBytes)} largest=${formatNumber(tool.largestResultChars)} errors=${tool.errors} excluded-from-context=${tool.excludedFromContext} very-large=${tool.largeResults}`);
 	if (report.tools.length > 20) lines.push(`… ${report.tools.length - 20} more tools omitted`);
+	if (report.prompt.unavailable) {
+		lines.push("", "Prompt contributors: unavailable (system-prompt options not exposed in this context)");
+	} else {
+		lines.push(
+			"",
+			"Prompt contributors (metadata/estimates; raw content intentionally omitted)",
+			`custom prompt: ${formatNumber(report.prompt.customPrompt.chars)} chars / ${formatBytes(report.prompt.customPrompt.bytes)}`,
+			`selected tools: ${report.prompt.selectedTools.count} (${report.prompt.selectedTools.names.slice(0, 12).join(", ") || "none"}${report.prompt.selectedTools.names.length > 12 ? ", …" : ""})`,
+			`tool snippets: ${report.prompt.toolSnippets.count}; ${formatNumber(report.prompt.toolSnippets.chars)} chars / ${formatBytes(report.prompt.toolSnippets.bytes)}`,
+			`guidelines: ${report.prompt.guidelines.count}; ${formatNumber(report.prompt.guidelines.chars)} chars / ${formatBytes(report.prompt.guidelines.bytes)}`,
+			`append prompt: ${formatNumber(report.prompt.appendPrompt.chars)} chars / ${formatBytes(report.prompt.appendPrompt.bytes)}`,
+			`context files: ${report.prompt.contextFiles.count}; paths=${formatNumber(report.prompt.contextFiles.pathChars)} chars; content estimate=${formatNumber(report.prompt.contextFiles.contentChars)} chars / ${formatBytes(report.prompt.contextFiles.contentBytes)}`,
+			`skills: ${report.prompt.skills.count} (${report.prompt.skills.names.slice(0, 12).join(", ") || "none"}); metadata estimate=${formatNumber(report.prompt.skills.metadataChars)} chars / ${formatBytes(report.prompt.skills.metadataBytes)}`,
+			`raw contributor size estimate: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)}; ~${formatNumber(report.prompt.estimatedTokens)} tokens (chars÷4 estimate; excludes prompt wrappers/defaults/turn mutations)`,
+		);
+	}
 	lines.push(
-		"",
-		"Prompt contributors (metadata/estimates; raw content intentionally omitted)",
-		`custom prompt: ${formatNumber(report.prompt.customPrompt.chars)} chars / ${formatBytes(report.prompt.customPrompt.bytes)}`,
-		`selected tools: ${report.prompt.selectedTools.count} (${report.prompt.selectedTools.names.slice(0, 12).join(", ") || "none"}${report.prompt.selectedTools.names.length > 12 ? ", …" : ""})`,
-		`tool snippets: ${report.prompt.toolSnippets.count}; ${formatNumber(report.prompt.toolSnippets.chars)} chars / ${formatBytes(report.prompt.toolSnippets.bytes)}`,
-		`guidelines: ${report.prompt.guidelines.count}; ${formatNumber(report.prompt.guidelines.chars)} chars / ${formatBytes(report.prompt.guidelines.bytes)}`,
-		`append prompt: ${formatNumber(report.prompt.appendPrompt.chars)} chars / ${formatBytes(report.prompt.appendPrompt.bytes)}`,
-		`context files: ${report.prompt.contextFiles.count}; paths=${formatNumber(report.prompt.contextFiles.pathChars)} chars; content estimate=${formatNumber(report.prompt.contextFiles.contentChars)} chars / ${formatBytes(report.prompt.contextFiles.contentBytes)}`,
-		`skills: ${report.prompt.skills.count} (${report.prompt.skills.names.slice(0, 12).join(", ") || "none"}); metadata estimate=${formatNumber(report.prompt.skills.metadataChars)} chars / ${formatBytes(report.prompt.skills.metadataBytes)}`,
-		`raw contributor size estimate: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)}; ~${formatNumber(report.prompt.estimatedTokens)} tokens (chars÷4 estimate; excludes prompt wrappers/defaults/turn mutations)`,
 		`active entries/messages text estimate: entries=${report.activeEstimate.entries} messages=${report.activeEstimate.messages}; ${formatNumber(report.activeEstimate.chars)} chars / ${formatBytes(report.activeEstimate.bytes)}; ~${formatNumber(report.activeEstimate.estimatedTokens)} tokens (chars÷4 estimate; excluded bash omitted)`,
 		"",
 		"Press q, Escape, or Ctrl-C to close.",
