@@ -28,6 +28,14 @@ PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent" \
 
 Set `PI_ROOT` explicitly when Pi is installed elsewhere. Optional `PI_THEME` points at theme file used by test.
 
+## Context diagnostics
+
+Package-owned `/context` is a read-only active-session report, separate from companion `pi-stats-ext` (`/pi-stats`). It distinguishes session-file spend across all branches from current `buildContextEntries()` context, includes provider/model and tool facts, and reports prompt contributor metadata/estimates without dumping raw prompt, context-file, skill, or tool output content. Thresholds cover context pressure, prompt overhead, and tool bloat only.
+
+TUI opens a theme-aware scrollable overlay; `q`, `Escape`, or `Ctrl-C` closes it. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes to stderr so structured stdout stays protocol-safe. The command does not call models, append messages, mutate session/config, or write cache. Run `/reload` after package updates.
+
+See [extension README](../../pi/extensions/context/README.md) for ownership and boundary details.
+
 ## Headroom adapter
 
 Purpose: compress large Pi tool results through local Headroom proxy, store originals locally, and retrieve with native tools.

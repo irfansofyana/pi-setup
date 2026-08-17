@@ -17,7 +17,7 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel while the main agent works |
 | Routing | `pi-9router-ext` model/search routing tools |
-| Operations | Markdown preview, usage stats, and Caveman response mode |
+| Operations | Markdown preview, usage stats, `/context` diagnostics, and Caveman response mode |
 | Skills | Setup, MCP, context-mode, and optional workflow skills |
 
 ### `irfan-sumi` preview
@@ -179,6 +179,7 @@ Inside Pi:
 
 ```text
 /reload
+/context
 /mcp
 /mcp tools
 /agents

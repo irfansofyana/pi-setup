@@ -18,6 +18,7 @@
 | BTW status | `/btw status` |
 | Caveman status | `/caveman status` |
 | Goal status | `/goal` (or `/goal status`) |
+| Context diagnostics | `/context` |
 | Update Pi | `pi update` |
 | Update extensions | `pi update --extensions` |
 | List packages | `pi list` |
@@ -37,12 +38,15 @@ Inside Pi:
 
 ```text
 /reload
+/context
 /mcp
 /mcp tools
 /agents
 /scoped-models
 /settings
 ```
+
+`/context` verification: confirm report separates all session-file branches from active context, labels exact usage versus estimates, and shows only context-pressure, prompt-overhead, and tool-bloat thresholds. In TUI, close with `q`, `Escape`, or `Ctrl-C`; in print/RPC modes, confirm readable console output.
 
 Smoke-test prompts:
 
