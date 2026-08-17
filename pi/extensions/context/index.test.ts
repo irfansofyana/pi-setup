@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import contextExtension, { collectContextReport, ContextReportComponent, formatContextReport, registerContextCommand, type ContextReportSource } from "./index.ts";
 
 function usage(totalTokens: number, cost = totalTokens / 1000) {
@@ -203,4 +204,27 @@ test("uses protocol-safe output paths outside TUI", async () => {
 	}
 	assert.equal(errors.length, 1);
 	assert.match(errors[0]!, /active-session diagnostics/);
+});
+
+test("preserves sub-cent cost totals instead of collapsing them to one decimal", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [message("a", { role: "assistant", provider: "openai", model: "m", usage: usage(34), content: [] })],
+			buildContextEntries: () => [],
+		},
+	}));
+	const formatted = formatContextReport(report);
+	assert.match(formatted, /cost\.total=0\.034/);
+	assert.doesNotMatch(formatted, /cost\.total=0\.0(?!\d)/);
+});
+
+test("truncates ANSI-themed lines by visible width without cutting the reset sequence", () => {
+	const theme = { fg: (_name: string, value: string) => `\x1b[33m${value}\x1b[0m` };
+	const text = "/context — active-session diagnostics (read-only)\n" + "y".repeat(100);
+	const component = new ContextReportComponent(text, () => {}, theme as any, { height: 32 });
+	const lines = component.render(20);
+	for (const line of lines) {
+		assert.ok(visibleWidth(line) <= 20, `line visible width ${visibleWidth(line)} exceeds 20`);
+	}
+	assert.ok(lines[0]!.includes("\x1b[0m"), "reset sequence must survive truncation");
 });

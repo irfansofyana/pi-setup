@@ -1,4 +1,5 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
 	input: number;
@@ -455,6 +456,10 @@ function formatNumber(value: number | null): string {
 	return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(1);
 }
 
+function formatCost(value: number): string {
+	return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
 function formatBytes(value: number): string {
 	if (value < 1_024) return `${value} B`;
 	if (value < 1_024 * 1_024) return `${(value / 1_024).toFixed(1)} KiB`;
@@ -462,7 +467,7 @@ function formatBytes(value: number): string {
 }
 
 function usageLine(label: string, usage: UsageTotals): string {
-	return `${label}: input=${formatNumber(usage.input)} output=${formatNumber(usage.output)} cacheRead=${formatNumber(usage.cacheRead)} cacheWrite=${formatNumber(usage.cacheWrite)} totalTokens=${formatNumber(usage.totalTokens)} cost.total=${formatNumber(usage.costTotal)} (provider-reported/model metadata; not billing accounting)`;
+	return `${label}: input=${formatNumber(usage.input)} output=${formatNumber(usage.output)} cacheRead=${formatNumber(usage.cacheRead)} cacheWrite=${formatNumber(usage.cacheWrite)} totalTokens=${formatNumber(usage.totalTokens)} cost.total=${formatCost(usage.costTotal)} (provider-reported/model metadata; not billing accounting)`;
 }
 
 function flagLine(label: string, flag: ContextFlag): string {
@@ -553,7 +558,7 @@ export class ContextReportComponent {
 
 	render(width: number): string[] {
 		const visible = this.lines.slice(this.offset, this.offset + this.viewport);
-		return visible.map((line) => line.length <= width ? line : `${line.slice(0, Math.max(0, width - 1))}…`);
+		return visible.map((line) => (visibleWidth(line) <= width ? line : truncateToWidth(line, width, "…")));
 	}
 
 	invalidate(): void {}
