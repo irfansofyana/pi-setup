@@ -1,4 +1,4 @@
-import type { BuildSystemPromptOptions, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { BuildSystemPromptOptions, ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
@@ -45,6 +45,11 @@ export interface TurnSummary {
 	toolResults: number;
 }
 
+export interface SkillUsage {
+	name: string;
+	invocations: number;
+}
+
 export interface PromptEstimate {
 	customPrompt: { chars: number; bytes: number };
 	selectedTools: { count: number; names: string[] };
@@ -85,6 +90,7 @@ export interface ContextReport {
 	models: ModelSummary[];
 	turns: TurnSummary[];
 	tools: ToolSummary[];
+	skills: SkillUsage[];
 	prompt: PromptEstimate;
 	activeEstimate: { entries: number; messages: number; chars: number; bytes: number; estimatedTokens: number };
 	flags: { contextPressure: ContextFlag; promptOverhead: ContextFlag; toolBloat: ContextFlag };
@@ -313,6 +319,19 @@ function modelKey(provider: string, model: string): string {
 	return `${provider}\u0000${model}`;
 }
 
+function skillInvocations(entries: unknown[]): Map<string, number> {
+	const counts = new Map<string, number>();
+	for (const entry of entries) {
+		const record = recordOf(entry);
+		if (record?.type !== "message") continue;
+		const message = recordOf(record.message);
+		if (!message || message.role !== "user") continue;
+		const match = textFromContent(message.content).match(/^\s*<skill name="([^"]+)"/);
+		if (match?.[1]) counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
+	}
+	return counts;
+}
+
 export function collectContextReport(ctx: ContextReportSource): ContextReport {
 	const sessionEntries = safeEntries(() => ctx.sessionManager.getEntries());
 	const activeEntries = safeEntries(() => ctx.sessionManager.buildContextEntries());
@@ -450,6 +469,9 @@ export function collectContextReport(ctx: ContextReportSource): ContextReport {
 		models: [...models.values()].sort((a, b) => `${a.provider}/${a.model}`.localeCompare(`${b.provider}/${b.model}`)),
 		turns,
 		tools: [...toolMap.values()].sort((a, b) => b.resultChars - a.resultChars || a.name.localeCompare(b.name)),
+		skills: [...skillInvocations(sessionEntries).entries()]
+			.map(([name, invocations]) => ({ name, invocations }))
+			.sort((a, b) => b.invocations - a.invocations || a.name.localeCompare(b.name)),
 		prompt: options,
 		activeEstimate: { ...activeEstimate, estimatedTokens: Math.ceil(activeEstimate.chars / 4) },
 		flags: { contextPressure: contextFlag(context), promptOverhead, toolBloat },
@@ -481,45 +503,124 @@ function flagLine(label: string, flag: ContextFlag): string {
 	return `${label}: ${flag.status}; observed=${observed}; threshold=${flag.threshold}${flag.note ? `; ${flag.note}` : ""}`;
 }
 
-function reportLines(report: ContextReport): string[] {
+type Paint = (color: ThemeColor, text: string) => string;
+
+const noPaint: Paint = (_color, text) => text;
+
+function flagColor(status: ContextFlag["status"]): ThemeColor {
+	return status === "critical" ? "error" : status === "watch" ? "warning" : status === "clear" ? "success" : "muted";
+}
+
+function singleBar(ratio: number, width: number, paint: Paint): string {
+	const clamped = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
+	const filled = Math.round(clamped * width);
+	return paint("accent", "▓".repeat(filled)) + paint("dim", "░".repeat(Math.max(0, width - filled)));
+}
+
+function tokenText(value: number | null): string {
+	return value === null ? "?" : formatNumber(value);
+}
+
+function flagRow(label: string, flag: ContextFlag, paint: Paint): string {
+	const unit = label === "tool bloat" ? " chars" : "%";
+	const observed = flag.observed === null ? "—" : `${formatNumber(flag.observed)}${unit}`;
+	return `${label.padEnd(16)} ${paint(flagColor(flag.status), flag.status.padEnd(8))} ${observed}`;
+}
+
+function flagDetail(label: string, flag: ContextFlag, paint: Paint): string {
+	const text = flagLine(label, flag);
+	return flag.status === "critical" ? paint("error", text) : flag.status === "watch" ? paint("warning", text) : text;
+}
+
+function breakdownRow(glyph: string, color: ThemeColor, label: string, value: string, paint: Paint): string {
+	return `${paint(color, glyph)} ${label.padEnd(9)} ${value}`;
+}
+
+function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[] {
+	const lines: string[] = [];
+	lines.push("/context — active-session diagnostics");
+
+	const window = report.context.contextWindow;
+	const promptTokens = report.prompt.unavailable ? 0 : report.prompt.estimatedTokens;
+	const sessionTokens = report.activeEstimate.estimatedTokens;
+
+	const ratio = report.context.percent !== null
+		? report.context.percent / 100
+		: window !== null && report.context.tokens !== null
+			? report.context.tokens / window
+			: 0;
+	lines.push(singleBar(ratio, 40, paint));
+
+	const headline = [
+		`${tokenText(report.context.tokens)} / ${tokenText(window)} tokens`,
+		report.context.freeTokens !== null ? `${formatNumber(report.context.freeTokens)} free` : null,
+		report.context.percent !== null ? `${formatNumber(report.context.percent)}%` : "percent unknown",
+	].filter(Boolean).join(" · ");
+	lines.push(headline);
+
+	lines.push("");
+	lines.push(paint("muted", "estimated contributors"));
+	lines.push(breakdownRow("▓", "accent", "prompt", `${formatNumber(promptTokens)} tokens`, paint));
+	lines.push(breakdownRow("▒", "syntaxType", "session", `${formatNumber(sessionTokens)} tokens`, paint));
+	const toolChars = report.tools.reduce((sum, tool) => sum + tool.resultChars, 0);
+	lines.push(breakdownRow("░", "syntaxKeyword", "tools", `${formatNumber(toolChars)} chars`, paint));
+	lines.push("");
+
+	lines.push(paint("muted", "Flags"));
+	lines.push(flagRow("context pressure", report.flags.contextPressure, paint));
+	lines.push(flagRow("prompt overhead", report.flags.promptOverhead, paint));
+	lines.push(flagRow("tool bloat", report.flags.toolBloat, paint));
+	lines.push("");
+
+	lines.push(report.skills.length
+		? `skills used  ${report.skills.slice(0, 8).map((skill) => `${skill.name} ×${skill.invocations}`).join(" · ")}${report.skills.length > 8 ? " · …" : ""}`
+		: "skills used  none");
+	lines.push(`spend  in ${formatNumber(report.sessionUsage.input)} · out ${formatNumber(report.sessionUsage.output)} · cost ${formatCost(report.sessionUsage.costTotal)}`);
+	if (report.models.length) {
+		lines.push(`models  ${report.models.slice(0, 4).map((model) => `${model.provider}/${model.model} ×${model.calls}`).join(" · ")}${report.models.length > 4 ? " · …" : ""}`);
+	}
+	lines.push(`turns ${report.turns.length} · branches ${report.branch.branchPoints} · compactions ${report.branch.sessionCompactions}`);
+
+	return lines;
+}
+
+function detailLines(report: ContextReport, paint: Paint = noPaint): string[] {
+	const header = (text: string) => paint("accent", text);
 	const lines: string[] = [
-		"/context — active-session diagnostics (read-only)",
-		"Exact session usage and estimates are labeled; no raw prompts, context files, or tool output are shown.",
 		"",
-		"Current context (Pi estimate)",
+		header("Current context (Pi estimate)"),
 		`tokens=${formatNumber(report.context.tokens)} window=${formatNumber(report.context.contextWindow)} percent=${formatNumber(report.context.percent)}${report.context.percentDerived ? " (computed)" : ""} free=${formatNumber(report.context.freeTokens)}${report.context.unknown ? " — unknown after compaction or before next response" : ""}`,
 		"",
-		"Session-file spend (all entries and branches, including abandoned branches)",
+		header("Session-file spend (all entries and branches, including abandoned branches)"),
 		usageLine("all session usage", report.sessionUsage),
 		`usage sources: assistant=${report.usageSources.assistant} toolResult.usage=${report.usageSources.toolResult} compaction.usage=${report.usageSources.compaction} branch-summary.usage=${report.usageSources.branchSummary}; each entry counted once`,
 		"toolResult.usage is counted only when present for nested LLM work; ordinary tool results contribute chars/bytes, not token spend.",
 		usageLine("active branch usage (subset)", report.activeBranchUsage),
 		"",
-		"Active branch context",
+		header("Active branch context"),
 		`entries=${report.branch.activeEntries} messages=${report.branch.activeMessages}; session-file entries=${report.branch.sessionEntries} messages=${report.branch.sessionMessages}; branch points=${report.branch.branchPoints}`,
 		`compactions active/session=${report.branch.activeCompactions}/${report.branch.sessionCompactions}; branch summaries active/session=${report.branch.activeBranchSummaries}/${report.branch.sessionBranchSummaries}`,
 		"",
-		"Flags (transparent thresholds only)",
-		flagLine("context pressure", report.flags.contextPressure),
-		flagLine("prompt overhead", report.flags.promptOverhead),
-		flagLine("tool bloat", report.flags.toolBloat),
+		header("Flags (transparent thresholds only)"),
+		flagDetail("context pressure", report.flags.contextPressure, paint),
+		flagDetail("prompt overhead", report.flags.promptOverhead, paint),
+		flagDetail("tool bloat", report.flags.toolBloat, paint),
 		"",
-		"Provider/model facts",
+		header("Provider/model facts"),
 	];
 	for (const model of report.models.slice(0, 16)) lines.push(`${model.provider}/${model.model}: calls=${model.calls}; ${usageLine("usage", model.usage)}`);
 	if (report.models.length > 16) lines.push(`… ${report.models.length - 16} more provider/model groups`);
-	lines.push("", "Per-turn facts (one provider response per turn; duration/exact token timing unavailable)");
+	lines.push("", header("Per-turn facts (one provider response per turn; duration/exact token timing unavailable)"));
 	for (const turn of report.turns.slice(-16)) lines.push(`turn ${turn.turn}: ${turn.provider}/${turn.model}; toolCalls=${turn.toolCalls} toolResults=${turn.toolResults}; totalTokens=${formatNumber(turn.usage.totalTokens)}`);
 	if (report.turns.length > 16) lines.push(`… ${report.turns.length - 16} earlier turns omitted`);
-	lines.push("", "Tool facts (result sizes are text chars/UTF-8 bytes)");
+	lines.push("", header("Tool facts (result sizes are text chars/UTF-8 bytes)"));
 	for (const tool of report.tools.slice(0, 20)) lines.push(`${tool.name}: calls=${tool.calls} results=${tool.results} chars=${formatNumber(tool.resultChars)} bytes=${formatBytes(tool.resultBytes)} largest=${formatNumber(tool.largestResultChars)} errors=${tool.errors} excluded-from-context=${tool.excludedFromContext} very-large=${tool.largeResults}`);
 	if (report.tools.length > 20) lines.push(`… ${report.tools.length - 20} more tools omitted`);
 	if (report.prompt.unavailable) {
-		lines.push("", "Prompt contributors: unavailable (system-prompt options not exposed in this context)");
+		lines.push("", header("Prompt contributors: unavailable (system-prompt options not exposed in this context)"));
 	} else {
+		lines.push("", header("Prompt contributors (metadata/estimates; raw content intentionally omitted)"));
 		lines.push(
-			"",
-			"Prompt contributors (metadata/estimates; raw content intentionally omitted)",
 			`custom prompt: ${formatNumber(report.prompt.customPrompt.chars)} chars / ${formatBytes(report.prompt.customPrompt.bytes)}`,
 			`selected tools: ${report.prompt.selectedTools.count} (${report.prompt.selectedTools.names.slice(0, 12).join(", ") || "none"}${report.prompt.selectedTools.names.length > 12 ? ", …" : ""})`,
 			`tool snippets: ${report.prompt.toolSnippets.count}; ${formatNumber(report.prompt.toolSnippets.chars)} chars / ${formatBytes(report.prompt.toolSnippets.bytes)}`,
@@ -530,16 +631,16 @@ function reportLines(report: ContextReport): string[] {
 			`raw contributor size estimate: ${formatNumber(report.prompt.totalChars)} chars / ${formatBytes(report.prompt.totalBytes)}; ~${formatNumber(report.prompt.estimatedTokens)} tokens (chars÷4 estimate; excludes prompt wrappers/defaults/turn mutations)`,
 		);
 	}
-	lines.push(
-		`active entries/messages text estimate: entries=${report.activeEstimate.entries} messages=${report.activeEstimate.messages}; ${formatNumber(report.activeEstimate.chars)} chars / ${formatBytes(report.activeEstimate.bytes)}; ~${formatNumber(report.activeEstimate.estimatedTokens)} tokens (chars÷4 estimate; excluded bash omitted)`,
-		"",
-		"Press q, Escape, or Ctrl-C to close.",
-	);
+	lines.push(`active entries/messages text estimate: entries=${report.activeEstimate.entries} messages=${report.activeEstimate.messages}; ${formatNumber(report.activeEstimate.chars)} chars / ${formatBytes(report.activeEstimate.bytes)}; ~${formatNumber(report.activeEstimate.estimatedTokens)} tokens (chars÷4 estimate; excluded bash omitted)`);
 	return lines;
 }
 
+export function formatDashboard(report: ContextReport): string {
+	return dashboardLines(report).join("\n");
+}
+
 export function formatContextReport(report: ContextReport, maxLines = MAX_REPORT_LINES): string {
-	const lines = reportLines(report);
+	const lines = [...dashboardLines(report), ...detailLines(report)];
 	if (lines.length <= maxLines) return lines.join("\n");
 	return [...lines.slice(0, Math.max(1, maxLines - 1)), `… report bounded at ${maxLines} lines`].join("\n");
 }
@@ -550,27 +651,31 @@ type ContextTui = {
 };
 
 export class ContextReportComponent {
-	private readonly lines: string[];
+	private readonly dashboard: string[];
+	private readonly details: string[];
 	private readonly done: () => void;
 	private readonly requestRender: () => void;
 	private readonly viewport: number;
+	private showDetails = false;
 	private offset = 0;
 	private wrapped: string[] = [];
 
-	constructor(text: string, done: () => void, theme: Theme, tui?: ContextTui) {
+	constructor(report: ContextReport, done: () => void, theme: Theme, tui?: ContextTui) {
 		this.done = done;
 		this.requestRender = tui?.requestRender?.bind(tui) ?? (() => {});
 		this.viewport = Math.max(8, Math.floor((tui?.height ?? 32) * 0.86));
-		this.lines = text.split("\n").map((line) => {
-			if (line === "/context — active-session diagnostics (read-only)" || /^[A-Z][^:]+$/.test(line)) return theme.fg("accent", line);
-			if (/^(context pressure|prompt overhead|tool bloat): (critical|watch)/.test(line)) return theme.fg("warning", line);
-			return line;
-		});
+		const paint: Paint = (color, text) => theme.fg(color, text);
+		this.dashboard = [...dashboardLines(report, paint), "", paint("dim", "[j/k] scroll · [d] details · [q] close")];
+		this.details = [...detailLines(report, paint), "", paint("dim", "[j/k] scroll · [d] dashboard · [q] close")];
+	}
+
+	private currentLines(): string[] {
+		return this.showDetails ? this.details : this.dashboard;
 	}
 
 	render(width: number): string[] {
 		const usable = Math.max(1, width);
-		this.wrapped = this.lines.flatMap((line) => wrapTextWithAnsi(line, usable));
+		this.wrapped = this.currentLines().flatMap((line) => wrapTextWithAnsi(line, usable));
 		this.offset = Math.min(this.offset, this.maxOffset());
 		return this.wrapped.slice(this.offset, this.offset + this.viewport);
 	}
@@ -583,6 +688,12 @@ export class ContextReportComponent {
 
 	handleInput(data: string): void {
 		if (data === "q" || data === "Q" || data === "\x1b" || data === "\x03") return this.done();
+		if (data === "d" || data === "D") {
+			this.showDetails = !this.showDetails;
+			this.offset = 0;
+			this.requestRender();
+			return;
+		}
 		const previous = this.offset;
 		const max = this.maxOffset();
 		if (data === "\u001b[A" || data === "k") this.offset = Math.max(0, this.offset - 1);
@@ -600,20 +711,19 @@ export function registerContextCommand(pi: Pick<ExtensionAPI, "registerCommand">
 		description: "Show read-only active-session diagnostics",
 		handler: async (_args, ctx) => {
 			const report = collectContextReport(ctx as unknown as ContextReportSource);
-			const text = formatContextReport(report);
 			if (ctx.mode === "print") {
-				console.log(text);
+				console.log(formatContextReport(report));
 				return;
 			}
 			if (ctx.mode === "rpc") {
-				ctx.ui.notify(text, "info");
+				ctx.ui.notify(formatDashboard(report), "info");
 				return;
 			}
 			if (ctx.mode === "json") {
-				console.error(text);
+				console.error(formatDashboard(report));
 				return;
 			}
-			await ctx.ui.custom((tui, theme, _keybindings, done) => new ContextReportComponent(text, () => done(undefined), theme, tui), {
+			await ctx.ui.custom((tui, theme, _keybindings, done) => new ContextReportComponent(report, () => done(undefined), theme, tui), {
 				overlay: true,
 				overlayOptions: { width: "92%", maxHeight: "86%", minWidth: 50, anchor: "center" },
 			});

@@ -5,12 +5,12 @@ Package-owned, read-only active-session diagnostics. Separate from companion `pi
 ## Behavior
 
 - Registers exactly `/context`.
-- Reports Pi context usage, session-file usage across all branches, active-branch entries, provider/model groups, tool result sizes/errors, and prompt contributor estimates.
+- Reports Pi context usage, session-file usage across all branches, active-branch entries, provider/model groups, tool result sizes/errors, explicitly invoked skills, and prompt contributor estimates.
 - Labels provider-reported usage/cost separately from character/token estimates. Cost is metadata, not billing accounting.
 - Reads `getEntries()`, `buildContextEntries()`, `getContextUsage()`, and `getSystemPromptOptions()` only. It does not append chat messages, call a model, mutate session/config, or write cache/files.
 - Does not print raw system prompts, context-file contents, skill contents, or tool output. Metadata and bounded estimates only.
 - Shows only context-pressure, prompt-overhead, and tool-bloat flags with observed values and thresholds.
 
-In TUI mode, report opens in a theme-aware scrollable overlay. Press `q`, `Escape`, or `Ctrl-C` to close. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes the report to stderr so structured stdout stays protocol-safe.
+In TUI mode, a compact dashboard opens by default — context gauge, estimated contributors, flags, skill usage, spend, and models. Press `d` to toggle the full detail view; scroll with `j`/`k`, `g`/`G`, page-up/down; press `q`, `Escape`, or `Ctrl-C` to close. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes the report to stderr so structured stdout stays protocol-safe.
 
 Run `/reload` after package or extension updates before using `/context`.

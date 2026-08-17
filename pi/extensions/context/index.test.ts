@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import contextExtension, { collectContextReport, ContextReportComponent, formatContextReport, registerContextCommand, type ContextReportSource } from "./index.ts";
+import contextExtension, { collectContextReport, ContextReportComponent, formatContextReport, formatDashboard, registerContextCommand, type ContextReportSource } from "./index.ts";
 
 function usage(totalTokens: number, cost = totalTokens / 1000) {
 	return { input: totalTokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens, cost: { total: cost } };
@@ -218,18 +218,22 @@ test("preserves sub-cent cost totals instead of collapsing them to one decimal",
 	assert.doesNotMatch(formatted, /cost\.total=0\.0(?!\d)/);
 });
 
-test("wraps long lines to the terminal width instead of discarding their tails", () => {
+test("wraps report lines to the terminal width without overflowing", () => {
 	const theme = { fg: (_name: string, value: string) => `\x1b[33m${value}\x1b[0m` };
-	const header = "/context — active-session diagnostics (read-only)";
-	const long = "field=value ".repeat(20);
-	const component = new ContextReportComponent(`${header}\n${long}`, () => {}, theme as any, { height: 32 });
-	const lines = component.render(16);
-	for (const rendered of lines) {
-		assert.ok(visibleWidth(rendered) <= 16, `line visible width ${visibleWidth(rendered)} exceeds 16`);
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("a", { role: "assistant", provider: "openai", model: "a-very-long-model-name-that-wraps", usage: usage(10), content: [] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
+	for (const width of [10, 16, 24, 40]) {
+		for (const rendered of component.render(width)) {
+			assert.ok(visibleWidth(rendered) <= width, `width ${width}: line visible width ${visibleWidth(rendered)} exceeds ${width}`);
+		}
 	}
-	const plain = lines.map((rendered) => rendered.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")).join("");
-	assert.ok(plain.includes("diagnostics"), "themed header content preserved");
-	assert.ok(plain.includes("field=value"), "wrapped tail content preserved");
 });
 
 test("does not attribute standalone shell output to the prior assistant turn", () => {
@@ -259,4 +263,53 @@ test("marks prompt contributors unavailable instead of fabricating zero-sized da
 	assert.equal(report.prompt.selectedTools.count, 0);
 	assert.equal(report.flags.promptOverhead.status, "unknown");
 	assert.match(formatContextReport(report), /Prompt contributors: unavailable/);
+});
+
+test("counts explicitly invoked skills from <skill> blocks in user messages", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("u1", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>\n\nfind foo' }] }),
+				message("a1", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [] }),
+				message("u2", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>' }] }),
+				message("u3", { role: "user", content: [{ type: "text", text: '<skill name="code-review" location="/y">\nbody\n</skill>' }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	assert.deepEqual(report.skills, [
+		{ name: "research", invocations: 2 },
+		{ name: "code-review", invocations: 1 },
+	]);
+});
+
+test("dashboard surfaces the gauge, flags, and skills summary", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("u", { role: "user", content: [{ type: "text", text: '<skill name="research" location="/x">\nbody\n</skill>' }] }),
+				message("a", { role: "assistant", provider: "openai", model: "m", usage: usage(10), content: [] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const dashboard = formatDashboard(report);
+	assert.match(dashboard, /active-session diagnostics/);
+	assert.match(dashboard, /▓/);
+	assert.match(dashboard, /▒/);
+	assert.match(dashboard, /skills used  research ×1/);
+	assert.match(dashboard, /context pressure/);
+	assert.match(dashboard, /spend  in /);
+});
+
+test("toggles between dashboard and details on [d]", () => {
+	const theme = { fg: (_name: string, value: string) => value };
+	const report = collectContextReport(source());
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
+	assert.match(component.render(80).join("\n"), /active-session diagnostics/);
+	assert.doesNotMatch(component.render(80).join("\n"), /Session-file spend/);
+	component.handleInput("d");
+	assert.match(component.render(80).join("\n"), /Session-file spend/);
+	component.handleInput("d");
+	assert.doesNotMatch(component.render(80).join("\n"), /Session-file spend/);
 });
