@@ -15,6 +15,7 @@ import headroom, {
   formatCount,
   hasSupportedProxyProtocol,
   headroomCompressionReadyFromPayload,
+  headroomRoutingReadyFromPayload,
   headroomFailureText,
   headroomReadyFromPayload,
   health,
@@ -23,6 +24,8 @@ import headroom, {
   isRemoteBlocked,
   normalizeHeadroomConfig,
   outputLooksSensitive,
+  proxyEndpoint,
+  proxyProviderBaseUrls,
   retrieveWithQuery,
   savingsPercent,
   shouldCompressToolResult,
@@ -70,6 +73,15 @@ test("normalizeHeadroomConfig does not derive managed bind from non-http local p
   assert.equal(config.host, DEFAULT_CONFIG.host);
   assert.equal(config.port, DEFAULT_CONFIG.port);
   assert.equal(hasSupportedProxyProtocol(config.proxyUrl), false);
+});
+
+test("proxyEndpoint composes complete proxy URLs without duplicate slashes", () => {
+  assert.equal(proxyEndpoint("http://127.0.0.1:8787", "/v1/compress"), "http://127.0.0.1:8787/v1/compress");
+  assert.equal(proxyEndpoint("https://proxy.example/headroom/", "stats-history"), "https://proxy.example/headroom/stats-history");
+  assert.deepEqual(proxyProviderBaseUrls("http://127.0.0.1:8787"), {
+    openai: "http://127.0.0.1:8787/v1",
+    anthropic: "http://127.0.0.1:8787",
+  });
 });
 
 test("initialRuntimeEnabled follows auto default while preserving manual and off overrides", () => {
@@ -241,7 +253,11 @@ function createHeadroomHarness(dependencies: Record<string, unknown>) {
   const tools: Record<string, any> = {};
   const notices: Array<{ message: string; level: string }> = [];
   const statuses: string[] = [];
+  const providers: Array<{ name: string; options: unknown }> = [];
+  const unregisteredProviders: string[] = [];
   const pi = {
+    registerProvider(name: string, options: unknown) { providers.push({ name, options }); },
+    unregisterProvider(name: string) { unregisteredProviders.push(name); },
     on(name: string, handler: (...args: any[]) => any) { handlers[name] = handler; },
     registerCommand(name: string, command: any) { commands[name] = command; },
     registerTool(tool: any) { tools[tool.name] = tool; },
@@ -255,13 +271,130 @@ function createHeadroomHarness(dependencies: Record<string, unknown>) {
     },
   };
   headroom(pi as any, {
-    readConfig: () => ({ ...DEFAULT_CONFIG }),
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: true }),
     ensureDirs: () => {},
     cleanupStore: () => {},
     ...dependencies,
   } as any);
-  return { handlers, commands, tools, notices, statuses, ctx };
+  return { handlers, commands, tools, notices, statuses, providers, unregisteredProviders, ctx };
 }
+
+test("session startup registers both native provider endpoints with Headroom", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  });
+  assert.deepEqual(harness.providers, []);
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.deepEqual(harness.providers, [
+    { name: "openai", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
+    { name: "anthropic", options: { baseUrl: "http://127.0.0.1:8787" } },
+  ]);
+});
+
+test("legacy local mode does not install native provider overrides", async () => {
+  const harness = createHeadroomHarness({ health: async () => true });
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.deepEqual(harness.providers, []);
+  assert.ok(harness.tools.headroom_retrieve);
+});
+test("manual startup defers native provider routing until start succeeds", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, startup: "manual", localToolResultCompression: false }),
+    health: async () => true,
+  });
+  assert.deepEqual(harness.providers, []);
+  await harness.commands.headroom.handler("start", harness.ctx);
+  assert.deepEqual(harness.providers, [
+    { name: "openai", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
+    { name: "anthropic", options: { baseUrl: "http://127.0.0.1:8787" } },
+  ]);
+});
+
+test("proxy history populates native-routing session stats after baseline", async () => {
+  let requests = 10;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests, tokens_saved: requests * 300, total_input_tokens: requests * 200 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  requests = 13;
+  const result = await harness.tools.headroom_stats.execute();
+  assert.equal(result.details.proxyRequests, 3);
+  assert.equal(result.details.compressions, 0);
+  assert.equal(result.details.tokensSaved, 900);
+  assert.equal(result.details.tokensBefore, 1500);
+  assert.equal(result.details.tokensAfter, 600);
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  requests = 20;
+  const disabledResult = await harness.tools.headroom_stats.execute();
+  assert.equal(disabledResult.details.proxyRequests, 3);
+  assert.equal(disabledResult.details.compressions, 0);
+  assert.equal(disabledResult.details.tokensSaved, 900);
+});
+
+test("remote proxy stats are blocked before fetching", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, proxyUrl: "https://example.test/headroom", allowRemote: false }),
+  });
+  const result = await harness.tools.headroom_stats.execute();
+  assert.match(result.content[0].text, /remote proxy blocked/);
+});
+
+test("native routing restores and attempts recovery after external proxy loss", async () => {
+  let healthy = true;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => healthy,
+    commandAvailable: () => false,
+    proxyHistory: async () => ({}),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.commands.headroom.handler("status", harness.ctx);
+  healthy = false;
+  await harness.handlers.turn_start({}, harness.ctx);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+});
+
+test("disable restores the original native provider routing", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+});
+
+test("does not expose local retrieval when native proxy routing is active", () => {
+  const harness = createHeadroomHarness({ readConfig: () => ({ ...DEFAULT_CONFIG }) });
+  assert.equal(harness.tools.headroom_retrieve, undefined);
+  assert.ok(harness.tools.headroom_stats);
+});
+
+test("disable during startup invalidates stale startup before spawn", async () => {
+  let releaseHealth!: (healthy: boolean) => void;
+  let probeStarted!: () => void;
+  const started = new Promise<void>((resolve) => { probeStarted = resolve; });
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    health: async () => {
+      probeStarted();
+      return new Promise<boolean>((resolve) => { releaseHealth = resolve; });
+    },
+    proxyHistory: async () => ({}),
+    spawnProxy: () => { spawnCalls++; throw new Error("stale startup spawned"); },
+  });
+  const sessionStart = harness.handlers.session_start({}, harness.ctx);
+  await started;
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  releaseHealth(false);
+  await sessionStart;
+  assert.equal(spawnCalls, 0);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+});
 
 test("stop during the initial health probe invalidates startup before spawn", async () => {
   let releaseHealth!: (healthy: boolean) => void;
@@ -314,6 +447,7 @@ test("config reset during startup waits for stale work then runs a fresh probe",
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.enabled, true);
   assert.equal(stats.details.proxyOwner, "external");
+  assert.ok(harness.tools.headroom_retrieve);
 });
 
 test("concurrent startup loser adopts the winner after its child exits before readiness", async () => {
@@ -791,6 +925,14 @@ test("buildCompressRequest sends tool-role content so Headroom can compress it",
   assert.match(payload.messages[0].content, /^Tool output from mcp:/);
 });
 
+test("buildCompressRequest sends Anthropic tool_result content for Anthropic providers", () => {
+  const payload = buildCompressRequest("large output", "mcp", "claude-sonnet", "anthropic");
+  assert.equal(payload.messages[0].role, "user");
+  assert.equal(payload.messages[0].content[0].type, "tool_result");
+  assert.equal(payload.messages[0].content[0].tool_use_id, "call_headroom_tool_output");
+  assert.match(payload.messages[0].content[0].content, /^Tool output from mcp:/);
+});
+
 test("remote proxy is blocked unless explicitly allowed", () => {
   assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com" }), true);
   assert.equal(isRemoteBlocked({ ...DEFAULT_CONFIG, proxyUrl: "https://example.com", allowRemote: true }), false);
@@ -821,6 +963,24 @@ test("compression readiness tolerates upstream-only failures", () => {
   };
   assert.equal(headroomReadyFromPayload(payload), false);
   assert.equal(headroomCompressionReadyFromPayload(payload), true);
+});
+
+test("native routing accepts explicit top-level readiness", () => {
+  assert.equal(headroomRoutingReadyFromPayload({ service: "headroom-proxy", ready: true }), true);
+  assert.equal(headroomRoutingReadyFromPayload({ service: "headroom-proxy", ready: true, checks: { upstream: { ready: false } } }), false);
+});
+test("native routing requires upstream readiness", () => {
+  const payload = {
+    service: "headroom-proxy",
+    status: "unhealthy",
+    ready: false,
+    checks: {
+      startup: { ready: true },
+      upstream: { enabled: true, ready: false, status: "unhealthy" },
+    },
+  };
+  assert.equal(headroomCompressionReadyFromPayload(payload), true);
+  assert.equal(headroomRoutingReadyFromPayload(payload), false);
 });
 
 test("health does not adopt reachable but unready proxy", async () => {

@@ -22,6 +22,7 @@ export type HeadroomFailureKind = "compression" | "lifecycle";
 
 export interface HeadroomConfig {
   enabled: boolean;
+  localToolResultCompression: boolean;
   startup: StartupMode;
   proxyUrl: string;
   host: string;
@@ -41,8 +42,16 @@ export interface HeadroomConfig {
   excludePathPatterns: string[];
 }
 
+export interface ProxyHistorySummary {
+  lifetime?: Record<string, unknown>;
+  displaySession?: Record<string, unknown>;
+  historySummary?: Record<string, unknown>;
+  error?: string;
+}
+
 export interface SessionStats {
   compressions: number;
+  proxyRequests: number;
   bypasses: number;
   failures: number;
   retrievals: number;
@@ -86,6 +95,7 @@ const STATUS_ID = "headroom";
 
 export const DEFAULT_CONFIG: HeadroomConfig = {
   enabled: true,
+  localToolResultCompression: false,
   startup: "auto",
   proxyUrl: "http://127.0.0.1:8787",
   host: "127.0.0.1",
@@ -164,6 +174,15 @@ export function hasSupportedProxyProtocol(rawUrl: string): boolean {
   }
 }
 
+/** Build a proxy endpoint while keeping a configured base URL's path intact. */
+export function proxyEndpoint(rawUrl: string, path: string): string {
+  const url = new URL(rawUrl);
+  const base = url.pathname.replace(/\/+$/, "");
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  url.pathname = `${base}${suffix}` || "/";
+  return url.toString().replace(/\/$/, "");
+}
+
 function parseLocalProxyUrl(rawUrl: string): URL | undefined {
   try {
     const url = new URL(rawUrl);
@@ -196,6 +215,7 @@ export function normalizeHeadroomConfig(raw: unknown): HeadroomConfig {
   const proxyUrl = rawProxyUrl || `http://${host}:${port}`;
   return {
     enabled: input.enabled !== false,
+    localToolResultCompression: input.localToolResultCompression === true,
     startup: startupFrom(input.startup, DEFAULT_CONFIG.startup),
     proxyUrl,
     host,
@@ -233,6 +253,7 @@ function writeConfig(config: HeadroomConfig): void {
 export function initialStats(): SessionStats {
   return {
     compressions: 0,
+    proxyRequests: 0,
     bypasses: 0,
     failures: 0,
     retrievals: 0,
@@ -325,8 +346,8 @@ class HttpStatusError extends Error {
   }
 }
 
-function getContextSignal(ctx: ExtensionContext): AbortSignal | undefined {
-  return (ctx as { signal?: AbortSignal }).signal;
+function getContextSignal(ctx: ExtensionContext | undefined): AbortSignal | undefined {
+  return (ctx as { signal?: AbortSignal } | undefined)?.signal;
 }
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number, externalSignal?: AbortSignal): Promise<unknown> {
@@ -400,9 +421,43 @@ export function headroomCompressionReadyFromPayload(payload: unknown): boolean |
   return true;
 }
 
-async function endpointReady(url: string, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+export function headroomRoutingReadyFromPayload(payload: unknown): boolean | undefined {
+  if (!isRecord(payload) || payload.service !== "headroom-proxy") return undefined;
+  if (typeof payload.ready === "boolean") {
+    const upstream = isRecord(payload.checks) ? payload.checks.upstream : undefined;
+    if (payload.ready && isRecord(upstream) && upstream.ready === false) return false;
+    return payload.ready;
+  }
+  const compressionReady = headroomCompressionReadyFromPayload(payload);
+  if (compressionReady !== true || !isRecord(payload.checks)) return false;
+  const upstream = payload.checks.upstream;
+  return isRecord(upstream) && upstream.ready === true;
+}
+
+async function endpointReady(
+  url: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+  readiness: (payload: unknown) => boolean | undefined = headroomCompressionReadyFromPayload,
+): Promise<boolean> {
   const payload = await fetchJson(url, { method: "GET" }, timeoutMs, signal);
-  return headroomCompressionReadyFromPayload(payload) ?? false;
+  return readiness(payload) ?? false;
+}
+
+async function proxyHistory(config: HeadroomConfig, signal?: AbortSignal): Promise<ProxyHistorySummary> {
+  if (!hasSupportedProxyProtocol(config.proxyUrl)) return { error: `unsupported proxyUrl: ${config.proxyUrl}` };
+  if (isRemoteBlocked(config)) return { error: `remote proxy blocked: ${config.proxyUrl}` };
+  try {
+    const payload = await fetchJson(proxyEndpoint(config.proxyUrl, "/stats-history"), { method: "GET" }, 2_000, signal);
+    if (!isRecord(payload)) return { error: "invalid stats-history response" };
+    return {
+      lifetime: isRecord(payload.lifetime) ? payload.lifetime : undefined,
+      displaySession: isRecord(payload.display_session) ? payload.display_session : undefined,
+      historySummary: isRecord(payload.history_summary) ? payload.history_summary : undefined,
+    };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function waitForHealth(
@@ -594,14 +649,15 @@ export function shouldNotifyHeadroomFailure(
 
 export async function health(config: HeadroomConfig, signal?: AbortSignal): Promise<boolean> {
   if (!hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
+  const readiness = config.localToolResultCompression ? headroomCompressionReadyFromPayload : headroomRoutingReadyFromPayload;
   try {
-    return await endpointReady(`${config.proxyUrl}/readyz`, 2_000, signal);
+    return await endpointReady(proxyEndpoint(config.proxyUrl, "/readyz"), 2_000, signal, readiness);
   } catch (error) {
     if (!(error instanceof HttpStatusError) || (error.status !== 404 && error.status !== 405)) return false;
   }
 
   try {
-    return await endpointReady(`${config.proxyUrl}/health`, 2_000, signal);
+    return await endpointReady(proxyEndpoint(config.proxyUrl, "/health"), 2_000, signal, readiness);
   } catch {
     return false;
   }
@@ -611,8 +667,59 @@ function modelId(ctx: ExtensionContext): string {
   return ctx.model?.id ?? "gpt-4o";
 }
 
-export function buildCompressRequest(text: string, toolName: string, model: string) {
+export function proxyProviderBaseUrls(proxyUrl: string): { openai: string; anthropic: string } {
+  return {
+    openai: proxyEndpoint(proxyUrl, "/v1"),
+    anthropic: proxyEndpoint(proxyUrl, ""),
+  };
+}
+
+function registerProxyProviders(pi: ExtensionAPI, config: HeadroomConfig): boolean {
+  if (config.localToolResultCompression || !hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
+  const registerProvider = (pi as ExtensionAPI & {
+    registerProvider?: (name: string, options: { baseUrl: string }) => void;
+  }).registerProvider;
+  if (!registerProvider) return false;
+  const baseUrls = proxyProviderBaseUrls(config.proxyUrl);
+  registerProvider("openai", { baseUrl: baseUrls.openai });
+  registerProvider("anthropic", { baseUrl: baseUrls.anthropic });
+  return true;
+}
+
+function unregisterProxyProviders(pi: ExtensionAPI): void {
+  const unregisterProvider = (pi as ExtensionAPI & {
+    unregisterProvider?: (name: string) => void;
+  }).unregisterProvider;
+  if (!unregisterProvider) return;
+  unregisterProvider("openai");
+  unregisterProvider("anthropic");
+}
+
+export type HeadroomWireFormat = "openai" | "anthropic";
+
+function wireFormatForContext(ctx: ExtensionContext): HeadroomWireFormat {
+  return ctx.model?.provider?.toLowerCase().includes("anthropic") ? "anthropic" : "openai";
+}
+
+export function buildCompressRequest(
+  text: string,
+  toolName: string,
+  model: string,
+  wireFormat: HeadroomWireFormat = "openai",
+) {
   const prefix = `Tool output from ${toolName}:\n\n`;
+  if (wireFormat === "anthropic") {
+    return {
+      model,
+      protect_recent: 0,
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call_headroom_tool_output", content: `${prefix}${text}` }],
+        },
+      ],
+    };
+  }
   return {
     model,
     protect_recent: 0,
@@ -625,10 +732,19 @@ export function buildCompressRequest(text: string, toolName: string, model: stri
 async function compressViaProxy(text: string, toolName: string, ctx: ExtensionContext, config: HeadroomConfig): Promise<CompressResult> {
   if (!hasSupportedProxyProtocol(config.proxyUrl)) throw new Error("Headroom proxyUrl must use http or https.");
   if (isRemoteBlocked(config)) throw new Error("Headroom remote proxy blocked by allowRemote=false.");
-  const body = buildCompressRequest(text, toolName, modelId(ctx));
+  const wireFormat = wireFormatForContext(ctx);
+  const body = buildCompressRequest(text, toolName, modelId(ctx), wireFormat);
   const json = (await fetchJson(
-    `${config.proxyUrl}/v1/compress`,
-    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+    proxyEndpoint(config.proxyUrl, "/v1/compress"),
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-headroom-client": "pi-headroom-extension",
+        ...(ctx.cwd ? { "x-headroom-project": basename(ctx.cwd) } : {}),
+      },
+      body: JSON.stringify(body),
+    },
     config.compressionTimeoutMs,
     getContextSignal(ctx),
   )) as Record<string, unknown>;
@@ -636,10 +752,19 @@ async function compressViaProxy(text: string, toolName: string, ctx: ExtensionCo
   const messages = Array.isArray(json.messages) ? (json.messages as Array<Record<string, unknown>>) : [];
   if (messages.length !== 1) throw new Error("Headroom changed message count; refusing compressed output.");
   const first = messages[0] ?? {};
-  if (first.role !== "tool" || first.tool_call_id !== "call_headroom_tool_output") {
-    throw new Error("Headroom changed tool message identity; refusing compressed output.");
+  let content: string | undefined;
+  if (wireFormat === "anthropic") {
+    const blocks = Array.isArray(first.content) ? (first.content as Array<Record<string, unknown>>) : [];
+    const resultBlock = blocks.find((block) => block.type === "tool_result" && block.tool_use_id === "call_headroom_tool_output");
+    if (first.role !== "user" || !resultBlock) throw new Error("Headroom changed Anthropic tool message identity; refusing compressed output.");
+    content = typeof resultBlock.content === "string" ? resultBlock.content : undefined;
+  } else {
+    if (first.role !== "tool" || first.tool_call_id !== "call_headroom_tool_output") {
+      throw new Error("Headroom changed tool message identity; refusing compressed output.");
+    }
+    content = typeof first.content === "string" ? first.content : undefined;
   }
-  const content = typeof first.content === "string" ? first.content : text;
+  if (content === undefined) content = text;
   const prefix = `Tool output from ${toolName}:\n\n`;
   const compressedText = content.startsWith(prefix) ? content.slice(prefix.length) : content;
 
@@ -832,6 +957,7 @@ export interface HeadroomDependencies {
   ensureDirs(): void;
   cleanupStore(config: HeadroomConfig): void;
   health(config: HeadroomConfig, signal?: AbortSignal): Promise<boolean>;
+  proxyHistory(config: HeadroomConfig, signal?: AbortSignal): Promise<ProxyHistorySummary>;
   waitForHealth(
     config: HeadroomConfig,
     signal: AbortSignal | undefined,
@@ -852,6 +978,7 @@ const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
   ensureDirs,
   cleanupStore,
   health,
+  proxyHistory,
   waitForHealth,
   commandAvailable,
   openLog: () => openSync(LOG_PATH, "a"),
@@ -867,12 +994,61 @@ const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
 export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<HeadroomDependencies> = {}) {
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
+  let resetConfigForSave: HeadroomConfig | undefined;
+  let proxyProvidersRegistered = false;
+  const enableProxyRouting = (): void => {
+    proxyProvidersRegistered = registerProxyProviders(pi, config);
+  };
+  const disableProxyRouting = (): void => {
+    if (!proxyProvidersRegistered) return;
+    unregisterProxyProviders(pi);
+    proxyProvidersRegistered = false;
+  };
   let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
   let managedProcess: ChildProcess | undefined;
   let managedLifecycle: ReturnType<typeof createManagedProxyLifecycle> | undefined;
   let failureNotified = false;
   const stats = initialStats();
+
+  let proxyStatsBaseline: { requests: number; tokensSaved: number; tokensAfter: number } | undefined;
+  const proxyMetricSnapshot = (history: ProxyHistorySummary): { requests: number; tokensSaved: number; tokensAfter: number } | undefined => {
+    const source = history.displaySession ?? history.lifetime;
+    if (!source) return undefined;
+    const numberValue = (key: string): number => typeof source[key] === "number" && Number.isFinite(source[key]) ? source[key] as number : 0;
+    return {
+      requests: Math.max(0, numberValue("requests")),
+      tokensSaved: Math.max(0, numberValue("tokens_saved")),
+      tokensAfter: Math.max(0, numberValue("total_input_tokens")),
+    };
+  };
+  const syncStatsFromProxy = (history: ProxyHistorySummary): void => {
+    if (!runtimeEnabled || config.localToolResultCompression) return;
+    const current = proxyMetricSnapshot(history);
+    if (!current) return;
+    if (!proxyStatsBaseline) {
+      proxyStatsBaseline = current;
+      return;
+    }
+    if (current.requests < proxyStatsBaseline.requests || current.tokensSaved < proxyStatsBaseline.tokensSaved || current.tokensAfter < proxyStatsBaseline.tokensAfter) return;
+    const delta = (value: number, baseline: number): number => Math.max(0, value - baseline);
+    stats.proxyRequests += delta(current.requests, proxyStatsBaseline.requests);
+    stats.tokensSaved += delta(current.tokensSaved, proxyStatsBaseline.tokensSaved);
+    stats.tokensAfter += delta(current.tokensAfter, proxyStatsBaseline.tokensAfter);
+    stats.tokensBefore = stats.tokensAfter + stats.tokensSaved;
+    proxyStatsBaseline = current;
+  };
+
+  const captureProxyStatsBaseline = async (): Promise<void> => {
+    if (config.localToolResultCompression) return;
+    const history = await dependencies.proxyHistory(config);
+    const current = proxyMetricSnapshot(history);
+    if (current) proxyStatsBaseline = current;
+  };
+  const finalizeProxyStatsSegment = async (): Promise<void> => {
+    if (!runtimeEnabled || config.localToolResultCompression) return;
+    syncStatsFromProxy(await dependencies.proxyHistory(config));
+  };
 
   const notifyFailure = (ctx: ExtensionContext, message: string): void => {
     stats.failures++;
@@ -892,6 +1068,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       runtimeEnabled = false;
+      disableProxyRouting();
       owner = "none";
       updateStatus(ctx, runtimeEnabled, owner, stats);
       notifyLifecycleFailure(ctx, `Headroom startup directory setup failed: ${detail}. Bypassing compression.`);
@@ -899,6 +1076,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     if (!canStartRuntime(config)) {
       runtimeEnabled = false;
+      disableProxyRouting();
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify("Headroom startup is off. Change config startup before starting compression.", "warning");
       return;
@@ -906,6 +1084,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (!hasSupportedProxyProtocol(config.proxyUrl)) {
       owner = "none";
       runtimeEnabled = false;
+      disableProxyRouting();
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify(`Headroom proxyUrl must use http or https: ${config.proxyUrl}.`, "warning");
       return;
@@ -913,6 +1092,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (isRemoteBlocked(config)) {
       owner = "none";
       runtimeEnabled = false;
+      disableProxyRouting();
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy blocked: ${config.proxyUrl}. Set allowRemote=true only for a trusted proxy.`, "warning");
       return;
@@ -920,6 +1100,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const alreadyHealthy = await dependencies.health(config, getContextSignal(ctx));
     if (!attempt.isCurrent()) return;
     if (alreadyHealthy) {
+      if (config.enabled) {
+        enableProxyRouting();
+        runtimeEnabled = config.enabled;
+        await captureProxyStatsBaseline();
+        if (!attempt.isCurrent()) return;
+      }
       owner = managedProcess ? "managed" : "external";
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -928,6 +1114,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     if (managedProcess) {
       runtimeEnabled = false;
+      disableProxyRouting();
       owner = "managed";
       updateStatus(ctx, runtimeEnabled, owner, stats);
       notifyLifecycleFailure(ctx, "A previous Headroom managed proxy is unhealthy but still tracked. Refusing to spawn a replacement until its exit is confirmed; retry /headroom stop or terminate it manually.");
@@ -935,6 +1122,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     if (!isLocalProxyUrl(config.proxyUrl)) {
       runtimeEnabled = false;
+      disableProxyRouting();
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy unavailable: ${config.proxyUrl}.`, "warning");
       return;
@@ -943,6 +1131,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (!dependencies.commandAvailable()) {
       owner = "none";
       runtimeEnabled = false;
+      disableProxyRouting();
       updateStatus(ctx, runtimeEnabled, owner, stats);
       notifyLifecycleFailure(ctx, 'Headroom CLI missing. Run /headroom doctor for install commands.');
       return;
@@ -961,6 +1150,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       managedLifecycle = undefined;
       owner = "none";
       runtimeEnabled = false;
+      disableProxyRouting();
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (notice) notifyLifecycleFailure(ctx, notice.message);
       return;
@@ -979,6 +1169,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (managedProcess === child) managedProcess = undefined;
       if (managedLifecycle === lifecycle) managedLifecycle = undefined;
       runtimeEnabled = false;
+      disableProxyRouting();
       owner = "none";
       try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -1008,6 +1199,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       const notice = lifecycle.handleSpawnError(new Error(`cannot write Headroom PID file: ${detail}`));
       terminalFailureNotified = true;
       runtimeEnabled = false;
+      disableProxyRouting();
       owner = "managed";
       updateStatus(ctx, runtimeEnabled, owner, stats);
       lifecycle.markStopping();
@@ -1032,6 +1224,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     startupPending = false;
     if (becameHealthy) {
       lifecycle.markReady();
+      if (config.enabled) {
+        enableProxyRouting();
+        runtimeEnabled = config.enabled;
+        await captureProxyStatsBaseline();
+        if (!attempt.isCurrent()) return;
+      }
       owner = "managed";
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -1051,6 +1249,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       : false;
     if (!attempt.isCurrent()) return;
     if (concurrentProxyHealthy) {
+      if (config.enabled) {
+        enableProxyRouting();
+        runtimeEnabled = config.enabled;
+        await captureProxyStatsBaseline();
+        if (!attempt.isCurrent()) return;
+      }
       owner = "external";
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -1071,6 +1275,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       owner = "managed";
     }
     runtimeEnabled = false;
+      disableProxyRouting();
     try { if (existsSync(PID_PATH) && terminated) unlinkSync(PID_PATH); } catch {}
     updateStatus(ctx, runtimeEnabled, owner, stats);
     if (timeoutNotice) notifyLifecycleFailure(ctx, timeoutNotice.message);
@@ -1082,7 +1287,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   const stopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
     startCoordinator.cancel();
+    await finalizeProxyStatsSegment();
     runtimeEnabled = false;
+    disableProxyRouting();
     if (managedProcess) {
       const child = managedProcess;
       const lifecycle = managedLifecycle;
@@ -1114,7 +1321,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     `proxyUrl: ${config.proxyUrl}`,
     `allowRemote: ${config.allowRemote}`,
     `remoteBlocked: ${isRemoteBlocked(config)}`,
+    `proxyStatsScope: proxy-history delta; concurrent proxy clients may be included`,
     `compressions: ${stats.compressions}`,
+    `proxyRequests: ${stats.proxyRequests}`,
     `bypasses: ${stats.bypasses}`,
     `failures: ${stats.failures}`,
     `retrievals: ${stats.retrievals}`,
@@ -1130,16 +1339,46 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     if (config.startup === "auto") await startManagedProxy(ctx);
     else updateStatus(ctx, runtimeEnabled, owner, stats);
+    if (runtimeEnabled && !config.localToolResultCompression) {
+      await captureProxyStatsBaseline();
+    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     await stopManagedProxy(ctx, false);
   });
 
+  const recoverNativeRouting = async (ctx: ExtensionContext): Promise<boolean> => {
+    if (config.localToolResultCompression) return runtimeEnabled;
+    if (!runtimeEnabled) return false;
+    const signal = getContextSignal(ctx);
+    if (signal?.aborted) return true;
+    const healthy = await dependencies.health(config, signal);
+    if (signal?.aborted) return true;
+    if (healthy) return true;
+    runtimeEnabled = false;
+    disableProxyRouting();
+    updateStatus(ctx, runtimeEnabled, owner, stats);
+    if (owner === "external" && config.startup === "auto") await startManagedProxy(ctx);
+    return false;
+  };
+
+  pi.on("turn_start", async (_event, ctx) => {
+    await recoverNativeRouting(ctx);
+  });
+
+  pi.on("turn_end", async (_event, ctx) => {
+    if (!await recoverNativeRouting(ctx)) return;
+    if (config.localToolResultCompression) return;
+    const history = await dependencies.proxyHistory(config, getContextSignal(ctx));
+    syncStatsFromProxy(history);
+    updateStatus(ctx, runtimeEnabled, owner, stats);
+  });
+
   pi.on("tool_result", async (event, ctx) => {
     updateStatus(ctx, runtimeEnabled, owner, stats);
     const runConfig = config;
-    if (!runtimeEnabled) return;
+    if (!runtimeEnabled || !runConfig.localToolResultCompression) return;
 
     const text = textFromContent(event.content as Array<{ type: string; text?: string }>);
     if (!shouldCompressToolResult(event.toolName, event.input, text, runConfig)) {
@@ -1220,7 +1459,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
   });
 
-  pi.registerTool({
+  if (config.localToolResultCompression) {
+    pi.registerTool({
     name: "headroom_retrieve",
     label: "Headroom Retrieve",
     description: "Retrieve original local Pi tool output compressed by Headroom.",
@@ -1244,6 +1484,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       };
     },
   });
+  }
 
   pi.registerTool({
     name: "headroom_stats",
@@ -1251,8 +1492,16 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     description: "Show Pi Headroom adapter session stats.",
     promptSnippet: "Inspect Headroom compression savings and local retrieval stats.",
     parameters: Schema.Object({}),
-    async execute() {
-      return { content: [{ type: "text", text: statsSummary() }], details: { ...stats, enabled: runtimeEnabled, proxyOwner: owner } };
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      const history = runtimeEnabled
+        ? await dependencies.proxyHistory(config, signal ?? getContextSignal(ctx))
+        : { error: "routing disabled" };
+      syncStatsFromProxy(history);
+      const text = `${statsSummary()}\nproxyHistory: ${history.error ? `unavailable (${history.error})` : "available"}`;
+      return {
+        content: [{ type: "text", text }],
+        details: { ...stats, enabled: runtimeEnabled, proxyOwner: owner, proxyStatsScope: "proxy-history delta; concurrent proxy clients may be included", proxyHistory: history },
+      };
     },
   });
 
@@ -1295,20 +1544,27 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           return;
         }
         config = { ...config, enabled: true };
+        enableProxyRouting();
+        await captureProxyStatsBaseline();
         ctx.ui.notify("Headroom compression enabled for this session.", "info");
         return;
       }
       if (command === "disable") {
+        startCoordinator.cancel();
+        await finalizeProxyStatsSegment();
         runtimeEnabled = false;
+        disableProxyRouting();
         updateStatus(ctx, runtimeEnabled, owner, stats);
         ctx.ui.notify("Headroom compression disabled for this session.", "info");
         return;
       }
       if (command === "stats" || command === "status") {
         const healthy = await health(config, getContextSignal(ctx));
+        const history = await dependencies.proxyHistory(config, getContextSignal(ctx));
+        syncStatsFromProxy(history);
         if (healthy && owner === "none") owner = "external";
         updateStatus(ctx, runtimeEnabled, owner, stats);
-        ctx.ui.notify(`${statsSummary()}\nproxyHealthy: ${healthy}`, healthy ? "info" : "warning");
+        ctx.ui.notify(`${statsSummary()}\nproxyHealthy: ${healthy}\nproxyHistory: ${history.error ? `unavailable (${history.error})` : "available"}`, healthy ? "info" : "warning");
         return;
       }
       if (command === "doctor") {
@@ -1348,7 +1604,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           return;
         }
         if (value === "save") {
-          writeConfig({ ...config, enabled: runtimeEnabled });
+          writeConfig({ ...(resetConfigForSave ?? config), enabled: runtimeEnabled });
+          resetConfigForSave = undefined;
           ctx.ui.notify(`Headroom config saved to ${CONFIG_PATH}`, "info");
           return;
         }
@@ -1356,15 +1613,20 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           const stopped = await stopManagedProxy(ctx, false);
           if (!stopped) {
             runtimeEnabled = false;
+      disableProxyRouting();
             updateStatus(ctx, runtimeEnabled, owner, stats);
             ctx.ui.notify("Headroom config reset aborted because the managed proxy is still running. Retry /headroom stop or terminate it manually first.", "error");
             return;
           }
-          config = DEFAULT_CONFIG;
+          const modeBeforeReset = config.localToolResultCompression;
+          resetConfigForSave = { ...DEFAULT_CONFIG };
+          config = { ...DEFAULT_CONFIG, localToolResultCompression: modeBeforeReset };
           runtimeEnabled = false;
+      disableProxyRouting();
           owner = "none";
           updateStatus(ctx, runtimeEnabled, owner, stats);
-          ctx.ui.notify("Headroom runtime config reset to defaults. Use /headroom config save to persist.", "info");
+          const modeNotice = modeBeforeReset ? " Legacy local mode remains active until /reload." : " Native mode remains active until /reload.";
+          ctx.ui.notify(`Headroom runtime config reset to defaults.${modeNotice} Use /headroom config save to persist.`, "info");
           if (config.startup === "auto") await startCoordinator.restart(ctx);
           return;
         }
