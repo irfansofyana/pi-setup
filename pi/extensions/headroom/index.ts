@@ -1531,10 +1531,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         owner = decision.owner;
         updateStatus(ctx, runtimeEnabled, owner, stats);
         if (decision.reason === "startup-off") {
+          disableProxyRouting();
           ctx.ui.notify("Headroom startup is off. Change config startup before enabling compression.", "warning");
           return;
         }
         if (decision.reason === "proxy-unavailable") {
+          disableProxyRouting();
           ctx.ui.notify(
             proxyUrlSupported
               ? `Headroom proxy unavailable at ${config.proxyUrl}. Run /headroom start or start proxy before /headroom enable.`
