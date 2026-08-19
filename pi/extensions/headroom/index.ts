@@ -1050,7 +1050,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (config.localToolResultCompression) return;
     const history = await fetchProxyHistory(undefined, true);
     const current = proxyMetricSnapshot(history);
-    if (current) proxyStatsBaseline = current;
+    proxyStatsBaseline = current;
   };
   const finalizeProxyStatsSegment = async (): Promise<void> => {
     if (!runtimeEnabled || config.localToolResultCompression) return;
