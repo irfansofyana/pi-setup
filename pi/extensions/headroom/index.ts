@@ -1013,8 +1013,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   let proxyStatsBaseline: { requests: number; tokensSaved: number; tokensAfter: number } | undefined;
   let proxyHistoryBackoffUntil = 0;
-  const fetchProxyHistory = async (signal?: AbortSignal): Promise<ProxyHistorySummary> => {
-    if (Date.now() < proxyHistoryBackoffUntil) return { error: "history backoff active" };
+  const fetchProxyHistory = async (signal?: AbortSignal, force = false): Promise<ProxyHistorySummary> => {
+    if (!force && Date.now() < proxyHistoryBackoffUntil) return { error: "history backoff active" };
     const history = await dependencies.proxyHistory(config, signal);
     proxyHistoryBackoffUntil = history.error && !signal?.aborted ? Date.now() + 30_000 : 0;
     return history;
@@ -1048,13 +1048,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   const captureProxyStatsBaseline = async (): Promise<void> => {
     if (config.localToolResultCompression) return;
-    const history = await fetchProxyHistory();
+    const history = await fetchProxyHistory(undefined, true);
     const current = proxyMetricSnapshot(history);
     if (current) proxyStatsBaseline = current;
   };
   const finalizeProxyStatsSegment = async (): Promise<void> => {
     if (!runtimeEnabled || config.localToolResultCompression) return;
-    syncStatsFromProxy(await fetchProxyHistory());
+    syncStatsFromProxy(await fetchProxyHistory(undefined, true));
   };
 
   const notifyFailure = (ctx: ExtensionContext, message: string): void => {
