@@ -1012,6 +1012,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   const stats = initialStats();
 
   let proxyStatsBaseline: { requests: number; tokensSaved: number; tokensAfter: number } | undefined;
+  let proxyHistoryBackoffUntil = 0;
+  const fetchProxyHistory = async (signal?: AbortSignal): Promise<ProxyHistorySummary> => {
+    if (Date.now() < proxyHistoryBackoffUntil) return { error: "history backoff active" };
+    const history = await dependencies.proxyHistory(config, signal);
+    proxyHistoryBackoffUntil = history.error && !signal?.aborted ? Date.now() + 30_000 : 0;
+    return history;
+  };
   const proxyMetricSnapshot = (history: ProxyHistorySummary): { requests: number; tokensSaved: number; tokensAfter: number } | undefined => {
     const source = history.displaySession ?? history.lifetime;
     if (!source) return undefined;
@@ -1041,13 +1048,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   const captureProxyStatsBaseline = async (): Promise<void> => {
     if (config.localToolResultCompression) return;
-    const history = await dependencies.proxyHistory(config);
+    const history = await fetchProxyHistory();
     const current = proxyMetricSnapshot(history);
     if (current) proxyStatsBaseline = current;
   };
   const finalizeProxyStatsSegment = async (): Promise<void> => {
     if (!runtimeEnabled || config.localToolResultCompression) return;
-    syncStatsFromProxy(await dependencies.proxyHistory(config));
+    syncStatsFromProxy(await fetchProxyHistory());
   };
 
   const notifyFailure = (ctx: ExtensionContext, message: string): void => {
@@ -1370,7 +1377,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   pi.on("turn_end", async (_event, ctx) => {
     if (!await recoverNativeRouting(ctx)) return;
     if (config.localToolResultCompression) return;
-    const history = await dependencies.proxyHistory(config, getContextSignal(ctx));
+    const history = await fetchProxyHistory(getContextSignal(ctx));
     syncStatsFromProxy(history);
     updateStatus(ctx, runtimeEnabled, owner, stats);
   });
@@ -1494,7 +1501,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     parameters: Schema.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
       const history = runtimeEnabled
-        ? await dependencies.proxyHistory(config, signal ?? getContextSignal(ctx))
+        ? await fetchProxyHistory(signal ?? getContextSignal(ctx))
         : { error: "routing disabled" };
       syncStatsFromProxy(history);
       const text = `${statsSummary()}\nproxyHistory: ${history.error ? `unavailable (${history.error})` : "available"}`;
@@ -1526,7 +1533,15 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       if (command === "enable") {
         const proxyUrlSupported = hasSupportedProxyProtocol(config.proxyUrl);
-        const decision = enableRuntimeDecision(config, config.startup !== "off" && proxyUrlSupported && await health(config, getContextSignal(ctx)), owner, managedProcess !== undefined);
+        const enableSignal = getContextSignal(ctx);
+        const wasRuntimeEnabled = runtimeEnabled;
+        const proxyHealthy = config.startup !== "off" && proxyUrlSupported && await health(config, enableSignal);
+        if (enableSignal?.aborted) {
+          runtimeEnabled = wasRuntimeEnabled;
+          updateStatus(ctx, runtimeEnabled, owner, stats);
+          return;
+        }
+        const decision = enableRuntimeDecision(config, proxyHealthy, owner, managedProcess !== undefined);
         runtimeEnabled = decision.runtimeEnabled;
         owner = decision.owner;
         updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -1562,7 +1577,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       if (command === "stats" || command === "status") {
         const healthy = await health(config, getContextSignal(ctx));
-        const history = await dependencies.proxyHistory(config, getContextSignal(ctx));
+        const history = await fetchProxyHistory(getContextSignal(ctx));
         syncStatsFromProxy(history);
         if (healthy && owner === "none") owner = "external";
         updateStatus(ctx, runtimeEnabled, owner, stats);
