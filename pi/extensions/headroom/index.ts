@@ -1346,9 +1346,6 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     if (config.startup === "auto") await startManagedProxy(ctx);
     else updateStatus(ctx, runtimeEnabled, owner, stats);
-    if (runtimeEnabled && !config.localToolResultCompression) {
-      await captureProxyStatsBaseline();
-    }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
