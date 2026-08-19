@@ -40,6 +40,7 @@ test("init delegates to the bundled skill without granting mutation approval", a
   assert.match(INIT_PROMPT, /pi-setup skill/);
   assert.match(INIT_PROMPT, /Do not mutate anything/);
   assert.match(INIT_PROMPT, /companion packages/);
+  assert.match(INIT_PROMPT, /automatic-delegation prompt/);
 });
 
 test("doctor delegates a strictly read-only health audit", async () => {
@@ -51,4 +52,5 @@ test("doctor delegates a strictly read-only health audit", async () => {
   assert.deepEqual(pi.sent, [DOCTOR_PROMPT]);
   assert.match(DOCTOR_PROMPT, /read-only audit/);
   assert.match(DOCTOR_PROMPT, /Do not install, write, copy, move, remove, or change/);
+  assert.match(DOCTOR_PROMPT, /automatic-delegation prompt/);
 });

@@ -54,6 +54,7 @@ Smoke-test prompts:
 /btw what is current task context?
 Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
 Run Ciung (`researcher`) and Laya (`code-mapper`) in parallel for this task, then reconcile their findings before proposing changes.
+Explain how this repository installs global subagent templates and identify the owning documentation. Do not name a subagent; verify that Main Pi selects Laya automatically instead of asking whether to delegate.
 Use 9router-web-researcher to find current Pi MCP adapter docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
@@ -82,6 +83,7 @@ Use the notion-cli skill to list Notion API endpoints.
 | Direct MCP tools missing | Run `/mcp reconnect <server-name>`, then `/reload` |
 | Too many MCP tools in context | Remove `directTools: true` or list selected tools only |
 | Skills do not trigger | Restart Pi or `/reload`; confirm skill in startup header |
+| Subagents still require explicit requests | Confirm the `pi-setup:auto-delegation` block exists in `~/.pi/agent/APPEND_SYSTEM.md`, run `/reload`, and retry with a task that has real external or codebase uncertainty |
 | Headroom offline | Run `/headroom doctor`, then `/headroom start` |
 | Hindsight offline | Run `/hindsight diagnose`, check daemon port/config |
 | Duplicate command/tool such as `/caveman` | Use the bundled `pi-setup` skill to identify first-party package and manual loaders; back up and remove only the explicitly approved manual duplicate |

@@ -119,6 +119,7 @@ Use `pi list` to inspect package sources. These companion packages remain separa
 | `~/.pi/agent/extensions/` | Global user | Legacy/manual loaders and extension-local policy |
 | `~/.pi/agent/agents/` | Global user | Trusted reusable subagent roles |
 | `~/.pi/agent/subagents.json` | Global user | Subagent defaults |
+| `~/.pi/agent/APPEND_SYSTEM.md` | Global user | Optional marker-managed automatic delegation policy |
 | `~/.pi/agent/headroom/config.json` | Global user | Headroom adapter config |
 | `~/.pi/agent/hindsight/config.json` | Global user | Hindsight daemon config |
 | `~/.pi/agent/managed-skills/` | Global user | Generated skills |
@@ -161,6 +162,7 @@ Package updates replace package-owned code, not user-owned configuration. Preser
 - Do not manually copy package-owned extensions, themes, or bundled skills.
 - Install unrelated skills with `npx skills` or `npx skills@latest`.
 - Deploy reviewed global agent templates through the bundled skill because agents are not package resources.
+- Deploy the optional automatic-delegation prompt through the bundled skill; preserve unrelated global prompt content.
 - Keep credentials in `/login`, environment variables, or provider profiles.
 - Preserve user-owned config/state and unknown keys.
 - Back up before approved mutation and stop on unexpected drift.

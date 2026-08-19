@@ -89,6 +89,7 @@ Installing the first-party package is non-destructive. It does not overwrite:
 - global or project MCP configuration;
 - provider auth or credential stores;
 - global subagent templates.
+- global `APPEND_SYSTEM.md` instructions.
 
 The first-party package can initially coexist with legacy resources. That coexistence is for audit and rollback, not the desired final state: duplicate extension loaders may register the same commands or tools.
 
@@ -119,6 +120,7 @@ The audit must cover:
 - component config/state paths listed in [Configuration](configuration.md);
 - global and project MCP configuration;
 - trusted global agents and subagent defaults;
+- the optional marker-managed automatic-delegation block in `~/.pi/agent/APPEND_SYSTEM.md`;
 - credential references by name only, with values redacted.
 
 A matching name is not enough to delete a path. The skill must distinguish a duplicate code loader from user-owned config/state. For example, `~/.pi/agent/hindsight/config.json` remains user-owned even after Hindsight code loads from the package.
@@ -180,6 +182,8 @@ Pi package resources do not natively include agents. The package includes review
 Use the bundled `pi-setup` skill to audit and propose deployment to `~/.pi/agent/agents/` and narrow merges into `~/.pi/agent/subagents.json`. Deployment requires explicit approval, private backup, template review, and preservation of machine-local model choices unless replacement is approved.
 
 See [Subagent team](subagents.md#install-the-trusted-templates) for the authoritative deployment and rollback procedure.
+
+The package also ships `templates/global/APPEND_SYSTEM.md`, which lets Main Pi select the trusted team without waiting for an explicit user request. The setup skill may propose a separate marker-managed merge into the user-owned `~/.pi/agent/APPEND_SYSTEM.md`. Installation alone never activates it. An approved merge must preserve every line outside the `pi-setup:auto-delegation` markers, use a private backup when the target already exists, and be followed by `/reload` or a new Pi session.
 
 ## Install Headroom CLI
 
