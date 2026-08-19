@@ -681,8 +681,17 @@ function registerProxyProviders(pi: ExtensionAPI, config: HeadroomConfig): boole
   }).registerProvider;
   if (!registerProvider) return false;
   const baseUrls = proxyProviderBaseUrls(config.proxyUrl);
-  registerProvider("openai", { baseUrl: baseUrls.openai });
-  registerProvider("anthropic", { baseUrl: baseUrls.anthropic });
+  const registered: string[] = [];
+  try {
+    registerProvider("openai", { baseUrl: baseUrls.openai });
+    registered.push("openai");
+    registerProvider("anthropic", { baseUrl: baseUrls.anthropic });
+    registered.push("anthropic");
+  } catch (error) {
+    const unregisterProvider = (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider;
+    for (const name of registered.reverse()) unregisterProvider?.(name);
+    throw error;
+  }
   return true;
 }
 
@@ -996,8 +1005,17 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   let config = dependencies.readConfig();
   let resetConfigForSave: HeadroomConfig | undefined;
   let proxyProvidersRegistered = false;
-  const enableProxyRouting = (): void => {
-    proxyProvidersRegistered = registerProxyProviders(pi, config);
+  let proxyRoutingError: string | undefined;
+  const enableProxyRouting = (): boolean => {
+    if (config.localToolResultCompression || proxyProvidersRegistered) return true;
+    try {
+      proxyProvidersRegistered = registerProxyProviders(pi, config);
+      proxyRoutingError = proxyProvidersRegistered ? undefined : "Pi provider registration API is unavailable";
+    } catch (error) {
+      proxyProvidersRegistered = false;
+      proxyRoutingError = error instanceof Error ? error.message : String(error);
+    }
+    return proxyProvidersRegistered;
   };
   const disableProxyRouting = (): void => {
     if (!proxyProvidersRegistered) return;
@@ -1008,16 +1026,29 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   let owner: ProxyOwner = "none";
   let managedProcess: ChildProcess | undefined;
   let managedLifecycle: ReturnType<typeof createManagedProxyLifecycle> | undefined;
+  let managedStartupPending = false;
+  let routingMutationRevision = 0;
+  const beginRoutingMutation = (): number => ++routingMutationRevision;
+  const routingMutationIsCurrent = (revision: number): boolean => revision === routingMutationRevision;
   let failureNotified = false;
   const stats = initialStats();
 
   let proxyStatsBaseline: { requests: number; tokensSaved: number; tokensAfter: number } | undefined;
+  let proxyStatsBaselineRevision = 0;
+  const proxyHistorySequenceKey = Symbol("proxyHistorySequence");
+  let proxyHistoryIssuedSequence = 0;
+  let proxyHistoryCompletedSequence = 0;
+  let proxyHistoryAppliedSequence = 0;
   let proxyHistoryBackoffUntil = 0;
   const fetchProxyHistory = async (signal?: AbortSignal, force = false): Promise<ProxyHistorySummary> => {
-    if (!force && Date.now() < proxyHistoryBackoffUntil) return { error: "history backoff active" };
+    if (!force && dependencies.monotonicNowMs() < proxyHistoryBackoffUntil) return { error: "history backoff active" };
+    const sequence = ++proxyHistoryIssuedSequence;
     const history = await dependencies.proxyHistory(config, signal);
-    proxyHistoryBackoffUntil = history.error && !signal?.aborted ? Date.now() + 30_000 : 0;
-    return history;
+    if (sequence >= proxyHistoryCompletedSequence) {
+      proxyHistoryCompletedSequence = sequence;
+      proxyHistoryBackoffUntil = history.error && !signal?.aborted ? dependencies.monotonicNowMs() + 30_000 : 0;
+    }
+    return Object.assign({}, history, { [proxyHistorySequenceKey]: sequence });
   };
   const proxyMetricSnapshot = (history: ProxyHistorySummary): { requests: number; tokensSaved: number; tokensAfter: number } | undefined => {
     const source = history.displaySession ?? history.lifetime;
@@ -1029,15 +1060,21 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       tokensAfter: Math.max(0, numberValue("total_input_tokens")),
     };
   };
-  const syncStatsFromProxy = (history: ProxyHistorySummary): void => {
-    if (!runtimeEnabled || config.localToolResultCompression) return;
+  const syncStatsFromProxy = (history: ProxyHistorySummary, allowInactive = false): void => {
+    if ((!runtimeEnabled && !allowInactive) || config.localToolResultCompression) return;
     const current = proxyMetricSnapshot(history);
     if (!current) return;
+    const sequence = (history as ProxyHistorySummary & { [proxyHistorySequenceKey]?: number })[proxyHistorySequenceKey] ?? 0;
+    if (sequence > 0 && sequence < proxyHistoryAppliedSequence) return;
+    if (sequence > 0) proxyHistoryAppliedSequence = sequence;
     if (!proxyStatsBaseline) {
       proxyStatsBaseline = current;
       return;
     }
-    if (current.requests < proxyStatsBaseline.requests || current.tokensSaved < proxyStatsBaseline.tokensSaved || current.tokensAfter < proxyStatsBaseline.tokensAfter) return;
+    if (current.requests < proxyStatsBaseline.requests || current.tokensSaved < proxyStatsBaseline.tokensSaved || current.tokensAfter < proxyStatsBaseline.tokensAfter) {
+      proxyStatsBaseline = current;
+      return;
+    }
     const delta = (value: number, baseline: number): number => Math.max(0, value - baseline);
     stats.proxyRequests += delta(current.requests, proxyStatsBaseline.requests);
     stats.tokensSaved += delta(current.tokensSaved, proxyStatsBaseline.tokensSaved);
@@ -1046,15 +1083,25 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     proxyStatsBaseline = current;
   };
 
-  const captureProxyStatsBaseline = async (): Promise<void> => {
-    if (config.localToolResultCompression) return;
-    const history = await fetchProxyHistory(undefined, true);
-    const current = proxyMetricSnapshot(history);
-    proxyStatsBaseline = current;
+  const invalidatePendingBaselineCapture = (): void => { proxyStatsBaselineRevision++; };
+  const captureProxyStatsBaseline = async (signal?: AbortSignal): Promise<boolean> => {
+    if (config.localToolResultCompression) return true;
+    const revision = ++proxyStatsBaselineRevision;
+    proxyStatsBaseline = undefined;
+    const history = await fetchProxyHistory(signal, true);
+    if (signal?.aborted || revision !== proxyStatsBaselineRevision) return false;
+    const snapshot = proxyMetricSnapshot(history);
+    const sequence = (history as ProxyHistorySummary & { [proxyHistorySequenceKey]?: number })[proxyHistorySequenceKey] ?? 0;
+    if (sequence > 0 && sequence < proxyHistoryAppliedSequence) return false;
+    if (sequence > proxyHistoryAppliedSequence) proxyHistoryAppliedSequence = sequence;
+    proxyStatsBaseline = snapshot;
+    return snapshot !== undefined;
   };
-  const finalizeProxyStatsSegment = async (): Promise<void> => {
-    if (!runtimeEnabled || config.localToolResultCompression) return;
-    syncStatsFromProxy(await fetchProxyHistory(undefined, true));
+  const finalizeProxyStatsSegment = async (wasRuntimeEnabled = runtimeEnabled, signal?: AbortSignal): Promise<void> => {
+    if (!wasRuntimeEnabled || config.localToolResultCompression) return;
+    const history = await fetchProxyHistory(signal, true);
+    if (signal?.aborted) return;
+    syncStatsFromProxy(history, true);
   };
 
   const notifyFailure = (ctx: ExtensionContext, message: string): void => {
@@ -1069,7 +1116,16 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (shouldNotifyHeadroomFailure("lifecycle", ctx.hasUI, config.notifyFailures, failureNotified)) ctx.ui.notify(message, "error");
   };
 
+  const activateProxyRouting = (ctx: ExtensionContext): boolean => {
+    if (enableProxyRouting()) return true;
+    runtimeEnabled = false;
+    updateStatus(ctx, runtimeEnabled, owner, stats);
+    notifyLifecycleFailure(ctx, `Headroom could not install Pi provider routing: ${proxyRoutingError ?? "unknown provider registration failure"}. Native providers remain active.`);
+    return false;
+  };
+
   const runManagedProxyStart = async (attempt: HeadroomStartAttempt, ctx: ExtensionContext): Promise<void> => {
+    const startupSignal = getContextSignal(ctx);
     try {
       dependencies.ensureDirs();
     } catch (error) {
@@ -1104,16 +1160,24 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (ctx.hasUI) ctx.ui.notify(`Headroom remote proxy blocked: ${config.proxyUrl}. Set allowRemote=true only for a trusted proxy.`, "warning");
       return;
     }
-    const alreadyHealthy = await dependencies.health(config, getContextSignal(ctx));
-    if (!attempt.isCurrent()) return;
+    const alreadyHealthy = await dependencies.health(config, startupSignal);
+    if (!attempt.isCurrent() || startupSignal?.aborted) return;
     if (alreadyHealthy) {
-      if (config.enabled) {
-        enableProxyRouting();
-        runtimeEnabled = config.enabled;
-        await captureProxyStatsBaseline();
-        if (!attempt.isCurrent()) return;
-      }
       owner = managedProcess ? "managed" : "external";
+      if (config.enabled) {
+        const routingRevision = beginRoutingMutation();
+        if (!activateProxyRouting(ctx)) return;
+        runtimeEnabled = config.enabled;
+        await captureProxyStatsBaseline(startupSignal);
+        if (!attempt.isCurrent() || !routingMutationIsCurrent(routingRevision)) return;
+        if (startupSignal?.aborted) {
+          runtimeEnabled = false;
+          disableProxyRouting();
+          owner = managedProcess ? "managed" : "external";
+          updateStatus(ctx, runtimeEnabled, owner, stats);
+          return;
+        }
+      }
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify(`Headroom proxy already running (${owner}).`, "info");
@@ -1167,18 +1231,24 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
     }
     managedProcess = child;
+    managedStartupPending = true;
     let startupPending = true;
     let pendingTerminalNotice: ManagedProxyLifecycleNotice | undefined;
 
     const handleTerminalFailure = (notice: ManagedProxyLifecycleNotice | undefined): void => {
       if (!notice) return;
       terminalFailureNotified = true;
-      if (managedProcess === child) managedProcess = undefined;
-      if (managedLifecycle === lifecycle) managedLifecycle = undefined;
+      if (!startupPending) startCoordinator.cancel();
+      beginRoutingMutation();
+      invalidatePendingBaselineCapture();
+      const exited = childHasExited(child);
+      if (exited) managedStartupPending = false;
+      if (exited && managedProcess === child) managedProcess = undefined;
+      if (exited && managedLifecycle === lifecycle) managedLifecycle = undefined;
       runtimeEnabled = false;
       disableProxyRouting();
-      owner = "none";
-      try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+      owner = exited ? "none" : "managed";
+      try { if (exited && existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (startupPending) {
         pendingTerminalNotice = notice;
@@ -1192,6 +1262,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     child.on("exit", (code, signal) => {
       handleTerminalFailure(lifecycle.handleExit(code, signal));
       if (managedProcess === child) {
+        managedStartupPending = false;
+        if (runtimeEnabled || proxyProvidersRegistered) {
+          beginRoutingMutation();
+          invalidatePendingBaselineCapture();
+          runtimeEnabled = false;
+          disableProxyRouting();
+        }
         managedProcess = undefined;
         if (managedLifecycle === lifecycle) managedLifecycle = undefined;
         if (owner === "managed") owner = "none";
@@ -1211,6 +1288,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       updateStatus(ctx, runtimeEnabled, owner, stats);
       lifecycle.markStopping();
       const terminated = await dependencies.terminateChild(child);
+      managedStartupPending = false;
       if (!attempt.isCurrent()) return;
       if (notice) notifyLifecycleFailure(ctx, notice.message);
       if (terminated) {
@@ -1230,14 +1308,23 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (!attempt.isCurrent()) return;
     startupPending = false;
     if (becameHealthy) {
+      managedStartupPending = false;
       lifecycle.markReady();
-      if (config.enabled) {
-        enableProxyRouting();
-        runtimeEnabled = config.enabled;
-        await captureProxyStatsBaseline();
-        if (!attempt.isCurrent()) return;
-      }
       owner = "managed";
+      if (config.enabled) {
+        const routingRevision = beginRoutingMutation();
+        if (!activateProxyRouting(ctx)) return;
+        runtimeEnabled = config.enabled;
+        await captureProxyStatsBaseline(startupSignal);
+        if (!attempt.isCurrent() || !routingMutationIsCurrent(routingRevision)) return;
+        if (startupSignal?.aborted) {
+          runtimeEnabled = false;
+          disableProxyRouting();
+          owner = "managed";
+          updateStatus(ctx, runtimeEnabled, owner, stats);
+          return;
+        }
+      }
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify("Headroom proxy started.", "info");
@@ -1256,13 +1343,21 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       : false;
     if (!attempt.isCurrent()) return;
     if (concurrentProxyHealthy) {
-      if (config.enabled) {
-        enableProxyRouting();
-        runtimeEnabled = config.enabled;
-        await captureProxyStatsBaseline();
-        if (!attempt.isCurrent()) return;
-      }
       owner = "external";
+      if (config.enabled) {
+        const routingRevision = beginRoutingMutation();
+        if (!activateProxyRouting(ctx)) return;
+        runtimeEnabled = config.enabled;
+        await captureProxyStatsBaseline(startupSignal);
+        if (!attempt.isCurrent() || !routingMutationIsCurrent(routingRevision)) return;
+        if (startupSignal?.aborted) {
+          runtimeEnabled = false;
+          disableProxyRouting();
+          owner = "external";
+          updateStatus(ctx, runtimeEnabled, owner, stats);
+          return;
+        }
+      }
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
       if (ctx.hasUI) ctx.ui.notify("Headroom adopted a concurrent Headroom proxy after its own startup attempt ended.", "info");
@@ -1273,6 +1368,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const timeoutNotice = terminalFailureNotified ? undefined : lifecycle.handleTimeout(config.startupHealthTimeoutMs);
     lifecycle.markStopping();
     const terminated = managedProcess === child ? await dependencies.terminateChild(child) : childHasExited(child);
+    managedStartupPending = false;
     if (!attempt.isCurrent()) return;
     if (terminated) {
       if (managedProcess === child) managedProcess = undefined;
@@ -1282,7 +1378,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       owner = "managed";
     }
     runtimeEnabled = false;
-      disableProxyRouting();
+    disableProxyRouting();
     try { if (existsSync(PID_PATH) && terminated) unlinkSync(PID_PATH); } catch {}
     updateStatus(ctx, runtimeEnabled, owner, stats);
     if (timeoutNotice) notifyLifecycleFailure(ctx, timeoutNotice.message);
@@ -1290,18 +1386,47 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
 
   const startCoordinator = createStartCoordinator(runManagedProxyStart);
-  const startManagedProxy = startCoordinator.start;
+  let stopInFlight: Promise<boolean> | undefined;
+  let startInFlight: Promise<void> | undefined;
+  const trackStart = async (operation: Promise<void>): Promise<void> => {
+    startInFlight = operation;
+    const cleanup = (): void => {
+      if (startInFlight === operation) startInFlight = undefined;
+    };
+    void operation.then(cleanup, cleanup);
+    await operation;
+  };
+  const startManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
+    if (stopInFlight) await stopInFlight;
+    if (startInFlight) return startInFlight;
+    await trackStart(startCoordinator.start(ctx));
+  };
+  const restartManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
+    if (stopInFlight) await stopInFlight;
+    if (startInFlight) {
+      startCoordinator.cancel();
+      await startInFlight;
+    }
+    await trackStart(startCoordinator.restart(ctx));
+  };
 
-  const stopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+  const performStopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
     startCoordinator.cancel();
-    await finalizeProxyStatsSegment();
+    const stopRevision = beginRoutingMutation();
+    invalidatePendingBaselineCapture();
+    const wasRuntimeEnabled = runtimeEnabled;
     runtimeEnabled = false;
     disableProxyRouting();
+    updateStatus(ctx, runtimeEnabled, owner, stats);
+    managedLifecycle?.markStopping();
+    await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
+    if (!routingMutationIsCurrent(stopRevision)) return false;
     if (managedProcess) {
       const child = managedProcess;
       const lifecycle = managedLifecycle;
       lifecycle?.markStopping();
       const terminated = await dependencies.terminateChild(child);
+      managedStartupPending = false;
       if (terminated) {
         if (managedProcess === child) managedProcess = undefined;
         if (managedLifecycle === lifecycle) managedLifecycle = undefined;
@@ -1320,6 +1445,17 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (notify && ctx.hasUI) ctx.ui.notify(wasExternal ? "Compression disabled. External proxy left running." : "Compression disabled.", "info");
     updateStatus(ctx, runtimeEnabled, owner, stats);
     return true;
+  };
+
+  const stopManagedProxy = (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+    if (stopInFlight) return stopInFlight;
+    const operation = performStopManagedProxy(ctx, notify);
+    stopInFlight = operation;
+    const cleanup = (): void => {
+      if (stopInFlight === operation) stopInFlight = undefined;
+    };
+    void operation.then(cleanup, cleanup);
+    return operation;
   };
 
   const statsSummary = (): string => [
@@ -1357,9 +1493,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (!runtimeEnabled) return false;
     const signal = getContextSignal(ctx);
     if (signal?.aborted) return true;
+    const routingRevision = routingMutationRevision;
     const healthy = await dependencies.health(config, signal);
     if (signal?.aborted) return true;
+    if (!routingMutationIsCurrent(routingRevision)) return runtimeEnabled;
     if (healthy) return true;
+    beginRoutingMutation();
     runtimeEnabled = false;
     disableProxyRouting();
     updateStatus(ctx, runtimeEnabled, owner, stats);
@@ -1525,21 +1664,37 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         return;
       }
       if (command === "restart") {
-        if (await stopManagedProxy(ctx)) await startCoordinator.restart(ctx);
+        if (await stopManagedProxy(ctx)) await restartManagedProxy(ctx);
         return;
       }
       if (command === "enable") {
         const proxyUrlSupported = hasSupportedProxyProtocol(config.proxyUrl);
         const enableSignal = getContextSignal(ctx);
-        const wasRuntimeEnabled = runtimeEnabled;
-        const proxyHealthy = config.startup !== "off" && proxyUrlSupported && await health(config, enableSignal);
-        if (enableSignal?.aborted) {
-          runtimeEnabled = wasRuntimeEnabled;
-          updateStatus(ctx, runtimeEnabled, owner, stats);
-          return;
+        if (startInFlight) {
+          if (managedStartupPending) await startInFlight;
+          else startCoordinator.cancel();
         }
+        if (enableSignal?.aborted) return;
+        if (runtimeEnabled) {
+          const routingRevision = routingMutationRevision;
+          const healthy = await dependencies.health(config, enableSignal);
+          if (enableSignal?.aborted || !routingMutationIsCurrent(routingRevision)) return;
+          if (healthy) {
+            updateStatus(ctx, runtimeEnabled, owner, stats);
+            ctx.ui.notify("Headroom compression is already enabled for this session.", "info");
+            return;
+          }
+          beginRoutingMutation();
+          invalidatePendingBaselineCapture();
+          runtimeEnabled = false;
+          disableProxyRouting();
+          updateStatus(ctx, runtimeEnabled, owner, stats);
+        }
+        const routingRevision = beginRoutingMutation();
+        const proxyHealthy = config.startup !== "off" && proxyUrlSupported && await dependencies.health(config, enableSignal);
+        if (enableSignal?.aborted || !routingMutationIsCurrent(routingRevision)) return;
         const decision = enableRuntimeDecision(config, proxyHealthy, owner, managedProcess !== undefined);
-        runtimeEnabled = decision.runtimeEnabled;
+        runtimeEnabled = false;
         owner = decision.owner;
         updateStatus(ctx, runtimeEnabled, owner, stats);
         if (decision.reason === "startup-off") {
@@ -1557,23 +1712,41 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           );
           return;
         }
+        const configEnabledBefore = config.enabled;
         config = { ...config, enabled: true };
-        enableProxyRouting();
-        await captureProxyStatsBaseline();
+        if (!activateProxyRouting(ctx)) {
+          config = { ...config, enabled: configEnabledBefore };
+          return;
+        }
+        await captureProxyStatsBaseline(enableSignal);
+        if (!routingMutationIsCurrent(routingRevision)) return;
+        if (enableSignal?.aborted) {
+          config = { ...config, enabled: configEnabledBefore };
+          runtimeEnabled = false;
+          disableProxyRouting();
+          updateStatus(ctx, runtimeEnabled, owner, stats);
+          return;
+        }
+        runtimeEnabled = decision.runtimeEnabled;
+        updateStatus(ctx, runtimeEnabled, owner, stats);
         ctx.ui.notify("Headroom compression enabled for this session.", "info");
         return;
       }
       if (command === "disable") {
         startCoordinator.cancel();
-        await finalizeProxyStatsSegment();
+        const disableRevision = beginRoutingMutation();
+        invalidatePendingBaselineCapture();
+        const wasRuntimeEnabled = runtimeEnabled;
         runtimeEnabled = false;
         disableProxyRouting();
         updateStatus(ctx, runtimeEnabled, owner, stats);
+        await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
+        if (!routingMutationIsCurrent(disableRevision)) return;
         ctx.ui.notify("Headroom compression disabled for this session.", "info");
         return;
       }
       if (command === "stats" || command === "status") {
-        const healthy = await health(config, getContextSignal(ctx));
+        const healthy = await dependencies.health(config, getContextSignal(ctx));
         const history = await fetchProxyHistory(getContextSignal(ctx));
         syncStatsFromProxy(history);
         if (healthy && owner === "none") owner = "external";
@@ -1583,7 +1756,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       if (command === "doctor") {
         const version = commandVersion();
-        const healthy = await health(config, getContextSignal(ctx));
+        const healthy = await dependencies.health(config, getContextSignal(ctx));
         const text = [
           `headroomCli: ${version ?? "missing"}`,
           `proxyHealthy: ${healthy}`,
@@ -1627,7 +1800,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           const stopped = await stopManagedProxy(ctx, false);
           if (!stopped) {
             runtimeEnabled = false;
-      disableProxyRouting();
+            disableProxyRouting();
             updateStatus(ctx, runtimeEnabled, owner, stats);
             ctx.ui.notify("Headroom config reset aborted because the managed proxy is still running. Retry /headroom stop or terminate it manually first.", "error");
             return;
@@ -1636,12 +1809,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           resetConfigForSave = { ...DEFAULT_CONFIG };
           config = { ...DEFAULT_CONFIG, localToolResultCompression: modeBeforeReset };
           runtimeEnabled = false;
-      disableProxyRouting();
+          disableProxyRouting();
           owner = "none";
           updateStatus(ctx, runtimeEnabled, owner, stats);
           const modeNotice = modeBeforeReset ? " Legacy local mode remains active until /reload." : " Native mode remains active until /reload.";
           ctx.ui.notify(`Headroom runtime config reset to defaults.${modeNotice} Use /headroom config save to persist.`, "info");
-          if (config.startup === "auto") await startCoordinator.restart(ctx);
+          if (config.startup === "auto") await restartManagedProxy(ctx);
           return;
         }
       }

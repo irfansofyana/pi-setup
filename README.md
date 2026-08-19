@@ -13,7 +13,7 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
 | Delegation | Ciung research, Laya code mapping, Sangkur worktree builds, and Prabu review |
 | Guardrails | Permission gates, todos, persisted goals, and prompt loops |
-| Context | `context-mode` and local Headroom compression/retrieval |
+| Context | `context-mode`; Headroom native OpenAI/Anthropic proxy routing by default, with legacy local tool-result compression/retrieval as an opt-in |
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel while the main agent works |
 | Routing | `pi-9router-ext` model/search routing tools |

@@ -96,7 +96,7 @@ Example config:
 }
 ```
 
-Set `startup` to `manual` to require `/headroom start`, or `off` to prevent startup and compression. Run `/headroom doctor` and `/headroom logs` when automatic startup reports a failure.
+Set `startup` to `manual` to prevent automatic startup; then use `/headroom start`, or `/headroom enable` when a configured proxy is already healthy. Set it to `off` to prevent startup and compression. Run `/headroom doctor` and `/headroom logs` when automatic startup reports a failure.
 
 Footer examples: `hr off`, `hr m 55k ↓10%`, `hr x 55k ↓10%`.
 

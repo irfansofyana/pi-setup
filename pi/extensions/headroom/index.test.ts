@@ -247,7 +247,7 @@ test("managed child termination recognizes an already confirmed signal exit", as
   assert.deepEqual(signals, []);
 });
 
-function createHeadroomHarness(dependencies: Record<string, unknown>) {
+function createHeadroomHarness(dependencies: Record<string, unknown>, failProvider?: string) {
   const handlers: Record<string, (...args: any[]) => any> = {};
   const commands: Record<string, any> = {};
   const tools: Record<string, any> = {};
@@ -256,7 +256,10 @@ function createHeadroomHarness(dependencies: Record<string, unknown>) {
   const providers: Array<{ name: string; options: unknown }> = [];
   const unregisteredProviders: string[] = [];
   const pi = {
-    registerProvider(name: string, options: unknown) { providers.push({ name, options }); },
+    registerProvider(name: string, options: unknown) {
+      if (name === failProvider) throw new Error(`${name} registration failed`);
+      providers.push({ name, options });
+    },
     unregisterProvider(name: string) { unregisteredProviders.push(name); },
     on(name: string, handler: (...args: any[]) => any) { handlers[name] = handler; },
     registerCommand(name: string, command: any) { commands[name] = command; },
@@ -334,6 +337,137 @@ test("proxy history populates native-routing session stats after baseline", asyn
   assert.equal(disabledResult.details.tokensSaved, 900);
 });
 
+test("proxy history backoff uses monotonic elapsed time", async () => {
+  let monotonicNowMs = 1_000;
+  let historyCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    monotonicNowMs: () => monotonicNowMs,
+    health: async () => true,
+    proxyHistory: async () => {
+      historyCalls++;
+      if (historyCalls === 1) return { displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 1 } };
+      if (historyCalls === 2) return { error: "temporarily unavailable" };
+      return { displaySession: { requests: 2, tokens_saved: 2, total_input_tokens: 2 } };
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_end({}, harness.ctx);
+  assert.equal(historyCalls, 2);
+
+  monotonicNowMs += 29_999;
+  await harness.handlers.turn_end({}, harness.ctx);
+  assert.equal(historyCalls, 2);
+
+  monotonicNowMs += 1;
+  await harness.handlers.turn_end({}, harness.ctx);
+  assert.equal(historyCalls, 3);
+});
+
+test("newer lower proxy counters establish a reset baseline", async () => {
+  let requests = 100;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests, tokens_saved: requests * 10, total_input_tokens: requests * 20 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  requests = 5;
+  let result = await harness.tools.headroom_stats.execute();
+  assert.equal(result.details.proxyRequests, 0);
+  requests = 6;
+  result = await harness.tools.headroom_stats.execute();
+  assert.equal(result.details.proxyRequests, 1);
+});
+
+test("older out-of-order proxy history cannot roll back a newer baseline", async () => {
+  let calls = 0;
+  let releaseOlder!: (history: unknown) => void;
+  let olderStarted!: () => void;
+  const started = new Promise<void>((resolve) => { olderStarted = resolve; });
+  const snapshot = (requests: number) => ({ displaySession: { requests, tokens_saved: requests * 10, total_input_tokens: requests * 20 } });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      calls++;
+      if (calls === 1) return snapshot(100);
+      if (calls === 2) {
+        olderStarted();
+        return new Promise((resolve) => { releaseOlder = resolve; });
+      }
+      if (calls === 3) return snapshot(110);
+      return snapshot(111);
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const older = harness.tools.headroom_stats.execute();
+  await started;
+  const newer = await harness.tools.headroom_stats.execute();
+  assert.equal(newer.details.proxyRequests, 10);
+  releaseOlder(snapshot(105));
+  await older;
+  const final = await harness.tools.headroom_stats.execute();
+  assert.equal(final.details.proxyRequests, 11);
+});
+
+test("an older baseline capture cannot overwrite a newer applied history snapshot", async () => {
+  let calls = 0;
+  let releaseBaseline!: (history: unknown) => void;
+  let baselineStarted!: () => void;
+  const started = new Promise<void>((resolve) => { baselineStarted = resolve; });
+  const snapshot = (requests: number) => ({ displaySession: { requests, tokens_saved: requests * 10, total_input_tokens: requests * 20 } });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      calls++;
+      if (calls === 1) {
+        baselineStarted();
+        return new Promise((resolve) => { releaseBaseline = resolve; });
+      }
+      if (calls === 2) return snapshot(20);
+      return snapshot(21);
+    },
+  });
+  const sessionStart = harness.handlers.session_start({}, harness.ctx);
+  await started;
+  await harness.handlers.turn_end({}, harness.ctx);
+  releaseBaseline(snapshot(10));
+  await sessionStart;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.proxyRequests, 1);
+});
+
+test("an older failed history request cannot re-arm backoff after newer success", async () => {
+  let calls = 0;
+  let releaseOlder!: (history: unknown) => void;
+  let olderStarted!: () => void;
+  const started = new Promise<void>((resolve) => { olderStarted = resolve; });
+  const snapshot = { displaySession: { requests: 10, tokens_saved: 10, total_input_tokens: 20 } };
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      calls++;
+      if (calls === 1) return snapshot;
+      if (calls === 2) {
+        olderStarted();
+        return new Promise((resolve) => { releaseOlder = resolve; });
+      }
+      return snapshot;
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const older = harness.tools.headroom_stats.execute();
+  await started;
+  await harness.tools.headroom_stats.execute();
+  releaseOlder({ error: "stale failure" });
+  await older;
+  await harness.tools.headroom_stats.execute();
+  assert.equal(calls, 4);
+});
+
 test("remote proxy stats are blocked before fetching", async () => {
   const harness = createHeadroomHarness({
     readConfig: () => ({ ...DEFAULT_CONFIG, proxyUrl: "https://example.test/headroom", allowRemote: false }),
@@ -357,6 +491,34 @@ test("native routing restores and attempts recovery after external proxy loss", 
   assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
 });
 
+test("a stale recovery probe cannot disable a newer successful enable", async () => {
+  let healthCalls = 0;
+  let releaseRecovery!: (healthy: boolean) => void;
+  let recoveryStarted!: () => void;
+  const started = new Promise<void>((resolve) => { recoveryStarted = resolve; });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => {
+      healthCalls++;
+      if (healthCalls === 2) {
+        recoveryStarted();
+        return new Promise<boolean>((resolve) => { releaseRecovery = resolve; });
+      }
+      return true;
+    },
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const recovering = harness.handlers.turn_start({}, harness.ctx);
+  await started;
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  await harness.commands.headroom.handler("enable", harness.ctx);
+  releaseRecovery(false);
+  await recovering;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, true);
+});
+
 test("disable restores the original native provider routing", async () => {
   const harness = createHeadroomHarness({
     readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
@@ -365,6 +527,496 @@ test("disable restores the original native provider routing", async () => {
   await harness.handlers.session_start({}, harness.ctx);
   await harness.commands.headroom.handler("disable", harness.ctx);
   assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+});
+
+test("disable restores native routing before optional stats finalization completes", async () => {
+  let historyCalls = 0;
+  let releaseFinalization!: () => void;
+  let finalizationStarted!: () => void;
+  const started = new Promise<void>((resolve) => { finalizationStarted = resolve; });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      historyCalls++;
+      if (historyCalls === 1) return { displaySession: { requests: 10, tokens_saved: 100, total_input_tokens: 200 } };
+      finalizationStarted();
+      await new Promise<void>((resolve) => { releaseFinalization = resolve; });
+      return { displaySession: { requests: 11, tokens_saved: 110, total_input_tokens: 220 } };
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+
+  const disabling = harness.commands.headroom.handler("disable", harness.ctx);
+  await started;
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  releaseFinalization();
+  await disabling;
+});
+
+test("a stale disable cannot overwrite stats or notify after a newer enable", async () => {
+  let historyCalls = 0;
+  let releaseFinalization!: (history: unknown) => void;
+  let finalizationStarted!: () => void;
+  const started = new Promise<void>((resolve) => { finalizationStarted = resolve; });
+  const snapshot = (requests: number) => ({ displaySession: { requests, tokens_saved: requests * 10, total_input_tokens: requests * 20 } });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      historyCalls++;
+      if (historyCalls === 1) return snapshot(100);
+      if (historyCalls === 2) {
+        finalizationStarted();
+        return new Promise((resolve) => { releaseFinalization = resolve; });
+      }
+      if (historyCalls === 3) return snapshot(120);
+      return snapshot(121);
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const disabling = harness.commands.headroom.handler("disable", harness.ctx);
+  await started;
+  await harness.commands.headroom.handler("enable", harness.ctx);
+  releaseFinalization(snapshot(110));
+  await disabling;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "external");
+  assert.equal(stats.details.proxyRequests, 1);
+  assert.equal(harness.notices.filter((notice) => notice.message.includes("disabled for this session")).length, 0);
+});
+
+test("start waits for in-flight child termination before replacing the proxy", async () => {
+  const firstChild = Object.assign(new EventEmitter(), { pid: 1111, exitCode: null, signalCode: null });
+  const secondChild = Object.assign(new EventEmitter(), { pid: 2222, exitCode: null, signalCode: null });
+  let spawnCalls = 0;
+  let releaseTermination!: () => void;
+  let terminationStarted!: () => void;
+  const started = new Promise<void>((resolve) => { terminationStarted = resolve; });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => ++spawnCalls === 1 ? firstChild : secondChild,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+    terminateChild: async () => {
+      terminationStarted();
+      await new Promise<void>((resolve) => { releaseTermination = resolve; });
+      firstChild.exitCode = 0;
+      firstChild.emit("exit", 0, null);
+      return true;
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const stopping = harness.commands.headroom.handler("stop", harness.ctx);
+  await started;
+  const starting = harness.commands.headroom.handler("start", harness.ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(spawnCalls, 1);
+  releaseTermination();
+  await stopping;
+  await starting;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(spawnCalls, 2);
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "managed");
+  assert.equal(secondChild.exitCode, null);
+});
+
+test("restart continues when the managed child exits during stop finalization", async () => {
+  const firstChild = Object.assign(new EventEmitter(), { pid: 3333, exitCode: null as number | null, signalCode: null });
+  const secondChild = Object.assign(new EventEmitter(), { pid: 4444, exitCode: null, signalCode: null });
+  let spawnCalls = 0;
+  let historyCalls = 0;
+  let releaseFinalization!: (history: unknown) => void;
+  let finalizationStarted!: () => void;
+  const started = new Promise<void>((resolve) => { finalizationStarted = resolve; });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => ++spawnCalls === 1 ? firstChild : secondChild,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => {
+      historyCalls++;
+      if (historyCalls === 1) return { displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } };
+      if (historyCalls === 2) {
+        finalizationStarted();
+        return new Promise((resolve) => { releaseFinalization = resolve; });
+      }
+      return { displaySession: { requests: 2, tokens_saved: 2, total_input_tokens: 4 } };
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const restarting = harness.commands.headroom.handler("restart", harness.ctx);
+  await started;
+  firstChild.exitCode = 0;
+  firstChild.emit("exit", 0, null);
+  releaseFinalization({ displaySession: { requests: 2, tokens_saved: 2, total_input_tokens: 4 } });
+  await restarting;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(spawnCalls, 2);
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "managed");
+});
+
+test("confirmed exit tears down routing even after an earlier child error", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 8765, exitCode: null, signalCode: null });
+  let healthCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => ++healthCalls > 1,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  child.emit("error", new Error("transient child error"));
+  await harness.commands.headroom.handler("enable", harness.ctx);
+  child.exitCode = 1;
+  child.emit("exit", 1, null);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "none");
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai", "anthropic"]);
+});
+
+test("enabling an already active session does not register duplicate provider overrides", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 1 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.commands.headroom.handler("enable", harness.ctx);
+  assert.equal(harness.providers.length, 2);
+});
+
+test("enable revalidates an already active external proxy", async () => {
+  let healthCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => ++healthCalls === 1,
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.commands.headroom.handler("enable", harness.ctx);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.ok(harness.notices.some((notice) => notice.message.includes("proxy unavailable")));
+});
+
+test("enable waits for a spawned child to finish startup cleanup", async () => {
+  let healthCalls = 0;
+  let releaseReadiness!: (healthy: boolean) => void;
+  let readinessStarted!: () => void;
+  const started = new Promise<void>((resolve) => { readinessStarted = resolve; });
+  let spawnCalls = 0;
+  let terminateCalls = 0;
+  let releaseTermination!: () => void;
+  let terminationStarted!: () => void;
+  const terminating = new Promise<void>((resolve) => { terminationStarted = resolve; });
+  const child = Object.assign(new EventEmitter(), { pid: 5555, exitCode: null as number | null, signalCode: null });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, startup: "manual", enabled: false, localToolResultCompression: false }),
+    health: async () => ++healthCalls > 1,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+    waitForHealth: async () => {
+      readinessStarted();
+      return new Promise<boolean>((resolve) => { releaseReadiness = resolve; });
+    },
+    terminateChild: async () => {
+      terminateCalls++;
+      terminationStarted();
+      await new Promise<void>((resolve) => { releaseTermination = resolve; });
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+      return true;
+    },
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const starting = harness.commands.headroom.handler("start", harness.ctx);
+  await started;
+  let enableSettled = false;
+  const enabling = harness.commands.headroom.handler("enable", harness.ctx).then(() => { enableSettled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(healthCalls, 1);
+  assert.equal(terminateCalls, 0);
+  releaseReadiness(false);
+  await terminating;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(enableSettled, false);
+  releaseTermination();
+  await starting;
+  await enabling;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(spawnCalls, 1);
+  assert.equal(terminateCalls, 1);
+  assert.equal(stats.details.enabled, true);
+});
+
+test("enable also waits for restart startup cleanup", async () => {
+  let healthCalls = 0;
+  let releaseReadiness!: (healthy: boolean) => void;
+  let readinessStarted!: () => void;
+  const started = new Promise<void>((resolve) => { readinessStarted = resolve; });
+  const child = Object.assign(new EventEmitter(), { pid: 5656, exitCode: null as number | null, signalCode: null });
+  let terminateCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, startup: "manual", enabled: false, localToolResultCompression: false }),
+    health: async () => ++healthCalls > 1,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => {
+      readinessStarted();
+      return new Promise<boolean>((resolve) => { releaseReadiness = resolve; });
+    },
+    terminateChild: async () => {
+      terminateCalls++;
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+      return true;
+    },
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const restarting = harness.commands.headroom.handler("restart", harness.ctx);
+  await started;
+  const enabling = harness.commands.headroom.handler("enable", harness.ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(healthCalls, 1);
+  releaseReadiness(false);
+  await restarting;
+  await enabling;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(terminateCalls, 1);
+  assert.equal(stats.details.enabled, true);
+});
+
+test("aborted startup health probe cannot spawn a managed child", async () => {
+  let releaseHealth!: (healthy: boolean) => void;
+  let healthStarted!: () => void;
+  const started = new Promise<void>((resolve) => { healthStarted = resolve; });
+  const controller = new AbortController();
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    health: async () => {
+      healthStarted();
+      return new Promise<boolean>((resolve) => { releaseHealth = resolve; });
+    },
+    commandAvailable: () => true,
+    spawnProxy: () => { spawnCalls++; throw new Error("cancelled startup spawned"); },
+  });
+  const ctx = { ...harness.ctx, signal: controller.signal };
+  const startup = harness.handlers.session_start({}, ctx);
+  await started;
+  controller.abort(new Error("cancelled"));
+  releaseHealth(false);
+  await startup;
+  assert.equal(spawnCalls, 0);
+});
+
+test("managed exit during baseline capture cannot re-enable stale routing", async () => {
+  let releaseBaseline!: (history: unknown) => void;
+  let baselineStarted!: () => void;
+  const started = new Promise<void>((resolve) => { baselineStarted = resolve; });
+  const child = Object.assign(new EventEmitter(), { pid: 9871, exitCode: null as number | null, signalCode: null });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => {
+      baselineStarted();
+      return new Promise((resolve) => { releaseBaseline = resolve; });
+    },
+  });
+  const startup = harness.handlers.session_start({}, harness.ctx);
+  await started;
+  child.exitCode = 17;
+  child.emit("exit", 17, null);
+  releaseBaseline({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } });
+  await startup;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "none");
+});
+
+test("child error without confirmed exit retains ownership and blocks replacement", async () => {
+  let spawnCalls = 0;
+  const child = Object.assign(new EventEmitter(), { pid: 9872, exitCode: null, signalCode: null });
+  const harness = createHeadroomHarness({
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+    waitForHealth: async () => true,
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  child.emit("error", new Error("asynchronous child error"));
+  await harness.commands.headroom.handler("start", harness.ctx);
+  assert.equal(spawnCalls, 1);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "managed");
+});
+
+test("partial provider registration is rolled back", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  }, "anthropic");
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.deepEqual(harness.unregisteredProviders, ["openai"]);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+  assert.ok(harness.notices.some((notice) => notice.message.includes("could not install Pi provider routing")));
+});
+
+test("provider activation failure retains managed-child ownership", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null, signalCode: null });
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+    waitForHealth: async () => true,
+  }, "anthropic");
+  await harness.handlers.session_start({}, harness.ctx);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+  assert.equal(stats.details.proxyOwner, "managed");
+  await harness.commands.headroom.handler("start", harness.ctx);
+  assert.equal(spawnCalls, 1);
+});
+
+test("aborted enable baseline rolls back routing without success notification", async () => {
+  let releaseBaseline!: (history: unknown) => void;
+  let baselineStarted!: () => void;
+  const started = new Promise<void>((resolve) => { baselineStarted = resolve; });
+  const controller = new AbortController();
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, startup: "manual", localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      baselineStarted();
+      return new Promise((resolve) => { releaseBaseline = resolve; });
+    },
+  });
+  const ctx = { ...harness.ctx, signal: controller.signal };
+  const enabling = harness.commands.headroom.handler("enable", ctx);
+  await started;
+  controller.abort(new Error("cancelled"));
+  releaseBaseline({});
+  await enabling;
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.ok(!harness.notices.some((notice) => notice.message.includes("enabled for this session")));
+});
+
+test("an older canceled enable cannot disable a newer successful activation", async () => {
+  const waitUntil = async (predicate: () => boolean): Promise<void> => {
+    for (let attempt = 0; attempt < 50 && !predicate(); attempt++) await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(predicate(), "expected asynchronous transition did not occur");
+  };
+  const healthResolvers: Array<(value: boolean) => void> = [];
+  const historyResolvers: Array<(value: unknown) => void> = [];
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, startup: "manual", enabled: false, localToolResultCompression: false }),
+    health: async () => new Promise<boolean>((resolve) => { healthResolvers.push(resolve); }),
+    proxyHistory: async () => {
+      if (historyResolvers.length >= 2) return { displaySession: { requests: 20, tokens_saved: 20, total_input_tokens: 20 } };
+      return new Promise((resolve) => { historyResolvers.push(resolve); });
+    },
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  const firstController = new AbortController();
+  const first = harness.commands.headroom.handler("enable", { ...harness.ctx, signal: firstController.signal });
+  await waitUntil(() => healthResolvers.length === 1);
+  healthResolvers[0]!(true);
+  await waitUntil(() => historyResolvers.length === 1);
+  const second = harness.commands.headroom.handler("enable", harness.ctx);
+  await waitUntil(() => healthResolvers.length === 2);
+  healthResolvers[1]!(true);
+  await waitUntil(() => historyResolvers.length === 2);
+  historyResolvers[1]!({ displaySession: { requests: 20, tokens_saved: 20, total_input_tokens: 20 } });
+  await second;
+  firstController.abort();
+  historyResolvers[0]!({ displaySession: { requests: 10, tokens_saved: 10, total_input_tokens: 10 } });
+  await first;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, true);
+  assert.deepEqual(harness.unregisteredProviders, []);
+  assert.equal(harness.notices.filter((notice) => notice.message.includes("enabled for this session")).length, 1);
+});
+
+test("stale startup baseline cannot overwrite a newer enabled segment", async () => {
+  let releaseOldBaseline!: (history: unknown) => void;
+  let oldBaselineStarted!: () => void;
+  const oldStarted = new Promise<void>((resolve) => { oldBaselineStarted = resolve; });
+  let releaseNewBaseline!: (history: unknown) => void;
+  let newBaselineStarted!: () => void;
+  const newStarted = new Promise<void>((resolve) => { newBaselineStarted = resolve; });
+  let calls = 0;
+  const snapshot = (requests: number) => ({ displaySession: { requests, tokens_saved: requests * 10, total_input_tokens: requests * 20 } });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => {
+      calls++;
+      if (calls === 1) {
+        oldBaselineStarted();
+        return new Promise((resolve) => { releaseOldBaseline = resolve; });
+      }
+      if (calls === 2) return snapshot(20);
+      if (calls === 3) {
+        newBaselineStarted();
+        return new Promise((resolve) => { releaseNewBaseline = resolve; });
+      }
+      return snapshot(31);
+    },
+  });
+  const startup = harness.handlers.session_start({}, harness.ctx);
+  await oldStarted;
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  const enabling = harness.commands.headroom.handler("enable", harness.ctx);
+  await newStarted;
+  releaseNewBaseline(snapshot(30));
+  await enabling;
+  releaseOldBaseline(snapshot(10));
+  await startup;
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.proxyRequests, 1);
 });
 
 test("does not expose local retrieval when native proxy routing is active", () => {
