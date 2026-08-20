@@ -141,7 +141,7 @@ Defaults:
 - If concurrent sessions race to start the same local proxy, a losing session rechecks readiness after its child exits and adopts the healthy winner instead of disabling compression.
 - Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable Headroom safely; `notifyFailures` only controls repetitive legacy compression-path warnings.
 - `/headroom stop` never kills an external proxy and disables Headroom for the current session.
-- Headroom skips provider IDs already registered by another extension, including built-in IDs another extension has overridden. Compatible custom IDs are routed only when declared in `models.json` and not extension-owned. This prevents `/headroom disable` or proxy failure from deleting another extension's provider registration. Disabling Headroom restores Pi's built-in and `models.json` definitions.
+- Headroom uses Pi's provider-registration ownership API and skips IDs already registered by another extension, including built-in IDs another extension has overridden. Compatible custom IDs are routed only when declared in `models.json` and not extension-owned. If ownership cannot be established, native routing fails closed without registering overrides. This prevents `/headroom disable` or proxy failure from deleting another extension's provider registration. Disabling Headroom restores Pi's built-in and `models.json` definitions.
 - Commands mutate runtime state only. Use `/headroom config save` to persist.
 
 ## Local CCR store

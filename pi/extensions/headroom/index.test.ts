@@ -396,6 +396,19 @@ test("session startup leaves extension-owned custom providers native even with m
   assert.equal(harness.unregisteredProviders.includes("extension-provider"), false);
 });
 
+test("native routing fails closed when provider ownership API is unavailable", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  });
+  delete (harness.ctx.modelRegistry as { getRegisteredProviderIds?: () => readonly string[] }).getRegisteredProviderIds;
+
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.deepEqual(harness.providers, []);
+  assert.deepEqual(harness.unregisteredProviders, []);
+  assert.ok(harness.notices.some((notice) => notice.message.includes("could not install Pi provider routing")));
+});
+
 test("legacy local mode does not install native provider overrides", async () => {
   const harness = createHeadroomHarness({ health: async () => true });
   await harness.handlers.session_start({}, harness.ctx);

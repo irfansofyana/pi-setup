@@ -773,15 +773,9 @@ function configuredProviderIds(): Set<string> {
 }
 
 function modelRegistryRoutingSnapshot(ctx: ExtensionContext): { models: unknown[]; registeredProviderIds: Set<string> } {
-  const registry = (ctx as ExtensionContext & {
-    modelRegistry?: {
-      getAvailable?: () => unknown[];
-      getRegisteredProviderIds?: () => readonly string[];
-    };
-  }).modelRegistry;
   return {
-    models: registry?.getAvailable?.() ?? [],
-    registeredProviderIds: new Set(registry?.getRegisteredProviderIds?.() ?? []),
+    models: ctx.modelRegistry.getAvailable(),
+    registeredProviderIds: new Set(ctx.modelRegistry.getRegisteredProviderIds()),
   };
 }
 
