@@ -17,6 +17,7 @@ import headroom, {
   headroomCompressionReadyFromPayload,
   headroomRoutingReadyFromPayload,
   headroomFailureText,
+  headroomUpstreamBaseUrl,
   headroomReadyFromPayload,
   health,
   initialRuntimeEnabled,
@@ -24,8 +25,10 @@ import headroom, {
   isRemoteBlocked,
   normalizeHeadroomConfig,
   outputLooksSensitive,
+  proxyBaseUrlForApi,
   proxyEndpoint,
   proxyProviderBaseUrls,
+  planProxyProviderRoutes,
   retrieveWithQuery,
   savingsPercent,
   shouldCompressToolResult,
@@ -81,7 +84,55 @@ test("proxyEndpoint composes complete proxy URLs without duplicate slashes", () 
   assert.deepEqual(proxyProviderBaseUrls("http://127.0.0.1:8787"), {
     openai: "http://127.0.0.1:8787/v1",
     anthropic: "http://127.0.0.1:8787",
+    codex: "http://127.0.0.1:8787/v1",
   });
+});
+
+test("provider route planning covers built-ins and compatible custom gateways", () => {
+  assert.equal(proxyBaseUrlForApi("http://127.0.0.1:8787", "openai-responses"), "http://127.0.0.1:8787/v1");
+  assert.equal(proxyBaseUrlForApi("http://127.0.0.1:8787", "anthropic-messages"), "http://127.0.0.1:8787");
+  assert.equal(proxyBaseUrlForApi("http://127.0.0.1:8787", "google-generative-ai"), undefined);
+  assert.equal(proxyBaseUrlForApi("http://127.0.0.1:8787", "bedrock-converse-stream"), undefined);
+
+  const plan = planProxyProviderRoutes("http://127.0.0.1:8787", [
+    { id: "chat", provider: "litellm-openai", api: "openai-completions", baseUrl: "https://litellm.example/v1" },
+    { id: "responses", provider: "litellm-openai", api: "openai-responses", baseUrl: "https://litellm.example/v1" },
+    { id: "claude", provider: "litellm-anthropic", api: "anthropic-messages", baseUrl: "https://litellm.example" },
+    { id: "bedrock", provider: "aws", api: "bedrock-converse-stream", baseUrl: "https://bedrock.example" },
+  ]);
+
+  assert.deepEqual([...plan.providers], [
+    ["openai", "http://127.0.0.1:8787/v1"],
+    ["anthropic", "http://127.0.0.1:8787"],
+    ["openai-codex", "http://127.0.0.1:8787/v1"],
+    ["litellm-openai", "http://127.0.0.1:8787/v1"],
+    ["litellm-anthropic", "http://127.0.0.1:8787"],
+  ]);
+  assert.equal(headroomUpstreamBaseUrl("https://litellm.example/gateway/v1/"), "https://litellm.example/gateway");
+  assert.equal(plan.upstreamByModel.get("litellm-openai\u0000chat"), "https://litellm.example");
+  assert.equal(plan.upstreamByModel.get("litellm-anthropic\u0000claude"), "https://litellm.example");
+  assert.equal(plan.providers.has("aws"), false);
+});
+
+test("provider route planning preserves custom upstreams under built-in provider IDs", () => {
+  const plan = planProxyProviderRoutes("http://127.0.0.1:8787", [
+    { id: "custom-openai", provider: "openai", api: "openai-responses", baseUrl: "https://litellm.example/v1" },
+    { id: "custom-claude", provider: "anthropic", api: "anthropic-messages", baseUrl: "https://litellm.example" },
+  ]);
+  assert.equal(plan.upstreamByModel.get("openai\u0000custom-openai"), "https://litellm.example");
+  assert.equal(plan.upstreamByModel.get("anthropic\u0000custom-claude"), "https://litellm.example");
+});
+
+test("provider route planning skips custom providers with incompatible or unsupported models", () => {
+  const plan = planProxyProviderRoutes("http://127.0.0.1:8787", [
+    { id: "chat", provider: "mixed", api: "openai-completions", baseUrl: "https://gateway.example/v1" },
+    { id: "claude", provider: "mixed", api: "anthropic-messages", baseUrl: "https://gateway.example" },
+    { id: "supported", provider: "partly-supported", api: "openai-completions", baseUrl: "https://gateway.example/v1" },
+    { id: "bedrock", provider: "partly-supported", api: "bedrock-converse-stream", baseUrl: "https://gateway.example" },
+  ]);
+  assert.equal(plan.providers.has("mixed"), false);
+  assert.equal(plan.providers.has("partly-supported"), false);
+  assert.equal(plan.upstreamByModel.size, 0);
 });
 
 test("initialRuntimeEnabled follows auto default while preserving manual and off overrides", () => {
@@ -247,7 +298,12 @@ test("managed child termination recognizes an already confirmed signal exit", as
   assert.deepEqual(signals, []);
 });
 
-function createHeadroomHarness(dependencies: Record<string, unknown>, failProvider?: string) {
+function createHeadroomHarness(
+  dependencies: Record<string, unknown>,
+  failProvider?: string,
+  models: unknown[] = [],
+  registeredProviderIds: string[] = [],
+) {
   const handlers: Record<string, (...args: any[]) => any> = {};
   const commands: Record<string, any> = {};
   const tools: Record<string, any> = {};
@@ -268,6 +324,10 @@ function createHeadroomHarness(dependencies: Record<string, unknown>, failProvid
   const ctx = {
     cwd: "/tmp/headroom-lifecycle-test",
     hasUI: true,
+    modelRegistry: {
+      getAvailable: () => models,
+      getRegisteredProviderIds: () => registeredProviderIds,
+    },
     ui: {
       notify(message: string, level: string) { notices.push({ message, level }); },
       setStatus(_key: string, value: string) { statuses.push(value); },
@@ -277,12 +337,17 @@ function createHeadroomHarness(dependencies: Record<string, unknown>, failProvid
     readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: true }),
     ensureDirs: () => {},
     cleanupStore: () => {},
+    configuredProviderIds: () => new Set(models.flatMap((model) => {
+      if (!model || typeof model !== "object") return [];
+      const provider = (model as { provider?: unknown }).provider;
+      return typeof provider === "string" ? [provider] : [];
+    })),
     ...dependencies,
   } as any);
   return { handlers, commands, tools, notices, statuses, providers, unregisteredProviders, ctx };
 }
 
-test("session startup registers both native provider endpoints with Headroom", async () => {
+test("session startup registers native provider endpoints with Headroom", async () => {
   const harness = createHeadroomHarness({
     readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => true,
@@ -292,7 +357,43 @@ test("session startup registers both native provider endpoints with Headroom", a
   assert.deepEqual(harness.providers, [
     { name: "openai", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
     { name: "anthropic", options: { baseUrl: "http://127.0.0.1:8787" } },
+    { name: "openai-codex", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
   ]);
+});
+
+test("session startup routes compatible custom providers and preserves their upstream per model", async () => {
+  const models = [
+    { id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" },
+    { id: "claude", provider: "litellm-claude", api: "anthropic-messages", baseUrl: "https://litellm.example" },
+  ];
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  }, undefined, models);
+
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.deepEqual(harness.providers.slice(-2), [
+    { name: "litellm", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
+    { name: "litellm-claude", options: { baseUrl: "http://127.0.0.1:8787" } },
+  ]);
+
+  const event = { headers: {} as Record<string, string | null> };
+  await harness.handlers.before_provider_headers(event, { ...harness.ctx, model: models[0] });
+  assert.equal(event.headers["x-headroom-base-url"], "https://litellm.example");
+});
+
+test("session startup leaves extension-owned custom providers native even with models.json overlap", async () => {
+  const extensionModel = { id: "extension-model", provider: "extension-provider", api: "openai-completions", baseUrl: "https://extension.example/v1" };
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    configuredProviderIds: () => new Set(["extension-provider"]),
+    health: async () => true,
+  }, undefined, [extensionModel], ["extension-provider"]);
+
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.equal(harness.providers.some((provider) => provider.name === "extension-provider"), false);
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  assert.equal(harness.unregisteredProviders.includes("extension-provider"), false);
 });
 
 test("legacy local mode does not install native provider overrides", async () => {
@@ -311,6 +412,7 @@ test("manual startup defers native provider routing until start succeeds", async
   assert.deepEqual(harness.providers, [
     { name: "openai", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
     { name: "anthropic", options: { baseUrl: "http://127.0.0.1:8787" } },
+    { name: "openai-codex", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
   ]);
 });
 
@@ -500,20 +602,20 @@ test("native routing defers managed recovery until the triggering fallback turn 
   await harness.handlers.session_start({}, harness.ctx);
 
   await harness.handlers.turn_start({}, harness.ctx);
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex"]);
   assert.equal(spawnCalls, 0);
-  assert.equal(harness.providers.length, 2);
+  assert.equal(harness.providers.length, 3);
 
   let turnEndSettled = false;
   const ending = harness.handlers.turn_end({}, harness.ctx).then(() => { turnEndSettled = true; });
   await started;
   assert.equal(spawnCalls, 1);
   assert.equal(turnEndSettled, false);
-  assert.equal(harness.providers.length, 2);
+  assert.equal(harness.providers.length, 3);
 
   releaseReadiness(true);
   await ending;
-  assert.equal(harness.providers.length, 4);
+  assert.equal(harness.providers.length, 6);
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.enabled, true);
   assert.equal(stats.details.proxyOwner, "managed");
@@ -538,7 +640,7 @@ test("disable invalidates deferred native recovery before turn end", async () =>
   await harness.handlers.turn_end({}, harness.ctx);
 
   assert.equal(spawnCalls, 0);
-  assert.equal(harness.providers.length, 2);
+  assert.equal(harness.providers.length, 3);
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.enabled, false);
 });
@@ -565,7 +667,7 @@ test("aborted turn end consumes deferred native recovery without resurrecting it
   await harness.handlers.turn_end({}, harness.ctx);
 
   assert.equal(spawnCalls, 0);
-  assert.equal(harness.providers.length, 2);
+  assert.equal(harness.providers.length, 3);
 });
 
 test("invalidated deferred recovery falls through to normal turn-end health recovery", async () => {
@@ -584,7 +686,7 @@ test("invalidated deferred recovery falls through to normal turn-end health reco
   await harness.handlers.turn_end({}, harness.ctx);
 
   assert.equal(healthCalls, 5);
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex", "openai", "anthropic", "openai-codex"]);
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.enabled, false);
 });
@@ -624,7 +726,7 @@ test("disable restores the original native provider routing", async () => {
   });
   await harness.handlers.session_start({}, harness.ctx);
   await harness.commands.headroom.handler("disable", harness.ctx);
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex"]);
 });
 
 test("disable restores native routing before optional stats finalization completes", async () => {
@@ -647,7 +749,7 @@ test("disable restores native routing before optional stats finalization complet
 
   const disabling = harness.commands.headroom.handler("disable", harness.ctx);
   await started;
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex"]);
   releaseFinalization();
   await disabling;
 });
@@ -788,7 +890,7 @@ test("confirmed exit tears down routing even after an earlier child error", asyn
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.enabled, false);
   assert.equal(stats.details.proxyOwner, "none");
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex", "openai", "anthropic", "openai-codex"]);
 });
 
 test("enabling an already active session does not register duplicate provider overrides", async () => {
@@ -799,7 +901,7 @@ test("enabling an already active session does not register duplicate provider ov
   });
   await harness.handlers.session_start({}, harness.ctx);
   await harness.commands.headroom.handler("enable", harness.ctx);
-  assert.equal(harness.providers.length, 2);
+  assert.equal(harness.providers.length, 3);
 });
 
 test("enable revalidates an already active external proxy", async () => {
@@ -813,7 +915,7 @@ test("enable revalidates an already active external proxy", async () => {
   await harness.commands.headroom.handler("enable", harness.ctx);
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.enabled, false);
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex"]);
   assert.ok(harness.notices.some((notice) => notice.message.includes("proxy unavailable")));
 });
 
@@ -1038,7 +1140,7 @@ test("aborted enable baseline rolls back routing without success notification", 
   controller.abort(new Error("cancelled"));
   releaseBaseline({});
   await enabling;
-  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai-codex"]);
   assert.ok(!harness.notices.some((notice) => notice.message.includes("enabled for this session")));
 });
 

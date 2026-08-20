@@ -5,7 +5,9 @@ Pi extension that integrates [Headroom Labs Headroom](https://github.com/headroo
 ## What it does
 
 - Automatically starts a managed local `headroom proxy` for each Pi session, or adopts an already healthy proxy.
-- Registers the configured OpenAI and Anthropic Pi providers against the complete Headroom proxy: OpenAI uses `${proxyUrl}/v1` (native `/v1/chat/completions`) and Anthropic uses `${proxyUrl}` (native `/v1/messages`).
+- Routes built-in OpenAI, OpenAI Codex, and Anthropic providers through the complete Headroom proxy.
+- Discovers compatible custom providers declared in `~/.pi/agent/models.json` (including LiteLLM aliases) from Pi's model registry. OpenAI-compatible, Responses, Codex, and Anthropic wire formats use the matching Headroom endpoint; unsupported, mixed-protocol, and extension-owned custom providers stay native.
+- Preserves each custom model's original upstream with Headroom's internal `x-headroom-base-url` header, so the local proxy forwards to the configured LiteLLM or other compatible gateway without leaking that header upstream.
 - Compresses tool outputs as part of those real model requests, so proxy savings are recorded in the global Headroom dashboard.
 - `localToolResultCompression` is a legacy opt-in mode. Only that mode applies the local `minChars`, exclusion, secret-output, and local CCR-retention rules.
 - In legacy local mode, originals are stored in a local Pi CCR store and `headroom_retrieve` retrieves them by hash. It is not registered in the default native-proxy mode.
@@ -119,7 +121,7 @@ Defaults:
 ### Native proxy mode (default)
 
 - Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy.
-- Native routing requires both the Headroom proxy and its upstream provider to be ready before OpenAI or Anthropic overrides are installed.
+- Native routing requires the Headroom proxy to report routing readiness before built-in and compatible `models.json` provider overrides are installed. After changing model providers during a session, use `/headroom disable` then `/headroom enable`, or `/reload`, to rebuild routing safely.
 - Readiness is checked again at `turn_start`. If an adopted external proxy disappears, the extension first restores Pi's native providers; the triggering model request stays on native routing, and one managed replacement is attempted after that turn ends when `startup` is `auto`.
 - Manual and off startup modes never recover automatically, and recovery uses no background polling.
 - Optional proxy-history synchronization runs after turns. Repeated history failures back off without disabling otherwise healthy model routing.
@@ -139,7 +141,7 @@ Defaults:
 - If concurrent sessions race to start the same local proxy, a losing session rechecks readiness after its child exits and adopts the healthy winner instead of disabling compression.
 - Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable Headroom safely; `notifyFailures` only controls repetitive legacy compression-path warnings.
 - `/headroom stop` never kills an external proxy and disables Headroom for the current session.
-- Native mode requires exclusive ownership of Pi's global `openai` and `anthropic` provider overrides. Do not load a duplicate Headroom copy or another extension that overrides those IDs; Pi does not stack third-party registrations. Disabling Headroom unregisters its overrides and restores Pi's built-in models, not a previous third-party override.
+- Headroom skips provider IDs already registered by another extension, including built-in IDs another extension has overridden. Compatible custom IDs are routed only when declared in `models.json` and not extension-owned. This prevents `/headroom disable` or proxy failure from deleting another extension's provider registration. Disabling Headroom restores Pi's built-in and `models.json` definitions.
 - Commands mutate runtime state only. Use `/headroom config save` to persist.
 
 ## Local CCR store

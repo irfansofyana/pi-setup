@@ -42,6 +42,22 @@ export interface HeadroomConfig {
   excludePathPatterns: string[];
 }
 
+export interface HeadroomRouteModel {
+  id: string;
+  provider: string;
+  api: string;
+  baseUrl: string;
+}
+
+export interface HeadroomProviderRoutePlan {
+  providers: Map<string, string>;
+  upstreamByModel: Map<string, string>;
+}
+
+interface HeadroomProxyRegistration extends HeadroomProviderRoutePlan {
+  registeredProviders: string[];
+}
+
 export interface ProxyHistorySummary {
   lifetime?: Record<string, unknown>;
   displaySession?: Record<string, unknown>;
@@ -88,6 +104,7 @@ interface CompressResult {
 
 const ROOT_DIR = join(homedir(), ".pi", "agent", "headroom");
 const CONFIG_PATH = join(ROOT_DIR, "config.json");
+const MODELS_CONFIG_PATH = join(homedir(), ".pi", "agent", "models.json");
 const STORE_DIR = join(ROOT_DIR, "store");
 const LOG_PATH = join(ROOT_DIR, "headroom-proxy.log");
 const PID_PATH = join(ROOT_DIR, "headroom-proxy.pid");
@@ -667,41 +684,157 @@ function modelId(ctx: ExtensionContext): string {
   return ctx.model?.id ?? "gpt-4o";
 }
 
-export function proxyProviderBaseUrls(proxyUrl: string): { openai: string; anthropic: string } {
+export function proxyProviderBaseUrls(proxyUrl: string): { openai: string; anthropic: string; codex: string } {
   return {
     openai: proxyEndpoint(proxyUrl, "/v1"),
     anthropic: proxyEndpoint(proxyUrl, ""),
+    codex: proxyEndpoint(proxyUrl, "/v1"),
   };
 }
 
-function registerProxyProviders(pi: ExtensionAPI, config: HeadroomConfig): boolean {
-  if (config.localToolResultCompression || !hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return false;
+function routeKey(provider: string, model: string): string {
+  return `${provider}\u0000${model}`;
+}
+
+export function proxyBaseUrlForApi(proxyUrl: string, api: string): string | undefined {
+  const baseUrls = proxyProviderBaseUrls(proxyUrl);
+  if (api === "openai-completions" || api === "openai-responses") return baseUrls.openai;
+  if (api === "openai-codex-responses") return baseUrls.codex;
+  if (api === "anthropic-messages") return baseUrls.anthropic;
+  return undefined;
+}
+
+function normalizedUrl(rawUrl: string): string {
+  return rawUrl.replace(/\/+$/, "");
+}
+
+export function headroomUpstreamBaseUrl(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.pathname = url.pathname.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+  return url.toString().replace(/\/$/, "");
+}
+
+function isDefaultBuiltInUpstream(provider: string, rawUrl: string): boolean {
+  const url = normalizedUrl(rawUrl);
+  if (provider === "openai") return url === "https://api.openai.com/v1";
+  if (provider === "anthropic") return url === "https://api.anthropic.com";
+  if (provider === "openai-codex") return url === "https://chatgpt.com/backend-api";
+  return false;
+}
+
+export function planProxyProviderRoutes(proxyUrl: string, models: HeadroomRouteModel[] = []): HeadroomProviderRoutePlan {
+  const baseUrls = proxyProviderBaseUrls(proxyUrl);
+  const defaultRoutes = new Map<string, string>([
+    ["openai", baseUrls.openai],
+    ["anthropic", baseUrls.anthropic],
+    ["openai-codex", baseUrls.codex],
+  ]);
+  const providers = new Map(defaultRoutes);
+  const modelsByProvider = new Map<string, HeadroomRouteModel[]>();
+  for (const model of models) {
+    if (!model?.provider || !model?.id) continue;
+    const entries = modelsByProvider.get(model.provider) ?? [];
+    entries.push(model);
+    modelsByProvider.set(model.provider, entries);
+  }
+
+  const upstreamByModel = new Map<string, string>();
+  for (const [provider, entries] of modelsByProvider) {
+    const candidates = entries.map((model) => ({
+      model,
+      proxyBaseUrl: hasSupportedProxyProtocol(model.baseUrl) ? proxyBaseUrlForApi(proxyUrl, model.api) : undefined,
+    }));
+    const compatible = candidates.every((entry) => entry.proxyBaseUrl !== undefined);
+    const proxyBaseUrls = new Set(candidates.map((entry) => entry.proxyBaseUrl).filter((url): url is string => !!url));
+    if (!compatible || proxyBaseUrls.size !== 1) {
+      providers.delete(provider);
+      continue;
+    }
+
+    providers.set(provider, candidates[0]!.proxyBaseUrl!);
+    const customProvider = !defaultRoutes.has(provider);
+    for (const { model } of candidates) {
+      if (customProvider || !isDefaultBuiltInUpstream(provider, model.baseUrl)) {
+        upstreamByModel.set(routeKey(provider, model.id), headroomUpstreamBaseUrl(model.baseUrl));
+      }
+    }
+  }
+
+  return { providers, upstreamByModel };
+}
+
+function configuredProviderIds(): Set<string> {
+  try {
+    const parsed = JSON.parse(readFileSync(MODELS_CONFIG_PATH, "utf8")) as { providers?: Record<string, unknown> };
+    return new Set(Object.keys(parsed.providers ?? {}));
+  } catch {
+    return new Set();
+  }
+}
+
+function modelRegistryRoutingSnapshot(ctx: ExtensionContext): { models: unknown[]; registeredProviderIds: Set<string> } {
+  const registry = (ctx as ExtensionContext & {
+    modelRegistry?: {
+      getAvailable?: () => unknown[];
+      getRegisteredProviderIds?: () => readonly string[];
+    };
+  }).modelRegistry;
+  return {
+    models: registry?.getAvailable?.() ?? [],
+    registeredProviderIds: new Set(registry?.getRegisteredProviderIds?.() ?? []),
+  };
+}
+
+function routableModels(models: unknown[], configuredProviders: Set<string>): HeadroomRouteModel[] {
+  return models.filter((model): model is HeadroomRouteModel => {
+    if (!model || typeof model !== "object") return false;
+    const candidate = model as Partial<HeadroomRouteModel>;
+    const structurallyValid = typeof candidate.id === "string" && typeof candidate.provider === "string"
+      && typeof candidate.api === "string" && typeof candidate.baseUrl === "string";
+    if (!structurallyValid) return false;
+    return ["openai", "anthropic", "openai-codex"].includes(candidate.provider!) || configuredProviders.has(candidate.provider!);
+  });
+}
+
+function registerProxyProviders(
+  pi: ExtensionAPI,
+  config: HeadroomConfig,
+  models: HeadroomRouteModel[],
+  excludedProviderIds: Set<string>,
+): HeadroomProxyRegistration | undefined {
+  if (config.localToolResultCompression || !hasSupportedProxyProtocol(config.proxyUrl) || isRemoteBlocked(config)) return undefined;
   const registerProvider = (pi as ExtensionAPI & {
     registerProvider?: (name: string, options: { baseUrl: string }) => void;
   }).registerProvider;
-  if (!registerProvider) return false;
-  const baseUrls = proxyProviderBaseUrls(config.proxyUrl);
-  const registered: string[] = [];
+  if (!registerProvider) return undefined;
+  const plan = planProxyProviderRoutes(config.proxyUrl, models);
+  for (const provider of excludedProviderIds) {
+    plan.providers.delete(provider);
+    const prefix = `${provider}\u0000`;
+    for (const key of plan.upstreamByModel.keys()) {
+      if (key.startsWith(prefix)) plan.upstreamByModel.delete(key);
+    }
+  }
+  const registeredProviders: string[] = [];
   try {
-    registerProvider("openai", { baseUrl: baseUrls.openai });
-    registered.push("openai");
-    registerProvider("anthropic", { baseUrl: baseUrls.anthropic });
-    registered.push("anthropic");
+    for (const [name, baseUrl] of plan.providers) {
+      registerProvider(name, { baseUrl });
+      registeredProviders.push(name);
+    }
   } catch (error) {
     const unregisterProvider = (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider;
-    for (const name of registered.reverse()) unregisterProvider?.(name);
+    for (const name of registeredProviders.reverse()) unregisterProvider?.(name);
     throw error;
   }
-  return true;
+  return { ...plan, registeredProviders };
 }
 
-function unregisterProxyProviders(pi: ExtensionAPI): void {
+function unregisterProxyProviders(pi: ExtensionAPI, providers: string[]): void {
   const unregisterProvider = (pi as ExtensionAPI & {
     unregisterProvider?: (name: string) => void;
   }).unregisterProvider;
   if (!unregisterProvider) return;
-  unregisterProvider("openai");
-  unregisterProvider("anthropic");
+  for (const provider of providers) unregisterProvider(provider);
 }
 
 export type HeadroomWireFormat = "openai" | "anthropic";
@@ -963,6 +1096,7 @@ export interface HeadroomDependencies {
   /** Monotonic milliseconds from an arbitrary origin; use only for elapsed durations. */
   monotonicNowMs(): number;
   readConfig(): HeadroomConfig;
+  configuredProviderIds(): Set<string>;
   ensureDirs(): void;
   cleanupStore(config: HeadroomConfig): void;
   health(config: HeadroomConfig, signal?: AbortSignal): Promise<boolean>;
@@ -984,6 +1118,7 @@ export interface HeadroomDependencies {
 const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
   monotonicNowMs: () => performance.now(),
   readConfig,
+  configuredProviderIds,
   ensureDirs,
   cleanupStore,
   health,
@@ -1004,23 +1139,29 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
   let resetConfigForSave: HeadroomConfig | undefined;
-  let proxyProvidersRegistered = false;
+  let proxyRegistration: HeadroomProxyRegistration | undefined;
   let proxyRoutingError: string | undefined;
-  const enableProxyRouting = (): boolean => {
-    if (config.localToolResultCompression || proxyProvidersRegistered) return true;
+  const enableProxyRouting = (ctx: ExtensionContext): boolean => {
+    if (config.localToolResultCompression || proxyRegistration) return true;
     try {
-      proxyProvidersRegistered = registerProxyProviders(pi, config);
-      proxyRoutingError = proxyProvidersRegistered ? undefined : "Pi provider registration API is unavailable";
+      const registry = modelRegistryRoutingSnapshot(ctx);
+      proxyRegistration = registerProxyProviders(
+        pi,
+        config,
+        routableModels(registry.models, dependencies.configuredProviderIds()),
+        registry.registeredProviderIds,
+      );
+      proxyRoutingError = proxyRegistration ? undefined : "Pi provider registration API is unavailable";
     } catch (error) {
-      proxyProvidersRegistered = false;
+      proxyRegistration = undefined;
       proxyRoutingError = error instanceof Error ? error.message : String(error);
     }
-    return proxyProvidersRegistered;
+    return proxyRegistration !== undefined;
   };
   const disableProxyRouting = (): void => {
-    if (!proxyProvidersRegistered) return;
-    unregisterProxyProviders(pi);
-    proxyProvidersRegistered = false;
+    if (!proxyRegistration) return;
+    unregisterProxyProviders(pi, proxyRegistration.registeredProviders);
+    proxyRegistration = undefined;
   };
   let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
@@ -1117,7 +1258,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
 
   const activateProxyRouting = (ctx: ExtensionContext): boolean => {
-    if (enableProxyRouting()) return true;
+    if (enableProxyRouting(ctx)) return true;
     runtimeEnabled = false;
     updateStatus(ctx, runtimeEnabled, owner, stats);
     notifyLifecycleFailure(ctx, `Headroom could not install Pi provider routing: ${proxyRoutingError ?? "unknown provider registration failure"}. Native providers remain active.`);
@@ -1263,7 +1404,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       handleTerminalFailure(lifecycle.handleExit(code, signal));
       if (managedProcess === child) {
         managedStartupPending = false;
-        if (runtimeEnabled || proxyProvidersRegistered) {
+        if (runtimeEnabled || proxyRegistration) {
           beginRoutingMutation();
           invalidatePendingBaselineCapture();
           runtimeEnabled = false;
@@ -1486,6 +1627,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   pi.on("session_shutdown", async (_event, ctx) => {
     await stopManagedProxy(ctx, false);
+  });
+
+  pi.on("before_provider_headers", (event, ctx) => {
+    if (!runtimeEnabled || config.localToolResultCompression || !proxyRegistration || !ctx.model) return;
+    const upstream = proxyRegistration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
+    if (upstream) event.headers["x-headroom-base-url"] = upstream;
   });
 
   let deferredNativeRecoveryRevision: number | undefined;
