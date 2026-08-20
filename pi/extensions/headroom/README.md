@@ -5,13 +5,11 @@ Pi extension that integrates [Headroom Labs Headroom](https://github.com/headroo
 ## What it does
 
 - Automatically starts a managed local `headroom proxy` for each Pi session, or adopts an already healthy proxy.
-- Compresses final Pi `tool_result` text through `POST /v1/compress`.
-- Includes all large text tools by default, including MCP, web search, web fetch, logs, file reads, grep results, and unknown future tools.
-- Skips small outputs under 500 chars, excluded tools, and secret-like outputs.
-- Stores originals in a local Pi CCR store so no Headroom MCP server is needed.
-- Registers native Pi tools:
-  - `headroom_retrieve` — retrieve original output by hash, optionally with query.
-  - `headroom_stats` — show session savings.
+- Registers the configured OpenAI and Anthropic Pi providers against the complete Headroom proxy: OpenAI uses `${proxyUrl}/v1` (native `/v1/chat/completions`) and Anthropic uses `${proxyUrl}` (native `/v1/messages`).
+- Compresses tool outputs as part of those real model requests, so proxy savings are recorded in the global Headroom dashboard.
+- `localToolResultCompression` is a legacy opt-in mode. Only that mode applies the local `minChars`, exclusion, secret-output, and local CCR-retention rules.
+- In legacy local mode, originals are stored in a local Pi CCR store and `headroom_retrieve` retrieves them by hash. It is not registered in the default native-proxy mode.
+- `headroom_stats` — show session savings and whether the proxy's durable `/stats-history` is reachable. Native mode reports proxy requests separately from local compression counts. Its savings are proxy-history deltas; concurrent clients sharing the same proxy may be included.
 - Shows compact Pi-session savings in the footer: `hr off` or `hr m 55k ↓10%` (`m` = managed proxy, `x` = external proxy).
 
 ## Install Headroom CLI
@@ -78,6 +76,7 @@ Defaults:
 ```json
 {
   "enabled": true,
+  "localToolResultCompression": false,
   "startup": "auto",
   "proxyUrl": "http://127.0.0.1:8787",
   "host": "127.0.0.1",
@@ -117,18 +116,30 @@ Defaults:
 
 ## Lifecycle policy
 
+### Native proxy mode (default)
+
 - Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy.
-- Set `startup` to `manual` to require `/headroom start`, or `off` to prevent startup and compression.
+- Native routing requires both the Headroom proxy and its upstream provider to be ready before OpenAI or Anthropic overrides are installed.
+- Readiness is checked again at `turn_start`. If an adopted external proxy disappears, the extension first restores Pi's native providers; the triggering model request stays on native routing, and one managed replacement is attempted after that turn ends when `startup` is `auto`.
+- Manual and off startup modes never recover automatically, and recovery uses no background polling.
+- Optional proxy-history synchronization runs after turns. Repeated history failures back off without disabling otherwise healthy model routing.
+
+### Legacy local compression mode
+
+- With `localToolResultCompression: true`, provider routing is not overridden. Large Pi tool results are compressed locally through `/v1/compress`.
+- Legacy readiness is compression-oriented: upstream-only health failures do not block local tool-output compression.
+- If an auto-start session adopted another session's proxy and that proxy stops, the next eligible tool result triggers one managed replacement attempt. That tool result is bypassed; failed recovery disables local compression to prevent per-result retry storms.
+
+### Shared lifecycle rules
+
+- Set `startup` to `manual` to prevent automatic startup; then use `/headroom start`, or `/headroom enable` when the configured proxy is already healthy. Set it to `off` to prevent startup and compression.
 - Remote proxy URLs are blocked unless `allowRemote` is explicitly set to `true`.
 - If a proxy returns an identifiable `headroom-proxy` readiness payload at `proxyUrl`, the extension adopts it as external; unrelated local HTTP services are rejected.
 - Automatic startup and `/headroom start` wait up to `startupHealthTimeoutMs` (default 30s) for slow local proxy readiness.
 - If concurrent sessions race to start the same local proxy, a losing session rechecks readiness after its child exits and adopts the healthy winner instead of disabling compression.
-- An auto-start session that adopted another session's proxy starts one managed replacement when a compression-path health check detects that proxy has stopped. The triggering tool result is bypassed; failed recovery disables compression, preventing per-result retry storms.
-- Manual and off startup modes never recover automatically, and recovery uses no background polling.
-- Readiness is compression-oriented: upstream-only health failures do not block local tool-output compression.
-- Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable compression safely; `notifyFailures` only controls repetitive compression-path warnings.
-- `/headroom stop` never kills an external proxy.
-- `/headroom stop` disables compression for current session.
+- Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable Headroom safely; `notifyFailures` only controls repetitive legacy compression-path warnings.
+- `/headroom stop` never kills an external proxy and disables Headroom for the current session.
+- Native mode requires exclusive ownership of Pi's global `openai` and `anthropic` provider overrides. Do not load a duplicate Headroom copy or another extension that overrides those IDs; Pi does not stack third-party registrations. Disabling Headroom unregisters its overrides and restores Pi's built-in models, not a previous third-party override.
 - Commands mutate runtime state only. Use `/headroom config save` to persist.
 
 ## Local CCR store
@@ -158,10 +169,12 @@ Inside Pi:
 /headroom status
 ```
 
-The proxy should already be running after Pi starts. Use `/headroom start` only when `startup` is `manual` or after an intentional stop.
+The proxy should already be running after Pi starts. With `startup: "manual"`, use `/headroom start`; if the configured proxy is already healthy, `/headroom enable` activates routing without starting another process.
 
-Then run a command that returns long text. Compressed outputs end with a marker like:
+Then run a command that returns long text. In the legacy `localToolResultCompression: true` mode, compressed outputs end with a marker like:
 
 ```text
 [Headroom: compressed tool output. Saved 12.3k tokens (72%). Original available via headroom_retrieve hash="hr_..."; pass query for focused retrieval.]
 ```
+
+In the default native-proxy mode, Headroom owns compression and retrieval markers; inspect savings with `/headroom stats` or the global Headroom dashboard.

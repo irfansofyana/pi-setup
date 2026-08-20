@@ -38,9 +38,9 @@ See [extension README](../../pi/extensions/context/README.md) for ownership and 
 
 ## Headroom adapter
 
-Purpose: compress large Pi tool results through local Headroom proxy, store originals locally, and retrieve with native tools.
+Purpose: route Pi model requests through the complete Headroom proxy so compression and statistics appear in the global dashboard. Local tool-result compression and retrieval remain an explicit legacy mode.
 
-The adapter starts Headroom automatically for each Pi session, or adopts an already healthy proxy. Concurrent startup losers recheck and adopt the healthy winner. If an adopted proxy later stops, an auto-start session makes one replacement attempt on the next compression-path health check; failed recovery disables compression to avoid retry storms. Manual/off modes never recover automatically, and there is no background polling. If the CLI is missing, log/PID setup fails, startup times out, spawning fails, or the managed proxy exits unexpectedly, Pi always shows a warning and safely bypasses compression. `notifyFailures` only controls repetitive compression-path warnings.
+The adapter starts Headroom automatically for each Pi session, or adopts an already healthy proxy. Concurrent startup losers recheck and adopt the healthy winner. Native routing performs a pre-request readiness check; if an adopted proxy later stops, an auto-start session restores native providers before the request and makes one managed replacement attempt. Manual/off modes never recover automatically, and there is no background polling. If the CLI is missing, log/PID setup fails, startup times out, spawning fails, or the managed proxy exits unexpectedly, Pi always shows a warning and safely bypasses compression. `notifyFailures` only controls repetitive compression-path warnings.
 
 Install CLI and adapter:
 
@@ -73,12 +73,7 @@ Commands:
 /headroom config reset
 ```
 
-Tools:
-
-```text
-headroom_retrieve
-headroom_stats
-```
+Native mode exposes `headroom_stats`, which reports proxy requests separately from local compression counts. Its savings are proxy-history deltas; concurrent clients sharing the same proxy may be included. Legacy local mode exposes `headroom_retrieve` and does not override Pi's native model providers. That opt-in path applies `minChars`, `excludeTools`, `excludePathPatterns`, secret-output checks, and local original retention. Native whole-request routing uses Headroom proxy configuration for exclusions.
 
 Default config path:
 
@@ -101,7 +96,7 @@ Example config:
 }
 ```
 
-Set `startup` to `manual` to require `/headroom start`, or `off` to prevent startup and compression. Run `/headroom doctor` and `/headroom logs` when automatic startup reports a failure.
+Set `startup` to `manual` to prevent automatic startup; then use `/headroom start`, or `/headroom enable` when a configured proxy is already healthy. Set it to `off` to prevent startup and compression. Run `/headroom doctor` and `/headroom logs` when automatic startup reports a failure.
 
 Footer examples: `hr off`, `hr m 55k ↓10%`, `hr x 55k ↓10%`.
 
