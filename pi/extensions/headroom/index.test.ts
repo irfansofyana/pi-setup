@@ -476,19 +476,117 @@ test("remote proxy stats are blocked before fetching", async () => {
   assert.match(result.content[0].text, /remote proxy blocked/);
 });
 
-test("native routing restores and attempts recovery after external proxy loss", async () => {
-  let healthy = true;
+test("native routing defers managed recovery until the triggering fallback turn ends", async () => {
+  let healthCalls = 0;
+  let spawnCalls = 0;
+  let readinessStarted!: () => void;
+  let releaseReadiness!: (healthy: boolean) => void;
+  const started = new Promise<void>((resolve) => { readinessStarted = resolve; });
+  const child = Object.assign(new EventEmitter(), { pid: 4545, exitCode: null, signalCode: null });
   const harness = createHeadroomHarness({
     readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
-    health: async () => healthy,
-    commandAvailable: () => false,
-    proxyHistory: async () => ({}),
+    health: async () => ++healthCalls === 1,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+    waitForHealth: async () => {
+      readinessStarted();
+      return new Promise<boolean>((resolve) => { releaseReadiness = resolve; });
+    },
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
   });
   await harness.handlers.session_start({}, harness.ctx);
-  await harness.commands.headroom.handler("status", harness.ctx);
-  healthy = false;
+
   await harness.handlers.turn_start({}, harness.ctx);
   assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic"]);
+  assert.equal(spawnCalls, 0);
+  assert.equal(harness.providers.length, 2);
+
+  let turnEndSettled = false;
+  const ending = harness.handlers.turn_end({}, harness.ctx).then(() => { turnEndSettled = true; });
+  await started;
+  assert.equal(spawnCalls, 1);
+  assert.equal(turnEndSettled, false);
+  assert.equal(harness.providers.length, 2);
+
+  releaseReadiness(true);
+  await ending;
+  assert.equal(harness.providers.length, 4);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, true);
+  assert.equal(stats.details.proxyOwner, "managed");
+});
+
+test("disable invalidates deferred native recovery before turn end", async () => {
+  let healthCalls = 0;
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => ++healthCalls === 1,
+    commandAvailable: () => true,
+    spawnProxy: () => {
+      spawnCalls++;
+      return Object.assign(new EventEmitter(), { pid: 4646, exitCode: null, signalCode: null });
+    },
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  await harness.handlers.turn_end({}, harness.ctx);
+
+  assert.equal(spawnCalls, 0);
+  assert.equal(harness.providers.length, 2);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
+});
+
+test("aborted turn end consumes deferred native recovery without resurrecting it", async () => {
+  let healthCalls = 0;
+  let spawnCalls = 0;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => ++healthCalls === 1,
+    commandAvailable: () => true,
+    spawnProxy: () => {
+      spawnCalls++;
+      return Object.assign(new EventEmitter(), { pid: 4747, exitCode: null, signalCode: null });
+    },
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
+
+  const controller = new AbortController();
+  controller.abort(new Error("turn aborted"));
+  await harness.handlers.turn_end({}, { ...harness.ctx, signal: controller.signal });
+  await harness.handlers.turn_end({}, harness.ctx);
+
+  assert.equal(spawnCalls, 0);
+  assert.equal(harness.providers.length, 2);
+});
+
+test("invalidated deferred recovery falls through to normal turn-end health recovery", async () => {
+  let healthCalls = 0;
+  const healthResults = [true, false, true, false, false];
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => healthResults[healthCalls++] ?? false,
+    commandAvailable: () => false,
+    proxyHistory: async () => ({ displaySession: { requests: 1, tokens_saved: 1, total_input_tokens: 2 } }),
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
+  await harness.commands.headroom.handler("disable", harness.ctx);
+  await harness.commands.headroom.handler("enable", harness.ctx);
+  await harness.handlers.turn_end({}, harness.ctx);
+
+  assert.equal(healthCalls, 5);
+  assert.deepEqual(harness.unregisteredProviders, ["openai", "anthropic", "openai", "anthropic"]);
+  const stats = await harness.tools.headroom_stats.execute();
+  assert.equal(stats.details.enabled, false);
 });
 
 test("a stale recovery probe cannot disable a newer successful enable", async () => {

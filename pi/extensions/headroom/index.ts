@@ -1488,7 +1488,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     await stopManagedProxy(ctx, false);
   });
 
-  const recoverNativeRouting = async (ctx: ExtensionContext): Promise<boolean> => {
+  let deferredNativeRecoveryRevision: number | undefined;
+  const recoverNativeRouting = async (ctx: ExtensionContext, deferReplacement = false): Promise<boolean> => {
     if (config.localToolResultCompression) return runtimeEnabled;
     if (!runtimeEnabled) return false;
     const signal = getContextSignal(ctx);
@@ -1498,19 +1499,40 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (signal?.aborted) return true;
     if (!routingMutationIsCurrent(routingRevision)) return runtimeEnabled;
     if (healthy) return true;
-    beginRoutingMutation();
+    const recoveryRevision = beginRoutingMutation();
+    invalidatePendingBaselineCapture();
     runtimeEnabled = false;
     disableProxyRouting();
     updateStatus(ctx, runtimeEnabled, owner, stats);
-    if (owner === "external" && config.startup === "auto") await startManagedProxy(ctx);
+    if (owner === "external" && config.startup === "auto") {
+      if (deferReplacement) deferredNativeRecoveryRevision = recoveryRevision;
+      else await startManagedProxy(ctx);
+    }
     return false;
   };
 
+  const runDeferredNativeRecovery = async (ctx: ExtensionContext): Promise<boolean> => {
+    const revision = deferredNativeRecoveryRevision;
+    if (revision === undefined) return false;
+    deferredNativeRecoveryRevision = undefined;
+    if (getContextSignal(ctx)?.aborted) return false;
+    if (
+      !routingMutationIsCurrent(revision)
+      || runtimeEnabled
+      || owner !== "external"
+      || config.startup !== "auto"
+      || config.localToolResultCompression
+    ) return false;
+    await startManagedProxy(ctx);
+    return true;
+  };
+
   pi.on("turn_start", async (_event, ctx) => {
-    await recoverNativeRouting(ctx);
+    await recoverNativeRouting(ctx, true);
   });
 
   pi.on("turn_end", async (_event, ctx) => {
+    if (await runDeferredNativeRecovery(ctx)) return;
     if (!await recoverNativeRouting(ctx)) return;
     if (config.localToolResultCompression) return;
     const history = await fetchProxyHistory(getContextSignal(ctx));

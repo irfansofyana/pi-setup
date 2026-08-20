@@ -120,7 +120,7 @@ Defaults:
 
 - Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy.
 - Native routing requires both the Headroom proxy and its upstream provider to be ready before OpenAI or Anthropic overrides are installed.
-- Readiness is checked again at `turn_start`. If an adopted external proxy disappears, the extension first restores Pi's native providers, then attempts one managed replacement when `startup` is `auto`; the triggering model request stays on native routing.
+- Readiness is checked again at `turn_start`. If an adopted external proxy disappears, the extension first restores Pi's native providers; the triggering model request stays on native routing, and one managed replacement is attempted after that turn ends when `startup` is `auto`.
 - Manual and off startup modes never recover automatically, and recovery uses no background polling.
 - Optional proxy-history synchronization runs after turns. Repeated history failures back off without disabling otherwise healthy model routing.
 
