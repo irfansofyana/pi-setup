@@ -2,31 +2,35 @@
 
 The first-party Pi package loads repository-owned extensions directly. Required third-party companions remain separate Pi-managed sources declared in `piSetup.requiredPackages`. Do not manually copy first-party code into `~/.pi/agent/extensions/`. This guide owns component behavior and user-owned configuration/state; see [Installation](installation.md#existing-device-migration) for approval-gated legacy cleanup.
 
-## Command Deck chat editor
+## Irfan Sumi theme editor
 
-Purpose: reproduce `irfan-pi` custom chat input without patching Pi or `@earendil-works/pi-tui`.
+Purpose: provide `irfan-sumi` colors and compact chat input as one package-owned theme bundle without patching Pi or `@earendil-works/pi-tui`.
 
 Features:
 
-- `ASK` labeled input frame with `Ask, build, or investigate…` placeholder
+- Borderless prompt rail with `Ask, build, or investigate…` placeholder
 - Ready, thinking, tools, error, and bash state labels
 - Spinner, scroll indicators, and responsive narrow-terminal fallback
 - `@` file, `/` command, and newline hints
 
-Requires Pi `>=0.80.10`. Pi supplies `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`; no extra runtime package is required.
+Requires Pi `>=0.84.1`. Pi supplies `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`; no extra runtime package is required.
 
-Command Deck loads from the first-party package. A legacy manual copy at `~/.pi/agent/extensions/command-deck` is a duplicate-loader candidate, but may be backed up and removed only through an approved migration proposal.
+`pi/themes/irfan-sumi/` directly contains `theme.json`, editor code, tests, and component documentation. Pi loads JSON and executable TypeScript through separate manifest fields, but both resources install and update together. The editor activates only when `irfan-sumi` is selected at session start. Run `/reload` after package installation or a theme switch.
 
-Run `/reload` after installation. If another extension replaces the editor, load order determines which editor is active.
+A legacy manual copy at `~/.pi/agent/extensions/command-deck` remains a duplicate-loader candidate, but may be backed up and removed only through an approved migration proposal.
+
+Pi has one custom-editor slot. If Sumi loads after an earlier claimant, normal load order makes the Sumi editor active and emits a warning. If a later extension replaces it, Sumi warns on the next agent start, stops its animation, and never reclaims the slot. Its palette and Pi Signature remain active because theme selection is separate from editor ownership.
+
+For `pi-fff@0.1.12`, disable only its **Autocomplete** feature with `/fff-features` to keep the Sumi editor active while retaining FFF tools, read, and grep behavior. Fuzzy FFF `@` completion then falls back to Pi's built-in completion. Full order-independent coexistence requires `pi-fff` to register its wrapper through `ctx.ui.addAutocompleteProvider(...)` instead of claiming the editor slot. `/pi-setup-doctor` audits enabled, resolved package entrypoints without reordering them. Static `setEditorComponent()` matches are potential claimants; doctor reports an effective conflict only when load order and runtime feature/config evidence prove it, otherwise ownership stays `blocked`.
 
 Smoke test from repository root:
 
 ```bash
 PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent" \
-  node pi/extensions/command-deck/smoke-test.mjs
+  node pi/themes/irfan-sumi/smoke-test.mjs
 ```
 
-Set `PI_ROOT` explicitly when Pi is installed elsewhere. Optional `PI_THEME` points at theme file used by test.
+Set `PI_ROOT` explicitly when Pi is installed elsewhere.
 
 ## Context diagnostics
 

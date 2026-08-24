@@ -24,10 +24,11 @@ const emit = async (event, value = { type: event }) => {
 	for (const handler of handlers(event)) await handler(value, context);
 };
 
-const themePath = process.env.PI_THEME ?? path.resolve(new URL("../../themes/irfan-pi.json", import.meta.url).pathname);
+const themePath = path.resolve(new URL("./theme.json", import.meta.url).pathname);
 const theme = loadThemeFromPath(themePath);
-const minimalTheme = theme.name === "irfan-sumi";
+assert.equal(theme.name, "irfan-sumi");
 let editorFactory;
+const notifications = [];
 const context = {
 	mode: "tui",
 	ui: {
@@ -35,15 +36,24 @@ const context = {
 		setEditorComponent(factory) {
 			editorFactory = factory;
 		},
+		getEditorComponent() {
+			return editorFactory;
+		},
+		notify(message, level) {
+			notifications.push({ message, level });
+		},
 	},
 };
 
 await emit("session_start");
 assert.equal(typeof editorFactory, "function");
 
+let renderRequests = 0;
 const tui = {
 	terminal: { rows: 24 },
-	requestRender() {},
+	requestRender() {
+		renderRequests += 1;
+	},
 };
 const editorTheme = {
 	borderColor: (text) => text,
@@ -74,24 +84,19 @@ for (const rows of [4, 8, 10, 11, 17, 18, 24, 60]) {
 tui.terminal.rows = 24;
 
 const wide = editor.render(80).map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""));
-if (minimalTheme) {
-	assert.doesNotMatch(wide.join("\n"), /ASK|┌|┐|└|┘|│/);
-	assert.match(wide.at(-1), /ready/);
-} else {
-	assert.match(wide[0], /ASK/);
-	assert.match(wide[0], /READY/);
-}
+assert.doesNotMatch(wide.join("\n"), /ASK|┌|┐|└|┘|│/);
+assert.match(wide.at(-1), /ready/);
 assert(wide.some((line) => line.includes("Ask, build, or investigate")));
 assert(wide.some((line) => line.includes("@ files") && line.includes("/ commands")));
-assert.equal(wide.length, minimalTheme ? 2 : 5, "24-row terminal should use the expected editor chrome");
-if (process.env.SHOW_DECK === "1") console.log(wide.join("\n"));
+assert.equal(wide.length, 2, "24-row terminal should use Sumi editor chrome");
+if (process.env.SHOW_SUMI === "1") console.log(wide.join("\n"));
 editor.handleInput("x");
 assert.equal(editor.getText(), "x", "custom editor should preserve normal input handling");
 assert(!editor.render(80).some((line) => line.includes("@ files")), "hint should disappear after first input");
 editor.setText("");
 
 tui.terminal.rows = 8;
-assert.equal(editor.render(80).length, minimalTheme ? 2 : 3, "short terminal should collapse to one editor row");
+assert.equal(editor.render(80).length, 2, "short terminal should collapse to one editor row");
 tui.terminal.rows = 24;
 
 const renderedText = () =>
@@ -99,7 +104,7 @@ const renderedText = () =>
 		.render(80)
 		.map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""))
 		.join("\n");
-const statePattern = (state) => new RegExp(minimalTheme ? state.toLowerCase() : state);
+const statePattern = (state) => new RegExp(state.toLowerCase());
 
 editor.setText("keep @ files literal");
 assert.match(renderedText(), /keep @ files literal/, "user text that resembles the hint must remain prompt content");
@@ -116,6 +121,7 @@ assert.match(renderedText(), /↓\s*\d+/, "moving upward should expose hidden co
 editor.setText("");
 
 await emit("agent_start");
+assert.deepEqual(notifications, [], "sole custom editor should not trigger a collision warning");
 assert.match(renderedText(), statePattern("THINKING"));
 await emit("tool_execution_start", { type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
 assert.match(renderedText(), statePattern("TOOLS"));
@@ -144,4 +150,52 @@ for (let width = 1; width <= 240; width++) {
 }
 
 await emit("session_shutdown");
-console.log("command-deck smoke test passed");
+
+const competingFactory = () => ({ marker: "competing-editor" });
+editorFactory = competingFactory;
+notifications.length = 0;
+await emit("session_start");
+assert.notEqual(editorFactory, competingFactory, "last-loaded Irfan Sumi editor should remain Pi's normal winner");
+assert.equal(notifications.length, 1, "an earlier custom editor should trigger one warning");
+assert.equal(notifications[0].level, "warning");
+assert.match(notifications[0].message, /Multiple custom editors detected/);
+assert.match(notifications[0].message, new RegExp(`Theme ${theme.name} remains selected`));
+const laterCompetingFactory = () => ({ marker: "later-competing-editor" });
+editorFactory = laterCompetingFactory;
+await emit("agent_start");
+assert.equal(editorFactory, laterCompetingFactory, "Irfan Sumi must not reclaim after a later editor wins");
+assert.equal(notifications.length, 2, "A → Sumi → B must warn for both distinct collisions");
+assert.match(notifications[1].message, /Irfan Sumi editor is inactive/);
+await emit("session_shutdown");
+
+notifications.length = 0;
+editorFactory = undefined;
+await emit("session_start");
+editorFactory(tui, editorTheme, new KeybindingsManager());
+renderRequests = 0;
+editorFactory = competingFactory;
+await emit("agent_start");
+await new Promise((resolve) => setTimeout(resolve, 180));
+assert.equal(editorFactory, competingFactory, "Irfan Sumi must not forcefully reclaim Pi's editor slot");
+assert.equal(notifications.length, 1, "a later custom editor should trigger one warning");
+assert.match(notifications[0].message, /Irfan Sumi editor is inactive/);
+assert.match(notifications[0].message, /last loaded editor wins/);
+assert.equal(renderRequests, 0, "inactive Irfan Sumi editor must not animate or request TUI renders");
+await emit("session_shutdown");
+
+notifications.length = 0;
+editorFactory = undefined;
+await emit("session_start");
+assert.equal(typeof editorFactory, "function", "Irfan Sumi editor should reactivate with its theme");
+context.ui.theme = loadThemeFromPath(path.resolve(new URL("../irfan-pi.json", import.meta.url).pathname));
+renderRequests = 0;
+await emit("agent_start");
+assert.equal(editorFactory, undefined, "switching away from Irfan Sumi should restore Pi's default editor");
+await new Promise((resolve) => setTimeout(resolve, 180));
+assert.equal(renderRequests, 0, "inactive theme must not animate or request TUI renders");
+await emit("session_start");
+assert.equal(editorFactory, undefined, "another theme session must keep Pi's default editor");
+assert.deepEqual(notifications, [], "inactive theme must not emit editor collision warnings");
+await emit("session_shutdown");
+
+console.log("irfan-sumi smoke test passed");

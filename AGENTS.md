@@ -50,7 +50,8 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 ## Package resources
 
 - Root manifest must continue exposing repo-owned signature UI, local extension directories, themes, and skills.
-- The package owns Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, BTW, Caveman, Command Deck, signature UI, themes, and setup skill. Third-party companions remain separate Pi package sources declared in `piSetup.requiredPackages`.
+- `pi/themes/irfan-sumi/` owns Sumi's `theme.json`, integrated editor `index.ts`, smoke test, and component documentation. Do not restore a standalone editor resource under `pi/extensions/`.
+- The package owns Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, BTW, Caveman, the integrated Irfan Sumi editor, signature UI, themes, and setup skill. Third-party companions remain separate Pi package sources declared in `piSetup.requiredPackages`.
 - Component docs should describe runtime/configuration behavior and package ownership, not repeat package installation commands.
 
 ## Permission policy notes
