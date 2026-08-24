@@ -73,12 +73,11 @@ For provider credentials, prefer environment variables or `/login`; do not hardc
 Included:
 
 - `irfan-pi`: main blue/cobalt theme with inline color variables and export colors; standalone with no runtime dependencies.
-- `irfan-sumi`: ink-black, warm-neutral, and amber theme and the fresh-install setup metadata default. Activates Command Deck's borderless two-line editor and Pi Signature's one-line breathing `π` header without changing `irfan-pi`.
+- `irfan-sumi`: ink-black, warm-neutral, and amber theme and the fresh-install setup metadata default. Its theme directory directly owns the borderless two-line editor, placeholder, state labels, spinner, hints, and responsive fallback. It also activates Pi Signature's one-line breathing `π` header without changing `irfan-pi`.
 - `irfan-gruvbox`: alternate Gruvbox Dark theme with OMP-inspired neutral tool cards, readable code output, and softer greens.
-- `command-deck`: custom `CustomEditor` chat input with labeled borders, placeholder, state labels, spinner, hints, and responsive fallback. Uses Pi public APIs; does not patch `pi-tui`.
 - `pi-signature.ts`: animated gradient `π` header, current-user detection, `crafted from Irfan's Pi setup` credit, `π` spinner, and compact footer statuses. Under `irfan-sumi`, the ornament collapses into a one-line signature whose amber `π` slowly breathes, plus a quiet `working` pulse. Header animation uses cached normal-render line count to pause outside live viewport without polling full TUI tree, preserving terminal scrollback and idle performance.
 
-The first-party package exposes themes, Command Deck, and Pi Signature directly. Do not copy package-owned resources into `~/.pi/agent/`. Existing manual copies are migration candidates handled by the approval-gated procedure in [Installation](installation.md#existing-device-migration); user settings remain user-owned.
+The first-party package exposes theme bundles and Pi Signature directly. Do not copy package-owned resources into `~/.pi/agent/`. Existing manual copies are migration candidates handled by the approval-gated procedure in [Installation](installation.md#existing-device-migration); user settings remain user-owned.
 
 Select theme in `/settings`, or merge these settings into existing Pi settings:
 
@@ -89,7 +88,9 @@ Select theme in `/settings`, or merge these settings into existing Pi settings:
 }
 ```
 
-`command-deck` owns chat-editor layout and state labels. It keeps the labeled frame for other themes and automatically switches to a compact prompt rail for `irfan-sumi`. `editorPaddingX` controls its text padding. It loads from the first-party package.
+`pi/themes/irfan-sumi/` owns both `theme.json` and its compact editor extension. Pi requires separate manifest entries for theme JSON and executable TypeScript, but both resources ship from one theme directory. The editor activates only when `irfan-sumi` is selected at session start; `editorPaddingX` controls its text padding. Pi persists the selected theme separately in `~/.pi/agent/settings.json`.
+
+Installing another package does not reset or remove `irfan-sumi`. A package that claims Pi's single custom-editor slot can replace the Sumi editor visually; Sumi warns and leaves Pi's normal last-loaded-editor policy intact. The theme palette and Pi Signature remain active. See [Local Extensions](local-extensions.md#irfan-sumi-theme-editor) for conflict handling and `pi-fff` compatibility.
 
 ### Switch from `irfan-pi` to `irfan-sumi`
 
@@ -127,7 +128,7 @@ Verify the switch:
 - Working state uses the quiet amber `· → ∙ → • → ∙` pulse.
 - Footer, file completion, slash commands, multiline input, and scroll indicators still work.
 
-To return to `irfan-pi`, open `/settings` and select `irfan-pi`, or restore `"theme": "irfan-pi"` while Pi is stopped. Run `/reload` or restart Pi. The original framed Command Deck and orbit signature return automatically; no theme or extension files need to be deleted.
+To return to `irfan-pi`, open `/settings` and select `irfan-pi`, or restore `"theme": "irfan-pi"` while Pi is stopped. Run `/reload` or restart Pi. Pi restores its standard editor and the orbit signature; no theme files need to be deleted.
 
 Optional signature overrides:
 

@@ -17,17 +17,24 @@ test("root manifest exposes the repository as one installable Pi package", async
   assert.equal(manifest.engines.pi, ">=0.84.1");
   assert.ok(manifest.keywords.includes("pi-package"));
   assert.ok(manifest.pi.extensions.includes("./pi/extensions/pi-signature.ts"));
+  assert.ok(manifest.pi.extensions.includes("./pi/themes/irfan-sumi/index.ts"));
   assert.ok(manifest.pi.extensions.includes("./pi/extensions/*/index.ts"));
   assert.ok(manifest.pi.skills.includes("./skills"));
-  assert.deepEqual(manifest.pi.themes, ["./pi/themes/*.json"]);
+  assert.deepEqual(manifest.pi.themes, ["./pi/themes/*.json", "./pi/themes/irfan-sumi/theme.json"]);
 });
 
 test("package manifest ships every declared resource path", async () => {
   const manifest = await readJson("package.json");
 
-  for (const requiredPath of ["pi/extensions/pi-signature.ts", "skills/pi-setup/SKILL.md", "pi/themes/irfan-sumi.json"]) {
+  for (const requiredPath of [
+    "pi/extensions/pi-signature.ts",
+    "pi/themes/irfan-sumi/index.ts",
+    "skills/pi-setup/SKILL.md",
+    "pi/themes/irfan-sumi/theme.json",
+  ]) {
     await access(path.join(root, requiredPath));
   }
+  await assert.rejects(access(path.join(root, "pi/extensions/command-deck/index.ts")), { code: "ENOENT" });
 
   assert.ok(manifest.files.includes("pi/extensions"));
   assert.ok(manifest.files.includes("pi/themes"));
@@ -35,10 +42,12 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(manifest.files.includes("skills"));
 });
 
-test("irfan-sumi is the documented package default without mutating settings on install", async () => {
+test("irfan-sumi ships its theme and editor together without mutating settings on install", async () => {
   const manifest = await readJson("package.json");
 
   assert.equal(manifest.piSetup.defaultTheme, "irfan-sumi");
+  assert.ok(manifest.pi.themes.includes("./pi/themes/irfan-sumi/theme.json"));
+  assert.ok(manifest.pi.extensions.includes("./pi/themes/irfan-sumi/index.ts"));
   for (const hook of ["preinstall", "install", "postinstall", "prepare"]) {
     assert.equal(manifest.scripts[hook], undefined, `package must not define ${hook}`);
   }
@@ -71,6 +80,7 @@ test("root Pi manifest loads only repository-owned package resources", async () 
   const manifest = await readJson("package.json");
   assert.deepEqual(manifest.pi.extensions, [
     "./pi/extensions/pi-signature.ts",
+    "./pi/themes/irfan-sumi/index.ts",
     "./pi/extensions/*/index.ts",
   ]);
   assert.deepEqual(manifest.pi.skills, ["./skills"]);
@@ -80,6 +90,7 @@ test("root Pi manifest loads only repository-owned package resources", async () 
 test("documentation keeps companion packages separate from aggregate ownership", async () => {
   const readme = await readFile(path.join(root, "README.md"), "utf8");
   const installation = await readFile(path.join(root, "docs/setup/installation.md"), "utf8");
+  const setupSkill = await readFile(path.join(root, "skills/pi-setup/SKILL.md"), "utf8");
   const proposal = await readFile(
     path.join(root, "docs/superpowers/specs/2026-08-09-pi-package-refactor-design.md"),
     "utf8",
@@ -89,4 +100,7 @@ test("documentation keeps companion packages separate from aggregate ownership",
   assert.doesNotMatch(readme, /Bundled third-party packages/);
   assert.match(installation, /Companion packages are installed separately/);
   assert.match(proposal, /Separately managed companion packages/);
+  assert.match(setupSkill, /Report static `setEditorComponent\(\)` matches as potential claimants/);
+  assert.match(setupSkill, /effective owners only when proven/);
+  assert.match(setupSkill, /Never reorder packages during audit/);
 });

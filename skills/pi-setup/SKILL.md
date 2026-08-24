@@ -60,6 +60,7 @@ Audit relevant surfaces:
 - First-party package presence and declared resources against `package.json`.
 - Presence and installed source/version of every separately managed package in `piSetup.requiredPackages`.
 - Known legacy manual extension files/directories under `~/.pi/agent/extensions/`, including same-command or same-tool registrations.
+- Potential custom-editor claimants among enabled, resolved package entrypoints. Inspect effective load order plus runtime feature/config evidence. Report static `setEditorComponent()` matches as potential claimants; call them effective owners only when proven, otherwise classify ownership as `blocked`. Never reorder packages during audit.
 - Manually copied package themes under `~/.pi/agent/themes/`.
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
 - Component config/state for Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, permissions, and MCP.
@@ -138,7 +139,7 @@ Repeat relevant read-only checks and report:
 - package sources and verification results;
 - confirmation that user settings/config/state/secrets were preserved;
 - private backup paths, retention, and exact rollback steps;
-- unresolved duplicates or manual auth/service work;
+- unresolved duplicates, custom-editor conflicts, or manual auth/service work;
 - selected theme and whether it changed by explicit approval;
 - required `/reload` or restart action.
 

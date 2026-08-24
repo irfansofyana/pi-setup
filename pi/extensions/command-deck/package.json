@@ -1,8 +1,0 @@
-{
-  "name": "irfan-command-deck-pi-extension",
-  "private": true,
-  "type": "module",
-  "engines": {
-    "pi": ">=0.80.10"
-  }
-}

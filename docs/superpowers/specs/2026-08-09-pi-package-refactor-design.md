@@ -54,9 +54,10 @@ This creates avoidable drift and duplicate registration risk for repository-owne
 The root package is `@irfansofyana/pi-setup`. Its Pi manifest declares:
 
 - repository-owned `pi/extensions/pi-signature.ts`;
+- repository-owned `pi/themes/irfan-sumi/index.ts` integrated editor;
 - repository-owned `pi/extensions/*/index.ts` resources;
 - repository-owned `skills/`;
-- repository-owned `pi/themes/*.json`;
+- repository-owned `pi/themes/*.json` plus `pi/themes/irfan-sumi/theme.json`;
 - `piSetup.defaultTheme: "irfan-sumi"` as setup metadata.
 - `piSetup.requiredPackages` as the exact companion-package manifest.
 

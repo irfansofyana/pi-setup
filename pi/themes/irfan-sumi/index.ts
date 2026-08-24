@@ -8,17 +8,14 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { CURSOR_MARKER, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const MIN_CUSTOM_WIDTH = 12;
-const WIDE_LABEL_WIDTH = 28;
 const HINT_MIN_WIDTH = 34;
-const DECK_LABEL = "ASK";
 const PLACEHOLDER = "Ask, build, or investigate…";
-const MINIMAL_THEME = "irfan-sumi";
+const SUMI_THEME = "irfan-sumi";
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const ANSI_RESET = "\x1b[0m";
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 type Style = (text: string) => string;
-type DeckState = "ready" | "thinking" | "tools" | "error" | "bash";
+type SumiEditorState = "ready" | "thinking" | "tools" | "error" | "bash";
 
 function stripAnsi(text: string): string {
 	return text.replace(ANSI_PATTERN, "");
@@ -42,39 +39,6 @@ export function formatBinding(key: string): string {
 	return `${modifiers}${displayedKey}`;
 }
 
-export function buildLabeledBorder(
-	width: number,
-	left: string,
-	right: string,
-	base: Style,
-	leftStyle: Style,
-	rightStyle: Style,
-	corners: readonly [string, string] = ["┌", "┐"],
-): string {
-	if (width <= 0) return "";
-	if (width === 1) return base("─");
-	if (width === 2) return base(`${corners[0]}${corners[1]}`);
-
-	let leftLabel = left.trim();
-	let rightLabel = right.trim();
-	const available = width - 2;
-	const minimumFill = 1;
-	const chunkWidth = (label: string) => (label ? visibleWidth(label) + 3 : 0);
-
-	if (chunkWidth(leftLabel) + chunkWidth(rightLabel) + minimumFill > available) leftLabel = "";
-	if (chunkWidth(rightLabel) + minimumFill > available) {
-		const budget = Math.max(0, available - minimumFill - 3);
-		rightLabel = truncateToWidth(rightLabel, budget, "");
-	}
-	if (chunkWidth(leftLabel) + chunkWidth(rightLabel) + minimumFill > available) leftLabel = "";
-
-	const fillWidth = Math.max(0, available - chunkWidth(leftLabel) - chunkWidth(rightLabel));
-	const leftChunk = leftLabel ? leftStyle(`─ ${leftLabel} `) : "";
-	const rightChunk = rightLabel ? rightStyle(` ${rightLabel} ─`) : "";
-	const plain = `${base(corners[0])}${leftChunk}${base("─".repeat(fillWidth))}${rightChunk}${base(corners[1])}`;
-	return fitLine(plain, width);
-}
-
 function extractScrollCount(line: string, direction: "↑" | "↓"): string | undefined {
 	const match = stripAnsi(line).match(new RegExp(`${direction}\\s+(\\d+)\\s+more`));
 	return match?.[1];
@@ -86,26 +50,19 @@ function addPlaceholder(line: string, theme: Theme): string {
 	return line.replace(cursor, `${cursor}${theme.fg("dim", ` ${PLACEHOLDER}`)}`);
 }
 
-function applyEditorBackground(text: string, width: number, theme: Theme): string {
-	const fitted = fitLine(text, width);
-	const background = theme.getBgAnsi("customMessageBg");
-	const withPersistentBackground = fitted.replaceAll(ANSI_RESET, `${ANSI_RESET}${background}`);
-	return `${background}${withPersistentBackground}\x1b[49m`;
-}
-
 function targetRestingRows(terminalRows: number): number {
 	if (terminalRows >= 18) return 3;
 	if (terminalRows >= 11) return 2;
 	return 1;
 }
 
-function stateLabel(state: DeckState, spinnerFrame: string): string {
+function stateLabel(state: SumiEditorState, spinnerFrame: string): string {
 	if (state === "thinking") return `${spinnerFrame} THINKING`;
 	if (state === "tools") return `${spinnerFrame} TOOLS`;
 	return state.toUpperCase();
 }
 
-function stateStyle(theme: Theme, state: DeckState, focused: boolean): Style {
+function stateStyle(theme: Theme, state: SumiEditorState, focused: boolean): Style {
 	if (state === "error") return (text) => theme.fg("error", text);
 	if (state === "bash") return (text) => theme.fg("warning", text);
 	return focused ? (text) => theme.fg("accent", text) : (text) => theme.fg("muted", text);
@@ -117,7 +74,7 @@ function renderMinimalEditor(
 	hint: string | undefined,
 	scrollUp: string | undefined,
 	scrollDown: string | undefined,
-	state: DeckState,
+	state: SumiEditorState,
 	spinnerFrame: string,
 	theme: Theme,
 	railStyle: Style,
@@ -140,12 +97,17 @@ function renderMinimalEditor(
 	return [...prompt, fitLine(`${statusPrefix}${theme.fg("borderMuted", "─".repeat(ruleWidth))} ${stateText} `, width)];
 }
 
-export default function commandDeck(pi: ExtensionAPI) {
+export default function irfanSumiUi(pi: ExtensionAPI) {
 	let isWorking = false;
 	let hadError = false;
 	let spinnerIndex = 0;
 	let spinnerTimer: ReturnType<typeof setInterval> | undefined;
 	let activeTui: TUI | undefined;
+	let sumiEditorFactory:
+		| ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor)
+		| undefined;
+	let initialConflictWarned = false;
+	let lostOwnershipWarned = false;
 	const activeTools = new Set<string>();
 
 	const requestRender = () => activeTui?.requestRender();
@@ -167,7 +129,28 @@ export default function commandDeck(pi: ExtensionAPI) {
 		stopSpinner();
 	};
 
-	pi.on("agent_start", () => {
+	pi.on("agent_start", (_event, ctx) => {
+		if (!sumiEditorFactory) return;
+		const currentFactory = ctx.ui.getEditorComponent();
+		if (ctx.ui.theme.name !== SUMI_THEME) {
+			resetState();
+			activeTui = undefined;
+			if (currentFactory === sumiEditorFactory) ctx.ui.setEditorComponent(undefined);
+			sumiEditorFactory = undefined;
+			return;
+		}
+		if (currentFactory !== sumiEditorFactory) {
+			if (!lostOwnershipWarned) {
+				ctx.ui.notify(
+					`Irfan Sumi editor is inactive because another extension replaced Pi's editor. Theme ${ctx.ui.theme.name} remains selected; Pi can show only one custom editor, so the last loaded editor wins.`,
+					"warning",
+				);
+				lostOwnershipWarned = true;
+			}
+			resetState();
+			activeTui = undefined;
+			return;
+		}
 		isWorking = true;
 		hadError = false;
 		activeTools.clear();
@@ -203,22 +186,40 @@ export default function commandDeck(pi: ExtensionAPI) {
 	pi.on("session_shutdown", () => {
 		resetState();
 		activeTui = undefined;
+		sumiEditorFactory = undefined;
+		initialConflictWarned = false;
+		lostOwnershipWarned = false;
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
+		const currentFactory = ctx.ui.getEditorComponent();
+		if (ctx.ui.theme.name !== SUMI_THEME) {
+			resetState();
+			activeTui = undefined;
+			initialConflictWarned = false;
+			lostOwnershipWarned = false;
+			if (sumiEditorFactory && currentFactory === sumiEditorFactory) {
+				ctx.ui.setEditorComponent(undefined);
+			}
+			sumiEditorFactory = undefined;
+			return;
+		}
 		resetState();
+		initialConflictWarned = false;
+		lostOwnershipWarned = false;
+		const previousFactory = currentFactory === sumiEditorFactory ? undefined : currentFactory;
 
-		class CommandDeckEditor extends CustomEditor {
-			private readonly deckKeybindings: KeybindingsManager;
+		class IrfanSumiEditor extends CustomEditor {
+			private readonly sumiKeybindings: KeybindingsManager;
 
 			constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
 				super(tui, theme, keybindings, { paddingX: 2 });
-				this.deckKeybindings = keybindings;
+				this.sumiKeybindings = keybindings;
 				activeTui = tui;
 			}
 
-				handleInput(data: string): void {
+			handleInput(data: string): void {
 				const before = this.getText();
 				super.handleInput(data);
 				if (hadError && this.getText() !== before) {
@@ -240,10 +241,15 @@ export default function commandDeck(pi: ExtensionAPI) {
 			}
 
 			render(width: number): string[] {
-				if (width < MIN_CUSTOM_WIDTH || this.isShowingAutocomplete()) return this.renderStockSafe(width);
+				if (
+					ctx.ui.theme.name !== SUMI_THEME ||
+					width < MIN_CUSTOM_WIDTH ||
+					this.isShowingAutocomplete()
+				) {
+					return this.renderStockSafe(width);
+				}
 
-				const margin = 1;
-				const frameWidth = width - margin * 2;
+				const frameWidth = width - 2;
 				const innerWidth = frameWidth - 2;
 				if (innerWidth < 1) return this.renderStockSafe(width);
 
@@ -252,7 +258,7 @@ export default function commandDeck(pi: ExtensionAPI) {
 
 				const empty = this.getText().length === 0;
 				const bashMode = this.getText().trimStart().startsWith("!");
-				const state: DeckState = bashMode
+				const state: SumiEditorState = bashMode
 					? "bash"
 					: hadError
 						? "error"
@@ -263,7 +269,7 @@ export default function commandDeck(pi: ExtensionAPI) {
 								: "ready";
 
 				const theme = ctx.ui.theme;
-				const baseStyle: Style =
+				const railStyle: Style =
 					state === "error"
 						? (text) => theme.fg("error", text)
 						: state === "bash"
@@ -272,9 +278,6 @@ export default function commandDeck(pi: ExtensionAPI) {
 				const activeStyle = stateStyle(theme, state, this.focused);
 				const scrollUp = extractScrollCount(stock[0]!, "↑");
 				const scrollDown = extractScrollCount(stock[stock.length - 1]!, "↓");
-				const leftLabel = scrollUp ? `↑ ${scrollUp}` : frameWidth >= WIDE_LABEL_WIDTH ? DECK_LABEL : "";
-				const rightLabel = stateLabel(state, SPINNER_FRAMES[spinnerIndex]!);
-
 				const content = stock.slice(1, -1);
 				if (empty && content[0]) content[0] = addPlaceholder(content[0], theme);
 
@@ -282,60 +285,33 @@ export default function commandDeck(pi: ExtensionAPI) {
 				const hintAllowed = empty && !isWorking && frameWidth >= HINT_MIN_WIDTH && minimumRows >= 2;
 				let hint: string | undefined;
 				if (hintAllowed) {
-					const newlineKey = this.deckKeybindings.getKeys("tui.input.newLine")[0] ?? "shift+enter";
+					const newlineKey = this.sumiKeybindings.getKeys("tui.input.newLine")[0] ?? "shift+enter";
 					hint = `@ files · / commands · ${formatBinding(String(newlineKey))} newline`;
 				}
 
-				if (theme.name === MINIMAL_THEME) {
-					return renderMinimalEditor(
-						width,
-						content,
-						hint ? theme.fg("dim", hint) : undefined,
-						scrollUp,
-						scrollDown,
-						state,
-						SPINNER_FRAMES[spinnerIndex]!,
-						theme,
-						baseStyle,
-						activeStyle,
-					);
-				}
-
-				while (content.length < minimumRows) content.push(" ".repeat(innerWidth));
-				if (hint) {
-					const padding = " ".repeat(Math.min(this.getPaddingX(), Math.max(0, innerWidth - 1)));
-					content[Math.max(content.length - 1, 0)] = `${padding}${theme.fg("dim", hint)}`;
-				}
-
-				const indent = " ".repeat(margin);
-				const top = buildLabeledBorder(
-					frameWidth,
-					leftLabel,
-					rightLabel,
-					baseStyle,
+				return renderMinimalEditor(
+					width,
+					content,
+					hint ? theme.fg("dim", hint) : undefined,
+					scrollUp,
+					scrollDown,
+					state,
+					SPINNER_FRAMES[spinnerIndex]!,
+					theme,
+					railStyle,
 					activeStyle,
-					activeStyle,
-				);
-				const body = content.map(
-					(line) =>
-						`${indent}${baseStyle("│")}${applyEditorBackground(line, innerWidth, theme)}${baseStyle("│")}${indent}`,
-				);
-				const bottom = buildLabeledBorder(
-					frameWidth,
-					scrollDown ? `↓ ${scrollDown}` : "",
-					"",
-					baseStyle,
-					activeStyle,
-					activeStyle,
-					["└", "┘"],
-				);
-
-				return [`${indent}${top}${indent}`, ...body, `${indent}${bottom}${indent}`].map((line) =>
-					fitLine(line, width),
 				);
 			}
 		}
 
-		ctx.ui.setEditorComponent((tui, theme, keybindings) => new CommandDeckEditor(tui, theme, keybindings));
+		sumiEditorFactory = (tui, theme, keybindings) => new IrfanSumiEditor(tui, theme, keybindings);
+		if (previousFactory && !initialConflictWarned) {
+			ctx.ui.notify(
+				`Multiple custom editors detected. Irfan Sumi editor is loading after another editor; Pi can show only one, so the last loaded editor wins. Theme ${ctx.ui.theme.name} remains selected.`,
+				"warning",
+			);
+			initialConflictWarned = true;
+		}
+		ctx.ui.setEditorComponent(sumiEditorFactory);
 	});
 }

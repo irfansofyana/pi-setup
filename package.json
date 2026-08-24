@@ -31,13 +31,15 @@
   "pi": {
     "extensions": [
       "./pi/extensions/pi-signature.ts",
+      "./pi/themes/irfan-sumi/index.ts",
       "./pi/extensions/*/index.ts"
     ],
     "skills": [
       "./skills"
     ],
     "themes": [
-      "./pi/themes/*.json"
+      "./pi/themes/*.json",
+      "./pi/themes/irfan-sumi/theme.json"
     ]
   },
   "piSetup": {

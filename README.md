@@ -9,7 +9,7 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with provider login through `/login` |
-| Theme/UI | `irfan-sumi`, `irfan-pi`, alternate themes, Command Deck, and Pi Signature |
+| Theme/UI | `irfan-sumi` with integrated editor, `irfan-pi`, alternate themes, and Pi Signature |
 | MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
 | Delegation | Ciung research, Laya code mapping, Sangkur worktree builds, and Prabu review |
 | Guardrails | Permission gates, todos, persisted goals, and prompt loops |
@@ -32,8 +32,8 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 package.json                  # Pi resources + exact companion package metadata
 pi/
   agents/                     # reviewed templates; deployed separately
-  themes/                     # irfan-sumi, irfan-pi, and alternates
-  extensions/                 # repo-owned package extensions
+  themes/                     # irfan-sumi bundle, irfan-pi, and alternates
+  extensions/                 # other repo-owned package extensions
 skills/pi-setup/              # bundled audit and migration skill
 docs/setup/                   # setup and operations guides
 ```
