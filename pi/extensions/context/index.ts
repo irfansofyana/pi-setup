@@ -1,5 +1,5 @@
 import { parseSkillBlock, type BuildSystemPromptOptions, type ExtensionAPI, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface UsageTotals {
 	input: number;
@@ -123,6 +123,8 @@ const TOOL_BLOAT_CHARS = 50_000;
 const CONTEXT_WATCH_PERCENT = 70;
 const CONTEXT_CRITICAL_PERCENT = 90;
 const MAX_REPORT_LINES = 140;
+const PANEL_MIN_WIDTH = 40;
+const PANEL_PADDING = 2;
 
 function zeroUsage(): UsageTotals {
 	return { ...ZERO_USAGE };
@@ -517,7 +519,13 @@ function usageLine(label: string, usage: UsageTotals): string {
 
 type Paint = (color: ThemeColor, text: string) => string;
 
+type PanelTheme = Theme & { bg?: (color: string, text: string) => string };
+
 const noPaint: Paint = (_color, text) => text;
+
+function panelBg(theme: PanelTheme, text: string): string {
+	return theme.bg?.("selectedBg", text) ?? text;
+}
 
 function singleBar(ratio: number, width: number, paint: Paint, fill: ThemeColor = "accent"): string {
 	const clamped = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
@@ -534,16 +542,13 @@ function barFillColor(ratio: number): ThemeColor {
 
 function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[] {
 	const lines: string[] = [];
-	lines.push("/context — session facts");
-
-	lines.push(`model  ${report.model.provider}/${report.model.id} · window ${formatNumber(report.model.contextWindow)}`);
-
+	lines.push(paint("accent", "/context — session facts"), paint("muted", "read-only session health"));
 	lines.push("");
-	lines.push(paint("muted", "last prompt (previous turn, provider-reported)"));
+	lines.push(paint("muted", "last prompt · CONTEXT PRESSURE"));
 	const ratio = report.lastPrompt.percent !== null ? report.lastPrompt.percent / 100 : 0;
-	lines.push(singleBar(ratio, 40, paint, barFillColor(ratio)));
+	lines.push(singleBar(ratio, 36, paint, barFillColor(ratio)));
 	if (report.lastPrompt.unknown) {
-		lines.push("no completed turn yet");
+		lines.push("no completed turn yet · waiting for provider usage");
 	} else if (report.lastPrompt.percent !== null) {
 		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} / ${formatNumber(report.lastPrompt.contextWindow)} prompt tokens · ${formatNumber(report.lastPrompt.percent)}%`);
 	} else if (report.lastPrompt.note) {
@@ -551,35 +556,18 @@ function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[]
 	} else {
 		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} prompt tokens · window unknown`);
 	}
-	lines.push("");
-
-	lines.push(`spend  in ${formatNumber(report.sessionUsage.input)} · out ${formatNumber(report.sessionUsage.output)} · cache ${formatNumber(report.sessionUsage.cacheRead)}/${formatNumber(report.sessionUsage.cacheWrite)} · total ${formatNumber(report.sessionUsage.totalTokens)} · $${formatCost(report.sessionUsage.costTotal)}`);
-	lines.push(`turns ${report.turns.length}${report.models.length ? ` · ${report.models.slice(0, 4).map((model) => `${model.provider}/${model.model} ×${model.calls}`).join(" · ")}${report.models.length > 4 ? " · …" : ""}` : ""}`);
-
-	if (report.tools.length) {
-		lines.push("");
-		lines.push(paint("muted", "tools (result sizes are exact chars/bytes)"));
-		for (const tool of report.tools.slice(0, 4)) {
-			const large = tool.largestResultChars > LARGE_TOOL_RESULT_CHARS ? paint("error", "  ⚠ >20k") : "";
-			lines.push(`  ${tool.name} ×${tool.calls} · ${formatNumber(tool.resultChars)} chars · ${formatBytes(tool.resultBytes)}${large}`);
-		}
-		if (report.tools.length > 4) lines.push(paint("dim", `  … ${report.tools.length - 4} more tools`));
-	}
-
-	lines.push("");
-	lines.push(report.skills.length
-		? `skills  ${report.skills.slice(0, 8).map((skill) => `${skill.name} ×${skill.invocations}`).join(" · ")}${report.skills.length > 8 ? " · …" : ""}`
-		: "skills  none (explicit invocations only)");
-	lines.push(`session  ${report.branch.sessionMessages} messages · ${report.branch.sessionCompactions} compactions · ${report.branch.branchPoints} branch points · ${report.branch.sessionBranchSummaries} summaries`);
-	lines.push(report.systemPrompt.available
-		? `prompt  ${formatNumber(report.systemPrompt.chars)} chars · ${formatBytes(report.systemPrompt.bytes)} (measured, not tokenized)`
-		: "prompt  unavailable");
-
 	if (report.toolBloat.status === "critical") {
-		lines.push("");
-		lines.push(paint("error", `tool bloat  aggregate ${formatNumber(report.toolBloat.observedChars)} chars (limit ${formatNumber(TOOL_BLOAT_CHARS)}) · largest ${formatNumber(report.toolBloat.largestChars)} chars (limit ${formatNumber(LARGE_TOOL_RESULT_CHARS)})`));
+		lines.push(paint("error", `⚠ tool output high · ${formatNumber(report.toolBloat.observedChars)} chars aggregate`));
 	}
-
+	lines.push("");
+	lines.push(paint("muted", "model"), `${report.model.provider}/${report.model.id} · window ${formatNumber(report.model.contextWindow)}`);
+	lines.push(`spend in ${formatNumber(report.sessionUsage.input)} · out ${formatNumber(report.sessionUsage.output)} · cache ${formatNumber(report.sessionUsage.cacheRead)}/${formatNumber(report.sessionUsage.cacheWrite)} · total ${formatNumber(report.sessionUsage.totalTokens)} · $${formatCost(report.sessionUsage.costTotal)}`);
+	lines.push(paint("muted", "session"), `${report.turns.length} turns · ${report.branch.sessionMessages} messages · ${report.branch.sessionCompactions} compactions · ${report.branch.branchPoints} branch points`);
+	if (report.tools.length || report.skills.length) {
+		lines.push(paint("muted", "ACTIVITY"));
+		if (report.tools.length) lines.push(`tools ${report.tools.slice(0, 2).map((tool) => `${tool.name} ×${tool.calls}`).join(" · ")}${report.tools.length > 2 ? " · …" : ""}`);
+		if (report.skills.length) lines.push(`skills ${report.skills.slice(0, 3).map((skill) => `${skill.name} ×${skill.invocations}`).join(" · ")}${report.skills.length > 3 ? " · …" : ""}`);
+	}
 	return lines;
 }
 
@@ -661,18 +649,20 @@ export class ContextReportComponent {
 	private readonly details: string[];
 	private readonly done: () => void;
 	private readonly requestRender: () => void;
+	private readonly theme: PanelTheme;
 	private readonly viewport: number;
 	private showDetails = false;
 	private offset = 0;
 	private wrapped: string[] = [];
 
-	constructor(report: ContextReport, done: () => void, theme: Theme, tui?: ContextTui) {
+	constructor(report: ContextReport, done: () => void, theme: PanelTheme, tui?: ContextTui) {
 		this.done = done;
+		this.theme = theme;
 		this.requestRender = tui?.requestRender?.bind(tui) ?? (() => {});
-		this.viewport = Math.max(8, Math.floor((tui?.height ?? 32) * 0.86));
+		this.viewport = Math.max(8, Math.floor((tui?.height ?? 32) * 0.86) - 2);
 		const paint: Paint = (color, text) => theme.fg(color, text);
-		this.dashboard = [...dashboardLines(report, paint), "", paint("dim", "[j/k] scroll · [d] details · [q] close")];
-		this.details = [...detailLines(report, paint), "", paint("dim", "[j/k] scroll · [d] dashboard · [q] close")];
+		this.dashboard = [...dashboardLines(report, paint), "", paint("dim", "↑↓/j k scroll · d details · q/Esc close")];
+		this.details = [...detailLines(report, paint), "", paint("dim", "↑↓/j k scroll · d dashboard · q/Esc close")];
 	}
 
 	private currentLines(): string[] {
@@ -681,9 +671,25 @@ export class ContextReportComponent {
 
 	render(width: number): string[] {
 		const usable = Math.max(1, width);
-		this.wrapped = this.currentLines().flatMap((line) => wrapTextWithAnsi(line, usable));
+		if (usable < PANEL_MIN_WIDTH) {
+			this.wrapped = this.currentLines().flatMap((line) => wrapTextWithAnsi(line, usable));
+			this.offset = Math.min(this.offset, this.maxOffset());
+			return this.wrapped.slice(this.offset, this.offset + this.viewport);
+		}
+
+		const innerWidth = Math.max(1, usable - PANEL_PADDING * 2 - 2);
+		const pad = " ".repeat(PANEL_PADDING);
+		const content = this.currentLines().flatMap((line) => wrapTextWithAnsi(line, innerWidth));
+		this.wrapped = content.map((line) => {
+			const padded = line + " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+			return panelBg(this.theme, this.theme.fg("border", `│${pad}`) + padded + this.theme.fg("border", `${pad}│`));
+		});
 		this.offset = Math.min(this.offset, this.maxOffset());
-		return this.wrapped.slice(this.offset, this.offset + this.viewport);
+		const title = "╭─ /context ";
+		const top = panelBg(this.theme, this.theme.fg("border", `${title}${"─".repeat(Math.max(0, usable - title.length - 1))}╮`));
+		const bottom = panelBg(this.theme, this.theme.fg("border", `╰${"─".repeat(Math.max(0, usable - 2))}╯`));
+		const body = this.wrapped.slice(this.offset, this.offset + this.viewport);
+		return [top, ...body, bottom];
 	}
 
 	private maxOffset(): number {
