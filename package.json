@@ -1,6 +1,6 @@
 {
   "name": "@irfansofyana/pi-setup",
-  "version": "0.1.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Irfan's installable Pi coding-agent setup",
   "type": "module",
