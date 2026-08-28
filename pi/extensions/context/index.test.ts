@@ -316,8 +316,8 @@ test("dashboard surfaces the last-prompt bar, spend, tools, and skills without a
 	assert.match(dashboard, /last prompt/);
 	assert.match(dashboard, /▓/);
 	assert.match(dashboard, /prompt tokens/);
-	assert.match(dashboard, /skills  research ×1/);
-	assert.match(dashboard, /spend  in /);
+	assert.match(dashboard, /skills research ×1/);
+	assert.match(dashboard, /spend in /);
 	assert.doesNotMatch(dashboard, /chars÷4/);
 	assert.doesNotMatch(dashboard, /estimated/);
 });
@@ -363,7 +363,38 @@ test("tool bloat shows the aggregate that triggered, not just the largest result
 	assert.equal(report.toolBloat.status, "critical");
 	assert.equal(report.toolBloat.observedChars, 54_000);
 	assert.equal(report.toolBloat.largestChars, 9_000);
-	assert.match(formatDashboard(report), /aggregate 54,000 chars/);
+	assert.match(formatDashboard(report), /aggregate 54,000 chars \(limit 50,000\)/);
+	assert.doesNotMatch(formatDashboard(report), /largest 9,000/);
+});
+
+test("tool bloat warning names the trigger that fired", () => {
+	const singleHuge = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("r", { role: "toolResult", toolName: "read", content: [{ type: "text", text: "x".repeat(20_001) }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const dashboard = formatDashboard(singleHuge);
+	assert.equal(singleHuge.toolBloat.status, "critical");
+	assert.match(dashboard, /largest 20,001 chars \(limit 20,000\)/);
+	assert.doesNotMatch(dashboard, /aggregate 20,001/);
+});
+
+test("tool bloat reports both triggers when both thresholds fire", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("r", { role: "toolResult", toolName: "read", content: [{ type: "text", text: "x".repeat(21_000) }] }),
+				message("s", { role: "toolResult", toolName: "bash", content: [{ type: "text", text: "y".repeat(30_000) }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const dashboard = formatDashboard(report);
+	assert.match(dashboard, /aggregate 51,000 chars \(limit 50,000\)/);
+	assert.match(dashboard, /largest 30,000 chars \(limit 20,000\)/);
 });
 
 test("labels fork points as branch points, not branches", () => {
@@ -408,4 +439,75 @@ test("toggles between dashboard and details on [d]", () => {
 	assert.match(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
 	component.handleInput("d");
 	assert.doesNotMatch(component.render(80).join("\n"), /Spend \(exact provider-reported usage/);
+});
+
+test("frames the report in a bordered panel on wide terminals", () => {
+	const bgCalls: string[] = [];
+	const theme = {
+		fg: (_name: string, value: string) => value,
+		bg: (name: string, value: string) => {
+			bgCalls.push(name);
+			return value;
+		},
+	};
+	const report = collectContextReport(source());
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
+	const lines = component.render(60);
+	assert.match(lines[0]!, /^╭/);
+	assert.match(lines[0]!, /╮$/);
+	assert.match(lines[lines.length - 1]!, /^╰/);
+	assert.match(lines[lines.length - 1]!, /╯$/);
+	for (const line of lines.slice(1, -1)) assert.match(line, /^│.*│$/);
+	for (const line of lines) assert.equal(visibleWidth(line), 60, `line must fill exactly 60 columns`);
+	assert.ok(bgCalls.length > 0, "panel background applied via theme.bg");
+	assert.ok(bgCalls.every((name) => name === "selectedBg"), "panel uses the raised-surface theme background");
+});
+
+test("falls back to plain lines on narrow terminals", () => {
+	const theme = { fg: (_name: string, value: string) => value };
+	const report = collectContextReport(source());
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 32 });
+	for (const width of [10, 20, 30]) {
+		const lines = component.render(width);
+		assert.ok(lines.length > 0);
+		for (const line of lines) {
+			assert.doesNotMatch(line, /[╭╮╰╯│]/);
+			assert.ok(visibleWidth(line) <= width);
+		}
+	}
+});
+
+test("fits the framed panel within short terminal heights", () => {
+	const theme = { fg: (_name: string, value: string) => value, bg: (_name: string, value: string) => value };
+	const report = collectContextReport(source());
+	for (const height of [4, 8, 10, 11]) {
+		const component = new ContextReportComponent(report, () => {}, theme as any, { height });
+		const lines = component.render(60);
+		const available = Math.floor(height * 0.86);
+		assert.ok(lines.length <= available, `height ${height}: rendered ${lines.length} lines exceeds overlay cap ${available}`);
+		assert.ok(lines.length >= 3, `height ${height}: framed panel must keep top/body/bottom borders`);
+	}
+});
+
+test("scrolls with j/k and resets offset when toggling views", () => {
+	const theme = { fg: (_name: string, value: string) => value };
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("a", { role: "assistant", provider: "openai", model: "gpt-test", usage: usage(10), content: [{ type: "toolCall", name: "read", id: "1", arguments: {} }] }),
+				message("r", { role: "toolResult", toolName: "read", isError: false, content: [{ type: "text", text: "result" }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const component = new ContextReportComponent(report, () => {}, theme as any, { height: 20 });
+	const first = component.render(60).join("\n");
+	component.handleInput("j");
+	assert.notEqual(component.render(60).join("\n"), first);
+	component.handleInput("k");
+	assert.equal(component.render(60).join("\n"), first);
+	component.handleInput("d");
+	component.handleInput("j");
+	component.handleInput("d");
+	assert.equal(component.render(60).join("\n"), first, "toggling views resets scroll offset");
 });

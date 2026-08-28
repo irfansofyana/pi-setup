@@ -12,6 +12,6 @@ Package-owned, read-only active-session facts. Separate from companion `pi-stats
 - Does not print raw system prompts, context-file contents, skill contents, or tool output. Metadata and counts only.
 - Flags a large tool result only when it exceeds exact char thresholds (aggregate >50,000 chars or a single result >20,000 chars).
 
-In TUI mode, a compact dashboard opens by default — model/window, last-prompt bar (exact, previous turn), spend, turns/models, tool sizes, skills, session shape, and prompt size. Press `d` to toggle the full detail view; scroll with `j`/`k`, `g`/`G`, page-up/down; press `q`, `Escape`, or `Ctrl-C` to close. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes the report to stderr so structured stdout stays protocol-safe.
+In TUI mode, a framed responsive card opens by default — context-pressure bar, model/window, spend, session counts, and only relevant activity or warnings. Press `d` to toggle the full detail view; scroll with `↑`/`↓`, `j`/`k`, `g`/`G`, page-up/down; press `q`, `Escape`, or `Ctrl-C` to close. Narrow terminals (under 40 columns) fall back to a plain, unframed list. Print mode emits the full dashboard-plus-details report to stdout; RPC mode sends a dashboard-summary notification; JSON mode writes the dashboard summary to stderr so structured stdout stays protocol-safe.
 
 Run `/reload` after package or extension updates before using `/context`.
