@@ -477,6 +477,18 @@ test("falls back to plain lines on narrow terminals", () => {
 	}
 });
 
+test("fits the framed panel within short terminal heights", () => {
+	const theme = { fg: (_name: string, value: string) => value, bg: (_name: string, value: string) => value };
+	const report = collectContextReport(source());
+	for (const height of [4, 8, 10, 11]) {
+		const component = new ContextReportComponent(report, () => {}, theme as any, { height });
+		const lines = component.render(60);
+		const available = Math.floor(height * 0.86);
+		assert.ok(lines.length <= available, `height ${height}: rendered ${lines.length} lines exceeds overlay cap ${available}`);
+		assert.ok(lines.length >= 3, `height ${height}: framed panel must keep top/body/bottom borders`);
+	}
+});
+
 test("scrolls with j/k and resets offset when toggling views", () => {
 	const theme = { fg: (_name: string, value: string) => value };
 	const report = collectContextReport(source({

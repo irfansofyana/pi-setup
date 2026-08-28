@@ -665,7 +665,7 @@ export class ContextReportComponent {
 		this.done = done;
 		this.theme = theme;
 		this.requestRender = tui?.requestRender?.bind(tui) ?? (() => {});
-		this.viewport = Math.max(8, Math.floor((tui?.height ?? 32) * 0.86) - 2);
+		this.viewport = Math.max(1, Math.floor((tui?.height ?? 32) * 0.86) - 2);
 		const paint: Paint = (color, text) => theme.fg(color, text);
 		this.dashboard = [...dashboardLines(report, paint), "", paint("dim", "↑↓/j k scroll · d details · q/Esc close")];
 		this.details = [...detailLines(report, paint), "", paint("dim", "↑↓/j k scroll · d dashboard · q/Esc close")];
