@@ -557,7 +557,13 @@ function dashboardLines(report: ContextReport, paint: Paint = noPaint): string[]
 		lines.push(`${formatNumber(report.lastPrompt.promptTokens)} prompt tokens · window unknown`);
 	}
 	if (report.toolBloat.status === "critical") {
-		lines.push(paint("error", `⚠ tool output high · ${formatNumber(report.toolBloat.observedChars)} chars aggregate`));
+		const aggregateOver = report.toolBloat.observedChars > TOOL_BLOAT_CHARS;
+		const largestOver = report.toolBloat.largestChars > LARGE_TOOL_RESULT_CHARS;
+		const triggers = [
+			aggregateOver ? `aggregate ${formatNumber(report.toolBloat.observedChars)} chars (limit ${formatNumber(TOOL_BLOAT_CHARS)})` : "",
+			largestOver ? `largest ${formatNumber(report.toolBloat.largestChars)} chars (limit ${formatNumber(LARGE_TOOL_RESULT_CHARS)})` : "",
+		].filter(Boolean);
+		lines.push(paint("error", `⚠ tool output high · ${triggers.join(" · ")}`));
 	}
 	lines.push("");
 	lines.push(paint("muted", "model"), `${report.model.provider}/${report.model.id} · window ${formatNumber(report.model.contextWindow)}`);

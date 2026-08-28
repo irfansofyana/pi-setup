@@ -363,7 +363,38 @@ test("tool bloat shows the aggregate that triggered, not just the largest result
 	assert.equal(report.toolBloat.status, "critical");
 	assert.equal(report.toolBloat.observedChars, 54_000);
 	assert.equal(report.toolBloat.largestChars, 9_000);
-	assert.match(formatDashboard(report), /54,000 chars aggregate/);
+	assert.match(formatDashboard(report), /aggregate 54,000 chars \(limit 50,000\)/);
+	assert.doesNotMatch(formatDashboard(report), /largest 9,000/);
+});
+
+test("tool bloat warning names the trigger that fired", () => {
+	const singleHuge = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("r", { role: "toolResult", toolName: "read", content: [{ type: "text", text: "x".repeat(20_001) }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const dashboard = formatDashboard(singleHuge);
+	assert.equal(singleHuge.toolBloat.status, "critical");
+	assert.match(dashboard, /largest 20,001 chars \(limit 20,000\)/);
+	assert.doesNotMatch(dashboard, /aggregate 20,001/);
+});
+
+test("tool bloat reports both triggers when both thresholds fire", () => {
+	const report = collectContextReport(source({
+		sessionManager: {
+			getEntries: () => [
+				message("r", { role: "toolResult", toolName: "read", content: [{ type: "text", text: "x".repeat(21_000) }] }),
+				message("s", { role: "toolResult", toolName: "bash", content: [{ type: "text", text: "y".repeat(30_000) }] }),
+			],
+			buildContextEntries: () => [],
+		},
+	}));
+	const dashboard = formatDashboard(report);
+	assert.match(dashboard, /aggregate 51,000 chars \(limit 50,000\)/);
+	assert.match(dashboard, /largest 30,000 chars \(limit 20,000\)/);
 });
 
 test("labels fork points as branch points, not branches", () => {
