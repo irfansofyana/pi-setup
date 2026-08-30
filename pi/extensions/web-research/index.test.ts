@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import webResearch from "./index.ts";
 
-function harness(fetchImpl: typeof fetch, env: Record<string, string | undefined> = {}) {
+function harness(
+  fetchImpl: typeof fetch,
+  env: Record<string, string | undefined> = {},
+  overrides: Record<string, unknown> = {},
+) {
   const tools = new Map<string, any>();
   webResearch({ registerTool(tool: any) { tools.set(tool.name, tool); } } as any, {
     fetch: fetchImpl,
     env,
     now: () => 1_725_000_000_000,
+    ...overrides,
   });
   return tools;
 }
@@ -82,6 +90,7 @@ test("web_search uses Tavily by default and returns compact normalized evidence"
     durationMs: 0,
     cacheHit: false,
     truncated: false,
+    retryCount: 0,
   });
   assert.ok(updates.length >= 1);
 });
@@ -130,6 +139,7 @@ test("web_search routes declared semantic intent to Exa and preserves exact high
     durationMs: 0,
     cacheHit: false,
     truncated: false,
+    retryCount: 0,
   });
 });
 
@@ -243,7 +253,7 @@ test("web_search falls back after a retryable Tavily upstream failure", async ()
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
 
   const result = await tools.get("web_search").execute(
     "call-transient",
@@ -312,6 +322,7 @@ test("web_fetch uses Tavily Extract by default and reports independent URL failu
     durationMs: 0,
     cacheHit: false,
     truncated: false,
+    retryCount: 0,
     artifacts: [],
   });
 });
@@ -388,4 +399,151 @@ test("web_fetch rejects non-public URLs before calling a provider", async () => 
     );
   }
   assert.equal(calls, 0);
+});
+
+test("transport honors Retry-After before returning a successful search", async () => {
+  let calls = 0;
+  const sleeps: number[] = [];
+  const tools = harness(async () => {
+    calls++;
+    if (calls === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "2" } });
+    return new Response(JSON.stringify({ request_id: "after-retry", results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, { TAVILY_API_KEY: "test-tavily" }, {
+    maxRetries: 2,
+    sleep: async (ms: number) => { sleeps.push(ms); },
+  });
+
+  const result = await tools.get("web_search").execute(
+    "retry-search",
+    { query: "rate-limited query", provider: "tavily" },
+    new AbortController().signal,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  assert.equal(calls, 2);
+  assert.deepEqual(sleeps, [2_000]);
+  assert.equal(result.details.retryCount, 1);
+});
+
+test("caller cancellation aborts the underlying provider request and never falls back", async () => {
+  let receivedSignal: AbortSignal | undefined;
+  let calls = 0;
+  const tools = harness(async (_input, init = {}) => {
+    calls++;
+    receivedSignal = init.signal as AbortSignal;
+    return await new Promise<Response>((_resolve, reject) => {
+      receivedSignal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { requestTimeoutMs: 60_000 });
+
+  const controller = new AbortController();
+  const pending = tools.get("web_search").execute(
+    "cancel-search",
+    { query: "cancel me" },
+    controller.signal,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+  await Promise.resolve();
+  controller.abort();
+
+  await assert.rejects(pending, /cancelled/i);
+  assert.equal(receivedSignal?.aborted, true);
+  assert.equal(calls, 1);
+});
+
+test("identical searches reuse the bounded session cache without replaying route attempts", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    return new Response(JSON.stringify({
+      request_id: "cached-search",
+      results: [{ title: "Cached", url: "https://example.test/cached", content: "Evidence." }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily" });
+
+  const params = { query: "cache this", includeDomains: ["example.test"] };
+  const first = await tools.get("web_search").execute("cache-1", params, undefined, undefined, { cwd: "/tmp/project" });
+  const second = await tools.get("web_search").execute("cache-2", params, undefined, undefined, { cwd: "/tmp/project" });
+
+  assert.equal(calls, 1);
+  assert.equal(first.details.cacheHit, false);
+  assert.equal(second.details.cacheHit, true);
+  assert.deepEqual(second.details.attempts, []);
+});
+
+test("oversized fetched content is truncated inline and stored in an owner-only artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-research-artifacts-"));
+  const fullContent = `# Large source\n${"x".repeat(20_000)}\nEND-SENTINEL`;
+  const tools = harness(async () => new Response(JSON.stringify({
+    request_id: "large-fetch",
+    results: [{ url: "https://docs.example.test/large", raw_content: fullContent }],
+    failed_results: [],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" }, {
+    artifactRoot: root,
+    maxInlineChars: 1_000,
+    artifactTtlMs: 3_600_000,
+    randomId: () => "artifact-fixed-id",
+  });
+
+  const result = await tools.get("web_fetch").execute(
+    "large-fetch",
+    { urls: ["https://docs.example.test/large"], maxCharactersPerResult: 50_000 },
+    undefined,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  const text = result.content[0]?.text ?? "";
+  assert.match(text, /artifact-fixed-id/);
+  assert.doesNotMatch(text, /END-SENTINEL/);
+  assert.equal(result.details.truncated, true);
+  assert.equal(result.details.artifacts.length, 1);
+  const artifact = result.details.artifacts[0];
+  assert.equal(artifact.id, "artifact-fixed-id");
+  assert.equal((await stat(root)).mode & 0o777, 0o700);
+  assert.equal((await stat(artifact.path)).mode & 0o777, 0o600);
+  const stored = JSON.parse(await readFile(artifact.path, "utf8"));
+  assert.equal(stored.content, fullContent);
+  assert.equal(stored.url, "https://docs.example.test/large");
+});
+
+test("web_fetch falls back to Exa only when automatic Tavily extraction has no successes", async () => {
+  const requests: string[] = [];
+  const tools = harness(async (input) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("tavily")) {
+      return new Response(JSON.stringify({
+        request_id: "tavily-all-failed",
+        results: [],
+        failed_results: [{ url: "https://example.test/page", error: "extract_failed" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      requestId: "exa-fallback-fetch",
+      results: [{ url: "https://example.test/page", title: "Recovered", text: "Recovered body." }],
+      statuses: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+
+  const result = await tools.get("web_fetch").execute(
+    "fetch-fallback",
+    { urls: ["https://example.test/page"] },
+    undefined,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  assert.deepEqual(requests, ["https://api.tavily.com/extract", "https://api.exa.ai/contents"]);
+  assert.equal(result.details.provider, "exa");
+  assert.deepEqual(result.details.attempts, [
+    { provider: "tavily", outcome: "error", status: 200 },
+    { provider: "exa", outcome: "success", status: 200 },
+  ]);
+  assert.match(result.content[0]?.text ?? "", /Recovered body\./);
 });
