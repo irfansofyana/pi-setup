@@ -34,6 +34,7 @@ test("package manifest ships every declared resource path", async () => {
     "skills/my-web-search/references/source-hierarchy.md",
     "skills/my-web-search/references/templates.md",
     "pi/extensions/web-research/package.json",
+    "pi/extensions/web-research/evaluation-cases.json",
     "pi/themes/irfan-sumi/theme.json",
   ]) {
     await access(path.join(root, requiredPath));

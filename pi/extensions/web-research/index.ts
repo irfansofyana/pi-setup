@@ -171,6 +171,11 @@ function numericValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function safeFailureCode(value: unknown, fallback: string): string {
+  const text = textValue(value);
+  return text && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,79}$/.test(text) ? text : fallback;
+}
+
 function tavilyMode(profile: SearchProfile): "fast" | "basic" | "advanced" {
   if (profile === "fast") return "fast";
   if (profile === "thorough") return "advanced";
@@ -187,6 +192,26 @@ function providerLabel(provider: ProviderName): string {
   return provider === "tavily" ? "Tavily" : "Exa";
 }
 
+function publicProviderUrl(value: unknown): string | undefined {
+  const url = textValue(value);
+  if (!url) return undefined;
+  try {
+    return publicUrls([url])[0];
+  } catch {
+    return undefined;
+  }
+}
+
+function ensureNotCancelled(signal: AbortSignal | undefined, provider: ProviderName): void {
+  if (signal?.aborted) {
+    throw new WebProviderError({
+      provider,
+      kind: "cancelled",
+      message: `${providerLabel(provider)} request was cancelled.`,
+    });
+  }
+}
+
 function formatSearchResults(results: WebDocument[]): string {
   if (results.length === 0) return "No web search results.";
   return results.map((result, index) => [
@@ -194,7 +219,7 @@ function formatSearchResults(results: WebDocument[]): string {
     `   URL: ${result.url}`,
     ...(result.publishedAt ? [`   Published: ${result.publishedAt}`] : []),
     ...(result.author ? [`   Author: ${result.author}`] : []),
-    `   Evidence: ${result.snippets.length ? result.snippets.join(" […] ") : "No extractive snippet returned."}`,
+    `   Snippet (discovery only): ${result.snippets.length ? result.snippets.join(" […] ") : "No extractive snippet returned."}`,
   ].join("\n")).join("\n\n");
 }
 
@@ -220,7 +245,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
     ? payload.results.flatMap((value): WebDocument[] => {
       if (!value || typeof value !== "object") return [];
       const result = value as Record<string, unknown>;
-      const url = textValue(result.url);
+      const url = publicProviderUrl(result.url);
       if (!url) return [];
       const snippet = textValue(result.content);
       return [{
@@ -257,7 +282,7 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
     ? payload.results.flatMap((value): WebDocument[] => {
       if (!value || typeof value !== "object") return [];
       const result = value as Record<string, unknown>;
-      const url = textValue(result.url);
+      const url = publicProviderUrl(result.url);
       if (!url) return [];
       const snippets = Array.isArray(result.highlights)
         ? result.highlights.flatMap((item) => textValue(item) ? [textValue(item)!] : [])
@@ -284,19 +309,24 @@ async function executeSearch(
   dependencies: WebResearchDependencies,
   signal: AbortSignal | undefined,
   onUpdate: ((update: any) => void) | undefined,
-): Promise<{ response: ProviderSearchResponse; attempts: SearchAttempt[] }> {
+): Promise<{ response: ProviderSearchResponse; attempts: SearchAttempt[]; retryCount: number }> {
   const selected = initialProvider(input);
   const attempts: SearchAttempt[] = [];
+  let retryCount = 0;
   const run = async (provider: ProviderName): Promise<ProviderSearchResponse> => {
     onUpdate?.({ content: [{ type: "text", text: `Searching ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
         ? await searchTavily(input, dependencies, signal)
         : await searchExa(input, dependencies, signal);
+      retryCount += response.retryCount;
       attempts.push({ provider, outcome: response.documents.length ? "success" : "empty", status: response.status });
       return response;
     } catch (error) {
-      if (error instanceof WebProviderError) attempts.push({ provider, outcome: "error", status: error.status, errorKind: error.kind });
+      if (error instanceof WebProviderError) {
+        retryCount += error.retryCount;
+        attempts.push({ provider, outcome: "error", status: error.status, errorKind: error.kind });
+      }
       throw error;
     }
   };
@@ -310,12 +340,12 @@ async function executeSearch(
       && error instanceof WebProviderError
       && error.retryable
       && Boolean(dependencies.env.EXA_API_KEY);
-    if (mayFallbackAfterError) return { response: await run("exa"), attempts };
+    if (mayFallbackAfterError) return { response: await run("exa"), attempts, retryCount };
     throw error;
   }
   const mayFallback = input.provider === "auto" && selected === "tavily" && first.documents.length === 0 && Boolean(dependencies.env.EXA_API_KEY);
-  if (mayFallback) return { response: await run("exa"), attempts };
-  return { response: first, attempts };
+  if (mayFallback) return { response: await run("exa"), attempts, retryCount };
+  return { response: first, attempts, retryCount };
 }
 
 interface FetchInput {
@@ -336,7 +366,7 @@ interface ProviderFetchResponse {
   resolvedMode: string;
   status: number;
   requestId?: string;
-  documents: Array<WebDocument & { content: string }>;
+  documents: Array<WebDocument & { content: string; providerTruncated: boolean }>;
   failures: FetchFailure[];
   retryCount: number;
 }
@@ -417,22 +447,29 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
     }),
   }, dependencies, signal);
   const documents = Array.isArray(payload.results)
-    ? payload.results.flatMap((value): Array<WebDocument & { content: string }> => {
+    ? payload.results.flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
       if (!value || typeof value !== "object") return [];
       const result = value as Record<string, unknown>;
-      const url = textValue(result.url);
-      const content = textValue(result.raw_content);
-      if (!url || !content) return [];
-      return [{ title: textValue(result.title) ?? url, url, snippets: [], content }];
+      const url = publicProviderUrl(result.url);
+      const rawContent = textValue(result.raw_content);
+      if (!url || !rawContent) return [];
+      const content = rawContent.slice(0, input.maxCharactersPerResult);
+      return [{
+        title: textValue(result.title) ?? url,
+        url,
+        snippets: [],
+        content,
+        providerTruncated: rawContent.length > content.length,
+      }];
     })
     : [];
   const failures = Array.isArray(payload.failed_results)
     ? payload.failed_results.flatMap((value): FetchFailure[] => {
       if (!value || typeof value !== "object") return [];
       const result = value as Record<string, unknown>;
-      const url = textValue(result.url);
+      const url = publicProviderUrl(result.url);
       if (!url) return [];
-      return [{ url, error: textValue(result.error) ?? "extract_failed" }];
+      return [{ url, error: safeFailureCode(result.error, "extract_failed") }];
     })
     : [];
   return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId: textValue(payload.request_id), documents, failures, retryCount };
@@ -442,10 +479,13 @@ function exaStatusFailure(value: unknown): FetchFailure | undefined {
   if (!value || typeof value !== "object") return undefined;
   const status = value as Record<string, unknown>;
   if (status.status === "success") return undefined;
-  const url = textValue(status.id) ?? textValue(status.url);
+  const url = publicProviderUrl(status.id) ?? publicProviderUrl(status.url);
   if (!url) return undefined;
   const error = status.error && typeof status.error === "object" ? status.error as Record<string, unknown> : {};
-  return { url, error: textValue(error.tag) ?? textValue(error.error) ?? textValue(status.status) ?? "contents_failed" };
+  return {
+    url,
+    error: safeFailureCode(error.tag, safeFailureCode(error.error, safeFailureCode(status.status, "contents_failed"))),
+  };
 }
 
 async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderFetchResponse> {
@@ -461,12 +501,13 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
     }),
   }, dependencies, signal);
   const documents = Array.isArray(payload.results)
-    ? payload.results.flatMap((value): Array<WebDocument & { content: string }> => {
+    ? payload.results.flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
       if (!value || typeof value !== "object") return [];
       const result = value as Record<string, unknown>;
-      const url = textValue(result.url);
-      const content = textValue(result.text);
-      if (!url || !content) return [];
+      const url = publicProviderUrl(result.url);
+      const rawContent = textValue(result.text);
+      if (!url || !rawContent) return [];
+      const content = rawContent.slice(0, input.maxCharactersPerResult);
       const snippets = Array.isArray(result.highlights)
         ? result.highlights.flatMap((item) => textValue(item) ? [textValue(item)!] : [])
         : [];
@@ -475,6 +516,7 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
         url,
         snippets,
         content,
+        providerTruncated: rawContent.length > content.length,
         publishedAt: textValue(result.publishedDate),
         author: textValue(result.author),
       }];
@@ -494,22 +536,31 @@ async function executeFetch(
   dependencies: WebResearchDependencies,
   signal: AbortSignal | undefined,
   onUpdate: ((update: any) => void) | undefined,
-): Promise<{ response: ProviderFetchResponse; attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }> }> {
+): Promise<{
+  response: ProviderFetchResponse;
+  attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }>;
+  retryCount: number;
+}> {
   const selected: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
   const attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }> = [];
+  let retryCount = 0;
   const run = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
     onUpdate?.({ content: [{ type: "text", text: `Fetching with ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
         ? await fetchTavily(input, dependencies, signal)
         : await fetchExa(input, dependencies, signal);
+      retryCount += response.retryCount;
       const outcome = response.documents.length && response.failures.length
         ? "partial"
         : response.documents.length ? "success" : response.failures.length ? "error" : "empty";
       attempts.push({ provider, outcome, status: response.status });
       return response;
     } catch (error) {
-      if (error instanceof WebProviderError) attempts.push({ provider, outcome: "error", status: error.status, errorKind: error.kind });
+      if (error instanceof WebProviderError) {
+        retryCount += error.retryCount;
+        attempts.push({ provider, outcome: "error", status: error.status, errorKind: error.kind });
+      }
       throw error;
     }
   };
@@ -523,28 +574,34 @@ async function executeFetch(
       && error instanceof WebProviderError
       && error.retryable
       && Boolean(dependencies.env.EXA_API_KEY);
-    if (mayFallbackAfterError) return { response: await run("exa"), attempts };
+    if (mayFallbackAfterError) return { response: await run("exa"), attempts, retryCount };
     throw error;
   }
   const mayFallback = input.provider === "auto"
     && selected === "tavily"
     && first.documents.length === 0
     && Boolean(dependencies.env.EXA_API_KEY);
-  if (mayFallback) return { response: await run("exa"), attempts };
-  return { response: first, attempts };
+  if (mayFallback) return { response: await run("exa"), attempts, retryCount };
+  return { response: first, attempts, retryCount };
 }
 
 async function prepareFetchResults(
   response: ProviderFetchResponse,
   artifacts: ArtifactStore,
   maxInlineChars: number,
+  signal?: AbortSignal,
 ): Promise<{ text: string; truncated: boolean; artifacts: ArtifactRecord[] }> {
+  ensureNotCancelled(signal, response.provider);
   const records: ArtifactRecord[] = [];
-  let truncated = false;
+  let truncated = response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
   for (let index = 0; index < response.documents.length; index++) {
+    ensureNotCancelled(signal, response.provider);
     const document = response.documents[index]!;
     let content = document.content;
+    const providerCapMarker = document.providerTruncated
+      ? `\n\n[Provider content capped at ${document.content.length} characters.]`
+      : "";
     if (content.length > maxInlineChars) {
       const artifact = await artifacts.save({
         url: document.url,
@@ -552,9 +609,12 @@ async function prepareFetchResults(
         content: document.content,
         provider: response.provider,
       });
+      ensureNotCancelled(signal, response.provider);
       records.push(artifact);
       truncated = true;
-      content = `${content.slice(0, maxInlineChars)}\n\n[Content truncated. Full owner-only artifact: ${artifact.id} at ${artifact.path}]`;
+      content = `${content.slice(0, maxInlineChars)}\n\n[Content truncated. Full owner-only artifact: ${artifact.id} at ${artifact.path}]${providerCapMarker}`;
+    } else {
+      content = `${content}${providerCapMarker}`;
     }
     successful.push([
       `${index + 1}. ${document.title}`,
@@ -596,7 +656,7 @@ export default function webResearch(
     name: "web_search",
     label: "Web Search",
     description: "Search public web sources through the first-party Tavily/Exa research harness.",
-    promptSnippet: "Search the public web for compact source-linked evidence. Tavily is the ordinary default.",
+    promptSnippet: "Search the public web for compact source candidates. Tavily is the ordinary default.",
     promptGuidelines: [
       "Use web_search to discover sources; fetch material sources before treating snippets as confirmed evidence.",
       "Use the bundled my-web-search skill or delegate to Ciung for multi-source or iterative research.",
@@ -645,7 +705,7 @@ export default function webResearch(
           },
         };
       }
-      const { response, attempts } = await executeSearch(input, dependencies, signal, onUpdate);
+      const { response, attempts, retryCount } = await executeSearch(input, dependencies, signal, onUpdate);
       searchCache.set(cacheKey, response);
       return {
         content: [{ type: "text", text: formatSearchResults(response.documents) }],
@@ -658,7 +718,7 @@ export default function webResearch(
           durationMs: Math.max(0, dependencies.now() - startedAt),
           cacheHit: false,
           truncated: false,
-          retryCount: response.retryCount,
+          retryCount,
         },
       };
     },
@@ -700,13 +760,15 @@ export default function webResearch(
       let response = input.noCache ? undefined : fetchCache.get(cacheKey);
       const cacheHit = Boolean(response);
       let attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }> = [];
+      let retryCount = 0;
       if (!response) {
         const executed = await executeFetch(input, dependencies, signal, onUpdate);
         response = executed.response;
         attempts = executed.attempts;
+        retryCount = executed.retryCount;
         if (!input.noCache) fetchCache.set(cacheKey, response);
       }
-      const prepared = await prepareFetchResults(response, artifactStore, dependencies.maxInlineChars);
+      const prepared = await prepareFetchResults(response, artifactStore, dependencies.maxInlineChars, signal);
       return {
         content: [{ type: "text", text: prepared.text }],
         details: {
@@ -719,7 +781,7 @@ export default function webResearch(
           durationMs: Math.max(0, dependencies.now() - startedAt),
           cacheHit,
           truncated: prepared.truncated,
-          retryCount: cacheHit ? 0 : response.retryCount,
+          retryCount,
           artifacts: prepared.artifacts,
         },
       };

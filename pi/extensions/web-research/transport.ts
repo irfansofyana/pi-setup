@@ -148,6 +148,8 @@ export async function requestJson<T>(
       continue;
     }
 
+    if (callerSignal?.aborted) throw cancelled(provider, attempt);
+
     if (!response.ok) {
       const error = responseError(provider, response, attempt);
       if (!error.retryable || attempt >= dependencies.maxRetries) throw error;
@@ -160,8 +162,11 @@ export async function requestJson<T>(
     }
 
     try {
-      return { response, payload: await response.json() as T, retryCount: attempt };
+      const payload = await response.json() as T;
+      if (callerSignal?.aborted) throw cancelled(provider, attempt);
+      return { response, payload, retryCount: attempt };
     } catch {
+      if (callerSignal?.aborted) throw cancelled(provider, attempt);
       const error = new WebProviderError({
         provider,
         kind: "upstream",

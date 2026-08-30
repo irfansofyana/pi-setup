@@ -1,4 +1,4 @@
-import { chmod, link, lstat, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export class TimedCache<T> {
@@ -132,14 +132,5 @@ export class ArtifactStore {
       throw error;
     }
     return { id, path: target, url: input.url, chars: input.content.length, createdAt, expiresAt };
-  }
-
-  async read(id: string): Promise<StoredArtifact | undefined> {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) return undefined;
-    try {
-      return JSON.parse(await readFile(join(this.options.root, `${id}.json`), "utf8")) as StoredArtifact;
-    } catch {
-      return undefined;
-    }
   }
 }
