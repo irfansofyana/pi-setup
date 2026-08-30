@@ -32,7 +32,7 @@ test("web_search uses Tavily by default and returns compact normalized evidence"
     }), { status: 200, headers: { "content-type": "application/json" } });
   }, { TAVILY_API_KEY: "test-tavily" });
 
-  assert.deepEqual([...tools.keys()], ["web_search"]);
+  assert.deepEqual([...tools.keys()], ["web_search", "web_fetch"]);
   const tool = tools.get("web_search");
   assert.deepEqual(tool.parameters.required, ["query"]);
   assert.equal(tool.executionMode, "parallel");
@@ -258,4 +258,134 @@ test("web_search falls back after a retryable Tavily upstream failure", async ()
     { provider: "tavily", outcome: "error", status: 503, errorKind: "upstream" },
     { provider: "exa", outcome: "empty", status: 200 },
   ]);
+});
+
+test("web_fetch uses Tavily Extract by default and reports independent URL failures", async () => {
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  const tools = harness(async (input, init = {}) => {
+    requests.push({ url: String(input), init });
+    return new Response(JSON.stringify({
+      request_id: "tavily-extract-1",
+      results: [{
+        url: "https://docs.example.test/guide",
+        raw_content: "# Guide\n\nExact extracted content.",
+      }],
+      failed_results: [{
+        url: "https://docs.example.test/missing",
+        error: "upstream_extract_failed",
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+
+  const tool = tools.get("web_fetch");
+  assert.ok(tool);
+  assert.equal(tool.executionMode, "parallel");
+  const result = await tool.execute(
+    "fetch-tavily",
+    {
+      urls: ["https://docs.example.test/guide", "https://docs.example.test/missing"],
+      focus: "installation steps",
+      maxCharactersPerResult: 12_000,
+    },
+    new AbortController().signal,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.url, "https://api.tavily.com/extract");
+  assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), {
+    urls: ["https://docs.example.test/guide", "https://docs.example.test/missing"],
+    extract_depth: "basic",
+    format: "markdown",
+    query: "installation steps",
+  });
+  assert.match(result.content[0]?.text ?? "", /Exact extracted content\./);
+  assert.match(result.content[0]?.text ?? "", /upstream_extract_failed/);
+  assert.deepEqual(result.details, {
+    provider: "tavily",
+    resolvedMode: "basic",
+    attempts: [{ provider: "tavily", outcome: "partial", status: 200 }],
+    successCount: 1,
+    failureCount: 1,
+    requestId: "tavily-extract-1",
+    durationMs: 0,
+    cacheHit: false,
+    truncated: false,
+    artifacts: [],
+  });
+});
+
+test("web_fetch uses Exa Contents when selected and preserves focused highlights", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const tools = harness(async (input, init = {}) => {
+    assert.equal(String(input), "https://api.exa.ai/contents");
+    requestBody = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({
+      requestId: "exa-contents-1",
+      results: [{
+        url: "https://research.example.test/paper",
+        title: "Research paper",
+        text: "Full extracted paper body.",
+        highlights: ["Focused exact passage."],
+        publishedDate: "2026-06-01T00:00:00.000Z",
+        author: "Author",
+      }],
+      statuses: [{ id: "https://research.example.test/timeout", status: "error", error: { tag: "CRAWL_TIMEOUT" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+
+  const result = await tools.get("web_fetch").execute(
+    "fetch-exa",
+    {
+      urls: ["https://research.example.test/paper", "https://research.example.test/timeout"],
+      provider: "exa",
+      focus: "core finding",
+      maxCharactersPerResult: 8_000,
+    },
+    new AbortController().signal,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  assert.deepEqual(requestBody, {
+    urls: ["https://research.example.test/paper", "https://research.example.test/timeout"],
+    text: { maxCharacters: 8_000 },
+    highlights: { query: "core finding", maxCharacters: 8_000 },
+  });
+  const text = result.content[0]?.text ?? "";
+  assert.match(text, /Focused exact passage\./);
+  assert.match(text, /Full extracted paper body\./);
+  assert.match(text, /CRAWL_TIMEOUT/);
+  assert.equal(result.details.provider, "exa");
+  assert.equal(result.details.successCount, 1);
+  assert.equal(result.details.failureCount, 1);
+});
+
+test("web_fetch rejects non-public URLs before calling a provider", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    throw new Error("must not be called");
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+
+  for (const url of [
+    "http://127.0.0.1/admin",
+    "http://169.254.169.254/latest/meta-data",
+    "http://user:pass@example.test/secret",
+    "http://service.local/private",
+    "file:///etc/passwd",
+  ]) {
+    await assert.rejects(
+      tools.get("web_fetch").execute(
+        "fetch-unsafe",
+        { urls: [url] },
+        new AbortController().signal,
+        undefined,
+        { cwd: "/tmp/project" },
+      ),
+      /public HTTP\(S\) URL|URL credentials|public hostname/i,
+    );
+  }
+  assert.equal(calls, 0);
 });
