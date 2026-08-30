@@ -122,6 +122,12 @@ interface SearchAttempt {
   errorKind?: ErrorKind;
 }
 
+type ToolUpdate = {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown>;
+};
+type ToolUpdateCallback = ((update: ToolUpdate) => void) | undefined;
+
 function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number, field: string): number {
   if (value === undefined) return fallback;
   if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
@@ -308,7 +314,7 @@ async function executeSearch(
   input: SearchInput,
   dependencies: WebResearchDependencies,
   signal: AbortSignal | undefined,
-  onUpdate: ((update: any) => void) | undefined,
+  onUpdate: ToolUpdateCallback,
 ): Promise<{ response: ProviderSearchResponse; attempts: SearchAttempt[]; retryCount: number }> {
   const selected = initialProvider(input);
   const attempts: SearchAttempt[] = [];
@@ -535,7 +541,7 @@ async function executeFetch(
   input: FetchInput,
   dependencies: WebResearchDependencies,
   signal: AbortSignal | undefined,
-  onUpdate: ((update: any) => void) | undefined,
+  onUpdate: ToolUpdateCallback,
 ): Promise<{
   response: ProviderFetchResponse;
   attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }>;
@@ -673,8 +679,13 @@ export default function webResearch(
       publishedAfter: Schema.Optional(Schema.String({ description: "Best-effort ISO 8601 publication lower bound." })),
       publishedBefore: Schema.Optional(Schema.String({ description: "Best-effort ISO 8601 publication upper bound." })),
     }) as any,
-    async execute(_toolCallId, params, signal, onUpdate) {
-      const raw = params as Record<string, unknown>;
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      signal: AbortSignal | undefined,
+      onUpdate: ToolUpdateCallback,
+    ) {
+      const raw = params;
       const input: SearchInput = {
         query: requiredQuery(raw.query),
         maxResults: boundedInteger(raw.maxResults, 5, 1, 20, "maxResults"),
@@ -741,8 +752,13 @@ export default function webResearch(
       maxCharactersPerResult: Schema.Optional(Schema.Number({ minimum: 1_000, maximum: 50_000, description: "Provider content bound per URL; defaults to 12000." })),
       noCache: Schema.Optional(Schema.Boolean({ description: "Bypass the in-memory fetch cache for this call." })),
     }) as any,
-    async execute(_toolCallId, params, signal, onUpdate) {
-      const raw = params as Record<string, unknown>;
+    async execute(
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      signal: AbortSignal | undefined,
+      onUpdate: ToolUpdateCallback,
+    ) {
+      const raw = params;
       const input: FetchInput = {
         urls: publicUrls(raw.urls),
         provider: enumValue(raw.provider, "auto", ["auto", "tavily", "exa"] as const, "provider"),

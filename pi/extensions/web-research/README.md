@@ -31,6 +31,7 @@ Both tools accept `provider: "auto" | "tavily" | "exa"`. Explicit overrides win.
 - [Implementation tasks](TASKS.md)
 - [Roadmap](ROADMAP.md)
 - [Backlog](BACKLOG.md)
+- [Frozen evaluation cases](evaluation-cases.json)
 - [Handoff](HANDOFF.md)
 
 ## Credentials
