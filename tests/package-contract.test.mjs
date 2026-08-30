@@ -30,6 +30,10 @@ test("package manifest ships every declared resource path", async () => {
     "pi/extensions/pi-signature.ts",
     "pi/themes/irfan-sumi/index.ts",
     "skills/pi-setup/SKILL.md",
+    "skills/my-web-search/SKILL.md",
+    "skills/my-web-search/references/source-hierarchy.md",
+    "skills/my-web-search/references/templates.md",
+    "pi/extensions/web-research/package.json",
     "pi/themes/irfan-sumi/theme.json",
   ]) {
     await access(path.join(root, requiredPath));
@@ -103,4 +107,28 @@ test("documentation keeps companion packages separate from aggregate ownership",
   assert.match(setupSkill, /Report static `setEditorComponent\(\)` matches as potential claimants/);
   assert.match(setupSkill, /effective owners only when proven/);
   assert.match(setupSkill, /Never reorder packages during audit/);
+});
+
+test("native web extension and my-web-search skill ship as one provider-neutral delivery", async () => {
+  const manifest = await readJson("package.json");
+  const skill = await readFile(path.join(root, "skills/my-web-search/SKILL.md"), "utf8");
+  const hierarchy = await readFile(path.join(root, "skills/my-web-search/references/source-hierarchy.md"), "utf8");
+  const templates = await readFile(path.join(root, "skills/my-web-search/references/templates.md"), "utf8");
+
+  assert.ok(manifest.pi.extensions.includes("./pi/extensions/*/index.ts"));
+  assert.deepEqual(manifest.pi.skills, ["./skills"]);
+  assert.match(skill, /^name: my-web-search$/m);
+  assert.match(skill, /^description: Use when substantial public-web research needs multiple sources, current evidence, or citation verification\./m);
+  assert.match(skill, /web_search/);
+  assert.match(skill, /web_fetch/);
+  assert.match(skill, /search snippets[^\n]*cannot confirm material claims/i);
+  assert.match(skill, /contradictory|disconfirming/i);
+  assert.match(skill, /stop[^\n]*evidence/i);
+  assert.doesNotMatch(skill, /ninerouter|9router-web-researcher|\bmcp\s*\(/i);
+  assert.match(hierarchy, /versioned official documentation/i);
+  assert.match(hierarchy, /peer-reviewed primary paper/i);
+  assert.match(hierarchy, /Reuters or AP/i);
+  assert.match(templates, /claim \| status \| primary source \| version\/date \| conflicts/i);
+  assert.match(templates, /Goal:/);
+  assert.match(templates, /Search\/turn\/time budget:/);
 });
