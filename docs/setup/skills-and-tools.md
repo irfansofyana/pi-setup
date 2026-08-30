@@ -1,12 +1,18 @@
 # Skills and Optional Tools
 
-Install skills only with `npx skills` or `npx skills@latest`. Do not manually copy skill files unless intentionally developing a local skill.
+The aggregate package loads its declared `skills/` resources directly. Install third-party skills only with `npx skills` or `npx skills@latest`; do not manually copy either package-owned or external skill files unless intentionally developing one.
+
+## Bundled skills
+
+- `pi-setup` — audit and approval-gated migration workflow.
+- `my-web-search` — provider-neutral research method used by the main agent and preloaded by Ciung.
+
+Neither bundled skill needs a separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by Ciung, and must be removed only after an explicit audit and approval.
 
 ## Core personal skills
 
 ```bash
 npx skills add irfansofyana/ai-marketplace --global --skill mermaid
-npx skills add irfansofyana/ai-marketplace --global --skill 9router-web-researcher
 npx skills add irfansofyana/ai-marketplace --global --skill code-review
 npx skills add irfansofyana/ai-marketplace --global --skill decision-sparring
 npx skills add irfansofyana/ai-marketplace --global --skill idea-refinery

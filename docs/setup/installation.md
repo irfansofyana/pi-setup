@@ -118,7 +118,9 @@ The audit must cover:
 - selected theme and unrelated keys in `~/.pi/agent/settings.json`;
 - component config/state paths listed in [Configuration](configuration.md);
 - global and project MCP configuration;
+- separately installed `9router-web-researcher`, Tavily/Exa MCP definitions, and legacy 9router web routes as distinct migration targets;
 - trusted global agents and subagent defaults;
+- the installed Ciung template and permission entries for old versus native web tools;
 - credential references by name only, with values redacted.
 
 A matching name is not enough to delete a path. The skill must distinguish a duplicate code loader from user-owned config/state. For example, `~/.pi/agent/hindsight/config.json` remains user-owned even after Hindsight code loads from the package.
@@ -171,7 +173,7 @@ Inside Pi:
 /settings
 ```
 
-Verify expected commands, tools, skills, and themes once each; confirm component config/state still works. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
+Verify expected commands, tools, skills, and themes once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context Ciung run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
 
 ## Global subagent templates
 

@@ -2,10 +2,20 @@
 
 First-party Pi web-search and fetch extension backed by direct Tavily and Exa HTTP APIs. The extension and bundled `my-web-search` skill are one reviewed delivery.
 
-## Planned tools
+## Tools
 
 - `web_search` — compact source discovery; Tavily by default and Exa for explicit semantic/code intent.
 - `web_fetch` — provider-backed page extraction through Tavily Extract or Exa Contents. Direct local HTTP is deliberately deferred.
+
+Both tools accept `provider: "auto" | "tavily" | "exa"`. Explicit overrides win. Search also accepts a portable `fast | balanced | thorough` profile, domain/date filters, and a declared `general | semantic | code` intent. Fetch accepts up to 20 public HTTP(S) URLs, optional focused extraction, a per-result character ceiling, and cache bypass.
+
+## Runtime behavior
+
+- `TAVILY_API_KEY` is required for ordinary `auto`; `EXA_API_KEY` is required only when Exa is selected or used as an allowed fallback.
+- Retryable 429/timeout/network/transient-5xx failures retry twice before policy allows fallback. Auth, quota/payment, permission, validation, cancellation, and safety failures never switch providers.
+- Search and fetch caches are bounded and live only for the loaded extension instance.
+- Oversized content is atomically offloaded to owner-only, TTL-pruned artifacts under `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/` and returned with an opaque ID and exact path.
+- Search snippets are candidate-discovery material, not confirmation; fetch important sources before making material claims.
 
 ## Delivery boundary
 
@@ -25,4 +35,4 @@ First-party Pi web-search and fetch extension backed by direct Tavily and Exa HT
 
 ## Credentials
 
-Use `TAVILY_API_KEY` and `EXA_API_KEY` in the environment. Never place credentials in tool arguments, config examples, logs, artifacts, or this repository.
+Use `TAVILY_API_KEY` and, when needed, `EXA_API_KEY` in the environment. Never place real credentials in tool arguments, repository files, logs, artifacts, or examples.

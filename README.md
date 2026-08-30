@@ -10,15 +10,16 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | --- | --- |
 | Core agent | Pi coding agent with provider login through `/login` |
 | Theme/UI | `irfan-sumi` with integrated editor, `irfan-pi`, alternate themes, and Pi Signature |
-| MCP | MCP adapter plus Tavily, Exa, Brave Search, OAuth, and bearer patterns |
+| Web research | Native `web_search`/`web_fetch`, Tavily-first routing, Exa selection, and bundled `my-web-search` methodology |
+| MCP | MCP adapter plus optional/legacy search, OAuth, and bearer patterns |
 | Delegation | Ciung research, Laya code mapping, Sangkur worktree builds, and Prabu review |
 | Guardrails | Permission gates, todos, persisted goals, and prompt loops |
 | Context | `context-mode`; Headroom native OpenAI/Anthropic proxy routing by default, with legacy local tool-result compression/retrieval as an opt-in |
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel while the main agent works |
-| Routing | `pi-9router-ext` model/search routing tools |
+| Routing | `pi-9router-ext` model routing and legacy search coexistence during migration |
 | Operations | Markdown preview, usage stats, `/context` diagnostics, and Caveman response mode |
-| Skills | Setup, MCP, context-mode, and optional workflow skills |
+| Skills | Setup, `my-web-search`, MCP, context-mode, and optional workflow skills |
 
 ### `irfan-sumi` preview
 
@@ -33,8 +34,8 @@ package.json                  # Pi resources + exact companion package metadata
 pi/
   agents/                     # reviewed templates; deployed separately
   themes/                     # irfan-sumi bundle, irfan-pi, and alternates
-  extensions/                 # other repo-owned package extensions
-skills/pi-setup/              # bundled audit and migration skill
+  extensions/                 # repo-owned package extensions, including native web research
+skills/                       # bundled setup and my-web-search skills
 docs/setup/                   # setup and operations guides
 ```
 
@@ -102,7 +103,7 @@ The root `piSetup.requiredPackages` metadata is canonical. These packages are in
 | `@juicesharp/rpiv-todo` | `2.4.0` | Task tracking |
 | `@tintinweb/pi-subagents` | `0.14.3` | Delegated agent workflows |
 | `context-mode` | `1.0.169` | Context-saving tools and skills |
-| `pi-9router-ext` | `0.2.3` | Model/search routing |
+| `pi-9router-ext` | `0.2.3` | Model routing and legacy search coexistence during migration |
 | `pi-markdown-preview` | `0.11.3` | Markdown render/export |
 | `pi-mcp-adapter` | `2.21.1` | Standard MCP config and tools |
 | `pi-stats-ext` | `0.2.0` | Usage statistics |

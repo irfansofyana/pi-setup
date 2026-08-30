@@ -60,18 +60,19 @@ test("all specialists use fresh context and portable runtime model selection", (
   }
 });
 
-test("researcher gets only the 9router web tools and research skill", () => {
+test("researcher gets only the native web tools and bundled research skill", () => {
   const content = read("researcher.md");
   const fm = frontmatter("researcher");
-  assert.match(fm, /^extensions: \[pi-9router-ext\]$/m);
+  assert.match(fm, /^extensions: \[web-research\]$/m);
   assert.match(
     fm,
-    /^tools: "ext:pi-9router-ext\/ninerouter_web_search, ext:pi-9router-ext\/ninerouter_web_fetch"$/m,
+    /^tools: "ext:web-research\/web_search, ext:web-research\/web_fetch"$/m,
   );
   assert.doesNotMatch(fm, /\b(read|grep|find|ls|edit|write|bash)\b/);
-  assert.match(fm, /ext:pi-9router-ext\/ninerouter_web_search/);
-  assert.match(fm, /ext:pi-9router-ext\/ninerouter_web_fetch/);
-  assert.match(fm, /^skills: 9router-web-researcher$/m);
+  assert.match(fm, /ext:web-research\/web_search/);
+  assert.match(fm, /ext:web-research\/web_fetch/);
+  assert.match(fm, /^skills: my-web-search$/m);
+  assert.doesNotMatch(fm, /9router|ninerouter|\bmcp\b/i);
   assert.match(content, /sanitized questions, public identifiers, and public URLs/i);
   assert.match(content, /stop when every material claim/i);
   assert.match(content, /claim \| status \| primary source \| version\/date \| conflicts/i);

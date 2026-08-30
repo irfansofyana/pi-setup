@@ -1,9 +1,9 @@
-# Pi Native Web Research Harness — Draft Requirements
+# Pi Native Web Research Harness — Approved Requirements
 
-Status: Draft for Irfan's review  
+Status: Approved for repository implementation  
 Date: 2026-08-30  
-Updated: 2026-08-30 — bundled `my-web-search` skill added to the approved delivery  
-Scope: Requirements only; no implementation authorized
+Updated: 2026-08-31 — implementation approved; live-device removal remains separately gated  
+Scope: Extension, bundled skill, Ciung template source, tests, trackers, and setup documentation
 
 ## 1. Purpose
 
@@ -683,4 +683,4 @@ The native web extension and embedded `my-web-search` skill are one delivery and
 
 ## 20. Approval boundary
 
-These decisions authorize a refined specification and benchmark plan only. They do not authorize implementation, package installation, migration, or removal of the current 9router/MCP setup.
+Irfan approved repository implementation on 2026-08-31: extension code, bundled skill, Ciung template source, tests, tracker documents, and setup/migration documentation may be built and submitted as one PR. This approval does **not** authorize installing the branch on live devices, replacing an installed global Ciung template, or removing `pi-9router-ext`, `9router-web-researcher`, Tavily/Exa MCP configuration, credentials, logs, caches, or user state. Those live-device actions remain audit-first, separately numbered, rollback-backed, and explicitly approved.

@@ -54,7 +54,7 @@ Smoke-test prompts:
 /btw what is current task context?
 Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
 Run Ciung (`researcher`) and Laya (`code-mapper`) in parallel for this task, then reconcile their findings before proposing changes.
-Use 9router-web-researcher to find current Pi MCP adapter docs.
+Use my-web-search to find current Pi MCP adapter docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
 ```

@@ -42,7 +42,7 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 - Pi packages do not natively declare agent resources. Keep reviewed reusable templates under `pi/agents/` and deploy them through the approval-gated `pi-setup` skill.
 - Install reusable roles globally under `~/.pi/agent/agents/`. Do not recommend invoking project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
-- Keep Ciung mechanically web-only; keep Laya and Prabu read-only and network-free. Every role must set `inherit_context: false`, keep bounded turns, and disable output transcripts.
+- Keep Ciung mechanically scoped to `web-research`'s `web_search`/`web_fetch` plus bundled `my-web-search`; keep Laya and Prabu read-only and network-free. Every role must set `inherit_context: false`, keep bounded turns, and disable output transcripts.
 - Keep canonical templates model-neutral. Per-invocation or installed-copy model choices use exact `provider/model-id`; treat `scopeModels` as a guardrail, not a security boundary.
 - Builder must use Git worktree isolation and may not push, merge, deploy, publish, or handle secrets.
 - `docs/setup/subagents.md` owns team roles, deployment/rollback, orchestration prompts, and trust guidance.
@@ -51,14 +51,14 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 - Root manifest must continue exposing repo-owned signature UI, local extension directories, themes, and skills.
 - `pi/themes/irfan-sumi/` owns Sumi's `theme.json`, integrated editor `index.ts`, smoke test, and component documentation. Do not restore a standalone editor resource under `pi/extensions/`.
-- The package owns Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, BTW, Caveman, the integrated Irfan Sumi editor, signature UI, themes, and setup skill. Third-party companions remain separate Pi package sources declared in `piSetup.requiredPackages`.
+- The package owns native Web Research, bundled `my-web-search`, Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, BTW, Caveman, the integrated Irfan Sumi editor, signature UI, themes, and setup skill. Third-party companions remain separate Pi package sources declared in `piSetup.requiredPackages`.
 - Component docs should describe runtime/configuration behavior and package ownership, not repeat package installation commands.
 
 ## Permission policy notes
 
 - `~/.pi/agent/extensions/pi-permission-system/config.json` is the global policy path.
 - `docs/setup/permissions.md` owns the intended policy; README links to it.
-- Tavily, Exa, and Brave search tools should be allowed without approval.
+- Native read-only `web_search` and provider-backed `web_fetch` should be allowed without approval. Legacy Tavily/Exa/Brave/MCP allowances stay only during approved coexistence and are removed separately.
 - Mutating/retention tools (`write`, `edit`, `manage_skill`, `learn`) and shell/MCP defaults should stay gated unless the user explicitly asks otherwise.
 
 ## Validation

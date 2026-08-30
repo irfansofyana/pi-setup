@@ -29,6 +29,8 @@ Back up existing policy first. Preserve unknown keys unless migration requires r
     "grep": "allow",
     "find": "allow",
     "ls": "allow",
+    "web_search": "allow",
+    "web_fetch": "allow",
     "tavily_*": "allow",
     "exa_*": "allow",
     "brave_search_*": "allow",
@@ -67,11 +69,12 @@ Back up existing policy first. Preserve unknown keys unless migration requires r
 Policy intent:
 
 - Read-only local tools allowed.
-- Tavily, Exa, and Brave search tools allowed without approval.
+- Native read-only `web_search` and provider-backed `web_fetch` allowed without approval.
+- Legacy Tavily/Exa/Brave direct tools remain allowed only for side-by-side migration; remove those entries separately after the old integrations are explicitly retired.
 - Structured questions, todos, and skill loading allowed.
 - Mutating/retention tools (`write`, `edit`, `manage_skill`, `learn`) gated.
 - Shell defaults gated; Git commands allowed.
-- MCP defaults gated except approved search providers.
+- MCP defaults gated except the temporarily approved legacy search providers.
 - External-directory access gated.
 
 Remove or migrate legacy `~/.pi/agent/pi-permissions.jsonc` if warnings appear.
