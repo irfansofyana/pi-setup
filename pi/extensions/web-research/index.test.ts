@@ -1162,6 +1162,45 @@ test("web_fetch permits explicit globally reachable IANA IPv6 exceptions", async
   assert.equal(result.details.successCount, requested.length);
 });
 
+test("transport preserves response metadata on payload-validation failures", async () => {
+  await assert.rejects(
+    requestJson(
+      "tavily",
+      "https://api.tavily.com/search",
+      {},
+      {
+        fetch: async () => new Response(JSON.stringify({ results: "invalid" }), {
+          status: 200,
+          headers: { "content-type": "application/json", "x-request-id": "payload-validation-id" },
+        }),
+        sleep: defaultSleep,
+        requestTimeoutMs: 100,
+        maxRetries: 0,
+        maxResponseBytes: 2_000_000,
+        maxRetryDelayMs: 0,
+        totalRequestTimeoutMs: 1_000,
+        monotonicNow: () => performance.now(),
+      },
+      undefined,
+      undefined,
+      (_payload, retryCount) => {
+        throw new WebProviderError({
+          provider: "tavily",
+          kind: "upstream",
+          message: "Tavily returned an invalid payload shape.",
+          retryable: true,
+          retryCount,
+        });
+      },
+    ),
+    (error: unknown) => error instanceof WebProviderError
+      && error.kind === "upstream"
+      && error.status === 200
+      && error.requestId === "payload-validation-id"
+      && error.retryCount === 0,
+  );
+});
+
 test("transport cancels rejected provider response bodies", async () => {
   for (const mode of ["declared-oversize", "http-error"] as const) {
     let cancelled = false;

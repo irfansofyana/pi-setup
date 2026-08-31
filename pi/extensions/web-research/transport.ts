@@ -84,6 +84,20 @@ export function responseRequestId(response: Response): string | undefined {
   return undefined;
 }
 
+function withResponseMetadata(error: WebProviderError, response: Response, retryCount: number): WebProviderError {
+  return new WebProviderError({
+    provider: error.provider,
+    kind: error.kind,
+    message: error.message,
+    retryable: error.retryable,
+    status: error.status ?? response.status,
+    requestId: error.requestId ?? responseRequestId(response),
+    retryAfterMs: error.retryAfterMs,
+    retryCount,
+    details: error.details,
+  });
+}
+
 function responseError(provider: ProviderName, response: Response, retryCount: number): WebProviderError {
   const status = response.status;
   const label = providerLabel(provider);
@@ -294,20 +308,23 @@ export async function requestJson<T>(
       if (remainingMs() <= 0) throw timeout(provider, attempt);
       return { response, payload, retryCount: attempt };
     } catch (caught) {
+      const error = caught instanceof WebProviderError
+        ? withResponseMetadata(caught, response, attempt)
+        : caught;
       // Once the byte ceiling has been observed, best-effort body cleanup
       // cannot replace that authoritative safety failure with a later abort.
-      if (caught instanceof WebProviderError && caught.kind === "safety-policy") throw caught;
-      if (caught instanceof WebProviderError) {
-        if (!caught.retryable || attempt >= dependencies.maxRetries || remainingMs() <= 0) throw caught;
+      if (error instanceof WebProviderError && error.kind === "safety-policy") throw error;
+      if (error instanceof WebProviderError) {
+        if (!error.retryable || attempt >= dependencies.maxRetries || remainingMs() <= 0) throw error;
         try {
-          await dependencies.sleep(delayFor(caught, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
+          await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
         } catch {
           throw cancelled(provider, attempt);
         }
         continue;
       }
       if (firstAbortKind) throw abortError();
-      const error = new WebProviderError({
+      const invalidJsonError = new WebProviderError({
         provider,
         kind: "upstream",
         message: `${providerLabel(provider)} returned an invalid JSON response.`,
@@ -315,9 +332,9 @@ export async function requestJson<T>(
         status: response.status,
         retryCount: attempt,
       });
-      if (attempt >= dependencies.maxRetries) throw error;
+      if (attempt >= dependencies.maxRetries) throw invalidJsonError;
       try {
-        await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
+        await dependencies.sleep(delayFor(invalidJsonError, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
       } catch {
         throw cancelled(provider, attempt);
       }
