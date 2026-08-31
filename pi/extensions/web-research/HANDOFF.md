@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 494 passed, 0 failed.
-- Focused web-research suite: 68 passed, 0 failed.
+- Full repository suite: 497 passed, 0 failed.
+- Focused web-research suite: 71 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -145,6 +145,23 @@ Architecture correction after the eighth review:
 - Restored an atomic filesystem lock directory for both same-process and cross-process serialization.
 - Narrowed the guarantee deliberately: uncertain or crash-left lock directories are never reclaimed automatically; writers time out or cancel without publishing, and manual removal requires first confirming that no Pi process is writing artifacts.
 - Added a regression asserting that the extension source and artifact directory contain no SQLite runtime or control file.
+
+The ninth independent review inspected `2e1a57ced2ed5e71e5f09b68cd0a174df7b56460`. Its accepted findings are resolved in the current draft:
+
+- Cache inputs now use opaque per-process HMAC digests, and ordinary reads/writes sweep every expired in-memory entry so TTL is a retention bound.
+- Artifact capacity admission now prunes only expired records. Valid artifacts are never evicted for a new save; the new overflow fails closed when the retained entry or byte cap is full.
+- Operational documentation now distinguishes extension-owned cache/artifact retention from Pi logs and Tavily/Exa provider-side retention.
+
+Codex reviewed draft PR #34 at `c81bde945afea21938de9741322ba081a903a8c0`:
+
+Accepted:
+
+- The two disclosed P1 findings matched the ninth independent review and are fixed as described above.
+- Per-fetch URL size was unbounded. Runtime validation and the tool schema now cap each URL at 4,096 characters before provider work.
+
+Rejected as a current PR blocker:
+
+- Running every frozen baseline/skill/Ciung/legacy evaluation case. `REQUIREMENTS.md` G-6 and M-3 explicitly keep these as dogfood and legacy-deprecation gates, some require credentials and deployment approval, and the draft PR already states they are incomplete. The frozen corpus remains shipped and legacy routes remain untouched; no benchmark result is fabricated.
 
 ## Known limitations and open gates
 

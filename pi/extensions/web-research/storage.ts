@@ -14,11 +14,19 @@ export class TimedCache<T> {
     this.maxEntries = maxEntries;
   }
 
+  private sweepExpired(): void {
+    const now = this.now();
+    for (const [key, entry] of this.entries) {
+      if (entry.expiresAt <= now) this.entries.delete(key);
+    }
+  }
+
   get(key: string): T | undefined {
     return this.getWithAge(key)?.value;
   }
 
   getWithAge(key: string): { value: T; ageMs: number } | undefined {
+    this.sweepExpired();
     const entry = this.entries.get(key);
     if (!entry) return undefined;
     if (entry.expiresAt <= this.now()) {
@@ -31,6 +39,7 @@ export class TimedCache<T> {
   }
 
   set(key: string, value: T): void {
+    this.sweepExpired();
     if (this.ttlMs <= 0 || this.maxEntries <= 0) return;
     this.entries.delete(key);
     while (this.entries.size >= this.maxEntries) {
@@ -134,13 +143,14 @@ export class ArtifactStore {
 
   private async cleanup(additionalEntries = 0, additionalBytes = 0): Promise<void> {
     const names = await readdir(this.options.root);
-    const rows: Array<{ name: string; path: string; size: number; mtimeMs: number }> = [];
     for (const name of names.filter((candidate) => candidate.endsWith(".tmp"))) {
       const path = join(this.options.root, name);
       try { await rm(path, { recursive: true }); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+    let entries = additionalEntries;
+    let bytes = additionalBytes;
     for (const name of names.filter((candidate) => candidate.endsWith(".json"))) {
       const path = join(this.options.root, name);
       try {
@@ -152,28 +162,14 @@ export class ArtifactStore {
           }
           continue;
         }
-        rows.push({ name, path, size: info.size, mtimeMs: info.mtimeMs });
+        entries++;
+        bytes += info.size;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
-    rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
-    let bytes = additionalBytes;
-    let entries = additionalEntries;
-    const existingEntryLimit = Math.max(0, this.options.maxEntries - additionalEntries);
-    for (let index = 0; index < rows.length; index++) {
-      const row = rows[index]!;
-      if (index >= existingEntryLimit || bytes + row.size > this.options.maxBytes) {
-        try { await unlink(row.path); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-      } else {
-        bytes += row.size;
-        entries++;
-      }
-    }
     if (entries > this.options.maxEntries || bytes > this.options.maxBytes) {
-      throw new Error("Web research artifact capacity could not be enforced safely.");
+      throw new Error("Web research artifact capacity is full; valid artifacts are preserved until they expire or are discarded.");
     }
   }
 

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import webResearch from "./index.ts";
+import webResearch, { createOpaqueCacheKey } from "./index.ts";
 import { defaultSleep, requestJson, WebProviderError } from "./transport.ts";
 
 function harness(
@@ -21,6 +21,16 @@ function harness(
   });
   return tools;
 }
+
+test("cache keys are deterministic opaque digests without sensitive input", () => {
+  const input = { query: "https://example.com/?token=cache-secret", focus: "client_secret=focus-secret" };
+  const first = createOpaqueCacheKey("process-secret", input);
+  const second = createOpaqueCacheKey("process-secret", input);
+  assert.equal(first, second);
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(first, /cache-secret|focus-secret|example\.com/);
+  assert.notEqual(first, createOpaqueCacheKey("different-process-secret", input));
+});
 
 test("web_search uses Tavily by default and labels compact snippets as discovery only", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
@@ -882,6 +892,25 @@ test("web_fetch caps provider over-return and untrusted metadata", async () => {
   assert.equal(result.details.requestId, undefined);
   assert.equal(result.details.truncated, true);
   assert.doesNotMatch(text, /TITLE-END|HIGHLIGHT-END|AUTHOR-END|unrequested|must not appear/);
+});
+
+test("web_fetch rejects oversized URLs before calling a provider", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    throw new Error("must not be called");
+  }, { TAVILY_API_KEY: "test-tavily" });
+  await assert.rejects(
+    tools.get("web_fetch").execute(
+      "fetch-oversized-url",
+      { urls: [`https://example.com/${"a".repeat(4_100)}`] },
+      new AbortController().signal,
+      undefined,
+      { cwd: "/tmp/project" },
+    ),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "validation",
+  );
+  assert.equal(calls, 0);
 });
 
 test("web_fetch rejects non-public URLs before calling a provider", async () => {

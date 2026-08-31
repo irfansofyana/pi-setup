@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,10 @@ import {
 
 export { WebProviderError } from "./transport.ts";
 export type { ErrorKind, ProviderName } from "./transport.ts";
+
+export function createOpaqueCacheKey(secret: string, input: unknown): string {
+  return createHmac("sha256", secret).update(JSON.stringify(input)).digest("hex");
+}
 
 const OPTIONAL_SCHEMA = Symbol("optional-schema");
 type JsonSchema = Record<string, unknown> & { [OPTIONAL_SCHEMA]?: true };
@@ -802,6 +806,7 @@ function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[]
   }
   const urls = value.map((item: unknown): string => {
     if (typeof item !== "string" || !item.trim()) return reject("validation", "urls must contain public HTTP(S) URLs.");
+    if (item.length > 4_096) return reject("validation", "Each URL must be at most 4096 characters.");
     let parsed: URL;
     try {
       parsed = new URL(item.trim());
@@ -1227,6 +1232,7 @@ export default function webResearch(
   overrides: Partial<WebResearchDependencies> = {},
 ): void {
   const dependencies = { ...DEFAULT_DEPENDENCIES, ...overrides };
+  const cacheKeySecret = randomUUID();
   const searchCache = new TimedCache<ProviderSearchResponse>(dependencies.now, dependencies.searchCacheTtlMs, dependencies.maxCacheEntries);
   const fetchCache = new TimedCache<ProviderFetchResponse>(dependencies.now, dependencies.fetchCacheTtlMs, dependencies.maxCacheEntries);
   const artifactStore = new ArtifactStore({
@@ -1286,7 +1292,7 @@ export default function webResearch(
       const startedAt = dependencies.now();
       const selectedProvider = initialProvider(input);
       ensureNotCancelled(signal, selectedProvider);
-      const cacheKey = JSON.stringify(input);
+      const cacheKey = createOpaqueCacheKey(cacheKeySecret, input);
       const cachedEntry = searchCache.getWithAge(cacheKey);
       if (cachedEntry) {
         const cached = cachedEntry.value;
@@ -1352,7 +1358,7 @@ export default function webResearch(
     ],
     executionMode: "parallel",
     parameters: Schema.Object({
-      urls: Schema.Optional(Schema.Array(Schema.String(), { minItems: 1, maxItems: 20, description: "One to twenty public HTTP(S) URLs." })),
+      urls: Schema.Optional(Schema.Array(Schema.String({ maxLength: 4_096 }), { minItems: 1, maxItems: 20, description: "One to twenty public HTTP(S) URLs, each at most 4096 characters." })),
       artifactId: Schema.Optional(Schema.String({ description: "Opaque artifact ID returned by an earlier web_fetch call." })),
       artifactOffset: Schema.Optional(Schema.Number({ minimum: 0, description: "Character offset for artifact retrieval; defaults to 0." })),
       artifactMaxCharacters: Schema.Optional(Schema.Number({ minimum: 1, maximum: 12_000, description: "Maximum artifact characters to return; defaults to 12000." })),
@@ -1416,7 +1422,7 @@ export default function webResearch(
       };
       const selectedProvider: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
       ensureNotCancelled(signal, selectedProvider);
-      const cacheKey = JSON.stringify({
+      const cacheKey = createOpaqueCacheKey(cacheKeySecret, {
         urls: input.urls,
         provider: input.provider,
         focus: input.focus,

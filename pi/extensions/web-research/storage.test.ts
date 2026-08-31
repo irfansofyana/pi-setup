@@ -23,7 +23,16 @@ test("TimedCache expires entries and evicts the least recently used entry", () =
   assert.equal(cache.get("c"), undefined);
 });
 
-test("ArtifactStore reserves capacity for the new artifact before publishing it", async () => {
+test("TimedCache sweeps unrelated expired entries during ordinary access", () => {
+  let now = 1_000;
+  const cache = new TimedCache<string>(() => now, 10, 10);
+  cache.set("sensitive-plaintext-key", "secret");
+  now = 1_011;
+  assert.equal(cache.get("different-key"), undefined);
+  assert.equal((cache as any).entries.has("sensitive-plaintext-key"), false);
+});
+
+test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-capacity-"));
   let id = 0;
   let now = 1_725_000_000_000;
@@ -36,10 +45,14 @@ test("ArtifactStore reserves capacity for the new artifact before publishing it"
     maxBytes: 10_000,
   });
 
-  await store.save({ url: "https://example.test/one", title: "One", content: "one", provider: "tavily" });
-  await store.save({ url: "https://example.test/two", title: "Two", content: "two", provider: "tavily" });
+  const first = await store.save({ url: "https://example.test/one", title: "One", content: "one", provider: "tavily" });
+  await assert.rejects(
+    store.save({ url: "https://example.test/two", title: "Two", content: "two", provider: "tavily" }),
+    /capacity is full/i,
+  );
 
-  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), ["artifact-2.json"]);
+  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), ["artifact-1.json"]);
+  assert.equal(JSON.parse(await readFile(first.path, "utf8")).content, "one");
 });
 
 test("ArtifactStore refuses an ID collision without overwriting the existing artifact", async () => {
@@ -74,11 +87,13 @@ test("ArtifactStore serializes concurrent entry-cap reservations across store in
   const first = new ArtifactStore({ ...options, randomId: () => "concurrent-one" });
   const second = new ArtifactStore({ ...options, randomId: () => "concurrent-two" });
 
-  await Promise.all([
+  const outcomes = await Promise.allSettled([
     first.save({ url: "https://example.test/one", title: "One", content: "one", provider: "tavily" }),
     second.save({ url: "https://example.test/two", title: "Two", content: "two", provider: "exa" }),
   ]);
 
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
   assert.equal((await readdir(root)).filter((name) => name.endsWith(".json")).length, 1);
 });
 
@@ -94,11 +109,13 @@ test("ArtifactStore serializes concurrent byte-cap reservations across store ins
   };
   const first = new ArtifactStore({ ...options, randomId: () => "bytes-one" });
   const second = new ArtifactStore({ ...options, randomId: () => "bytes-two" });
-  await Promise.all([
+  const outcomes = await Promise.allSettled([
     first.save({ url: "https://example.test/one", title: "One", content: "a".repeat(1_200), provider: "tavily" }),
     second.save({ url: "https://example.test/two", title: "Two", content: "b".repeat(1_200), provider: "exa" }),
   ]);
 
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
   const files = (await readdir(root)).filter((name) => name.endsWith(".json"));
   const totalBytes = (await Promise.all(files.map(async (name) => (await stat(join(root, name))).size)))
     .reduce((sum, size) => sum + size, 0);
@@ -114,10 +131,12 @@ test("ArtifactStore serializes capacity reservations across processes", async ()
     const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => id, ttlMs: 60000, maxEntries: 1, maxBytes: 10000 });
     await store.save({ url: 'https://example.test/' + id, title: id, content: id, provider: 'tavily' });
   `;
-  await Promise.all([
+  const outcomes = await Promise.allSettled([
     execFileAsync(process.execPath, ["--input-type=module", "--eval", script, root, "process-one"]),
     execFileAsync(process.execPath, ["--input-type=module", "--eval", script, root, "process-two"]),
   ]);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "rejected").length, 1);
   assert.equal((await readdir(root)).filter((name) => name.endsWith(".json")).length, 1);
 });
 
