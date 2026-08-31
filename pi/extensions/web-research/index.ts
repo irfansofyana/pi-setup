@@ -207,6 +207,9 @@ function domainList(value: unknown, field: string): string[] {
   const domains = value.map((item) => {
     if (typeof item !== "string" || !item.trim()) validationError(`${field} must contain non-empty domain strings.`);
     const domain = item.trim().toLowerCase();
+    let canonicalHost: string;
+    try { canonicalHost = new URL(`http://${domain}/`).hostname.toLowerCase(); } catch { validationError(`${field} contains an invalid public domain.`); }
+    if (canonicalHost !== domain) validationError(`${field} contains an invalid public domain.`);
     const ipVersion = isIP(domain);
     const blockedName = domain === "localhost" || domain.endsWith(".localhost") || domain.endsWith(".local")
       || domain.endsWith(".internal") || domain.endsWith(".home.arpa");
@@ -302,6 +305,8 @@ const SENSITIVE_QUERY_KEYS = new Set([
 
 function redactUrlForDisplay(value: string): string {
   const parsed = new URL(value);
+  parsed.username = "";
+  parsed.password = "";
   parsed.hash = "";
   for (const key of [...parsed.searchParams.keys()]) {
     const normalized = key.toLowerCase().replace(/[-_.]/g, "");
@@ -327,21 +332,29 @@ function tolerantDecodeStages(rawValue: string): string[] {
 
 function sensitiveUrlValues(urls: string[]): string[] {
   const values = new Set<string>();
-  for (const url of urls) {
-    const rawQuery = url.split("#", 1)[0]?.split("?", 2)[1] ?? "";
-    for (const pair of rawQuery.split("&")) {
+  const addValue = (rawValue: string): void => {
+    for (const value of tolerantDecodeStages(rawValue)) {
+      if (!value) continue;
+      values.add(value);
+      values.add(encodeURIComponent(value));
+      values.add(encodeURIComponent(value).replace(/%20/g, "+"));
+    }
+  };
+  const addPairs = (serialized: string): void => {
+    for (const pair of serialized.split("&")) {
       const separator = pair.indexOf("=");
       const rawKey = separator >= 0 ? pair.slice(0, separator) : pair;
       const rawValue = separator >= 0 ? pair.slice(separator + 1) : "";
       const key = tolerantDecodeStages(rawKey).at(-1) ?? rawKey;
-      if (!SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) || !rawValue) continue;
-      for (const value of tolerantDecodeStages(rawValue)) {
-        if (!value) continue;
-        values.add(value);
-        values.add(encodeURIComponent(value));
-        values.add(encodeURIComponent(value).replace(/%20/g, "+"));
-      }
+      if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) && rawValue) addValue(rawValue);
     }
+  };
+  for (const url of urls) {
+    const parsed = new URL(url);
+    addPairs(url.split("#", 1)[0]?.split("?", 2)[1] ?? "");
+    addPairs(url.split("#", 2)[1] ?? "");
+    if (parsed.username) addValue(parsed.username);
+    if (parsed.password) addValue(parsed.password);
   }
   return [...values].sort((a, b) => b.length - a.length);
 }
@@ -1042,8 +1055,20 @@ async function prepareFetchResults(
 ): Promise<{ text: string; truncated: boolean; artifacts: Array<Omit<ArtifactRecord, "path">> }> {
   ensureNotCancelled(signal, response.provider);
   const records: Array<Omit<ArtifactRecord, "path">> = [];
+  const artifactByUrl = new Map<string, string>();
   let truncated = response.truncated || response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
+  const compact = (value: string, limit: number): string => value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+  const outcomeIndex = (): string => [
+    "Outcome index:",
+    ...response.documents.map((document) => {
+      const artifactId = artifactByUrl.get(document.url);
+      return `- [success] ${compact(document.url, 320)}${artifactId ? ` artifact=${artifactId}` : ""}`;
+    }),
+    ...response.failures.map((failure) => `- [${failure.kind}] ${compact(failure.url, 320)}: ${compact(failure.error, 80)}`),
+  ].join("\n");
+  const reservedIndex = outcomeIndex();
+  const initialBodyBudget = Math.max(0, maxInlineChars - reservedIndex.length - 2);
   let usedCharacters = 0;
   try {
     for (let index = 0; index < response.documents.length; index++) {
@@ -1062,7 +1087,7 @@ async function prepareFetchResults(
       ].join("\n");
       const separatorLength = successful.length ? 2 : 0;
       let content = `${document.content}${providerCapMarker}`;
-      if (usedCharacters + separatorLength + header.length + content.length > maxInlineChars) {
+      if (usedCharacters + separatorLength + header.length + content.length > initialBodyBudget) {
         let artifact: ArtifactRecord;
         try {
           artifact = await artifacts.save({
@@ -1078,12 +1103,13 @@ async function prepareFetchResults(
         ensureNotCancelled(signal, response.provider);
         const { path: _path, ...handle } = artifact;
         records.push(handle);
+        artifactByUrl.set(document.url, artifact.id);
         truncated = true;
-        const marker = `\n\n[Content truncated. Retrieve owner-only artifact ${artifact.id} with web_fetch artifactId.]${providerCapMarker}`;
-        const available = Math.max(0, maxInlineChars - usedCharacters - separatorLength - header.length - marker.length);
+        const marker = `\n\n[Content truncated; see artifact in outcome index.]${providerCapMarker}`;
+        const available = Math.max(0, initialBodyBudget - usedCharacters - separatorLength - header.length - marker.length);
         content = `${document.content.slice(0, available)}${marker}`;
       }
-      const remaining = Math.max(0, maxInlineChars - usedCharacters - separatorLength);
+      const remaining = Math.max(0, initialBodyBudget - usedCharacters - separatorLength);
       const entry = `${header}${content}`.slice(0, remaining);
       if (entry) {
         successful.push(entry);
@@ -1094,13 +1120,15 @@ async function prepareFetchResults(
     await Promise.allSettled(records.map((record) => artifacts.discard(record.id)));
     throw error;
   }
-  const failed = response.failures.length
-    ? ["Failures:", ...response.failures.map((failure) => `- ${failure.url}: [${failure.kind}] ${failure.error}`)].join("\n")
-    : "";
-  const combined = [...successful, failed].filter(Boolean).join("\n\n") || "No page content was extracted.";
-  if (combined.length > maxInlineChars) truncated = true;
+  const index = outcomeIndex();
+  const body = successful.join("\n\n");
+  const remaining = Math.max(0, maxInlineChars - index.length - (body ? 2 : 0));
+  if (body.length > remaining || index.length > maxInlineChars) truncated = true;
+  const text = index.length >= maxInlineChars
+    ? index.slice(0, maxInlineChars)
+    : `${index}${body ? `\n\n${body.slice(0, remaining)}` : ""}`;
   return {
-    text: combined.slice(0, maxInlineChars),
+    text,
     truncated,
     artifacts: records,
   };
@@ -1140,8 +1168,8 @@ export default function webResearch(
       profile: Schema.Optional(Schema.String({ enum: ["fast", "balanced", "thorough"], description: "Advisory speed/depth profile." })),
       includeDomains: Schema.Optional(Schema.Array(Schema.String(), { maxItems: 20, description: "Only include these public domains." })),
       excludeDomains: Schema.Optional(Schema.Array(Schema.String(), { maxItems: 20, description: "Exclude these domains." })),
-      publishedAfter: Schema.Optional(Schema.String({ description: "Best-effort ISO 8601 publication lower bound." })),
-      publishedBefore: Schema.Optional(Schema.String({ description: "Best-effort ISO 8601 publication upper bound." })),
+      publishedAfter: Schema.Optional(Schema.String({ description: "Inclusive ISO publication lower bound; timestamps require provider=exa." })),
+      publishedBefore: Schema.Optional(Schema.String({ description: "Inclusive ISO publication upper bound; timestamps require provider=exa." })),
     }) as any,
     async execute(
       _toolCallId: string,
@@ -1161,6 +1189,9 @@ export default function webResearch(
         publishedAfter: publishedDate(raw.publishedAfter, "publishedAfter"),
         publishedBefore: publishedDate(raw.publishedBefore, "publishedBefore"),
       };
+      if (input.provider !== "exa" && [input.publishedAfter, input.publishedBefore].some((value) => value?.includes("T"))) {
+        validationError("Publication timestamps require provider=exa; auto and Tavily accept YYYY-MM-DD only.");
+      }
       if (input.publishedAfter && input.publishedBefore && Date.parse(input.publishedAfter) > Date.parse(input.publishedBefore)) {
         validationError("publishedAfter must not be later than publishedBefore.");
       }

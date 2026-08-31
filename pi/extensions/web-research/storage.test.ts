@@ -171,6 +171,55 @@ test("ArtifactStore times out when a crashed owner leaves the lock unpublished",
   assert.ok(Date.now() - started < 500);
 });
 
+test("ArtifactStore treats a partial owner record as an in-progress lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-partial-owner-"));
+  const lock = join(root, ".capacity.lock");
+  await mkdir(lock);
+  await writeFile(join(lock, "owner.json"), "");
+  const store = new ArtifactStore({
+    root,
+    now: () => 1_725_000_000_000,
+    randomId: () => "must-not-publish",
+    ttlMs: 60_000,
+    maxEntries: 1,
+    maxBytes: 10_000,
+    lockTimeoutMs: 30,
+  });
+  await assert.rejects(
+    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
+    /timed out/i,
+  );
+});
+
+test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-monotonic-lock-"));
+  await mkdir(join(root, ".capacity.lock"));
+  let monotonic = 0;
+  const controller = new AbortController();
+  const safetyTimer = setTimeout(() => controller.abort(), 100);
+  const originalDateNow = Date.now;
+  Date.now = () => 0;
+  try {
+    const store = new ArtifactStore({
+      root,
+      now: () => 1_725_000_000_000,
+      monotonicNow: () => (monotonic += 10),
+      randomId: () => "must-not-publish",
+      ttlMs: 60_000,
+      maxEntries: 1,
+      maxBytes: 10_000,
+      lockTimeoutMs: 30,
+    });
+    await assert.rejects(
+      store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }, controller.signal),
+      /timed out/i,
+    );
+  } finally {
+    clearTimeout(safetyTimer);
+    Date.now = originalDateNow;
+  }
+});
+
 test("ArtifactStore never reclaims a stale-looking lock owned by a live process", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-live-owner-"));
   const lock = join(root, ".capacity.lock");

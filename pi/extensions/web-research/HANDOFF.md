@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 477 passed, 0 failed.
-- Focused web-research suite: 51 passed, 0 failed.
+- Full repository suite: 481 passed, 0 failed.
+- Focused web-research suite: 55 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -91,12 +91,22 @@ The fourth independent review inspected `7c6f755a91086f4c7b0ccacd96b5ce89904467e
 - Tolerant bounded recursive redaction for malformed, multiply encoded, and short sensitive values.
 - Redaction derived from provider-discovered signed URLs and from input URLs across success/error attempt telemetry.
 - Cancellation of rejected response streams on declared oversize, timeout/cancellation, and non-2xx paths.
-- Canonical public-domain filters, strict ISO calendar dates, and ordered publication bounds.
+- Canonical public-domain filters, ISO publication bounds, and ordered publication bounds.
 - Exactly one deterministic success/failure outcome per requested batch URL.
 - One aggregate call-wide inline-content budget with artifact offload.
 - Safe request IDs on every attempt and bounded retry-after data on terminal errors.
 
-Verdict: all four review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
+The fifth independent review inspected `be25e853f889df9073f54697ea74776c772bd135`. Every finding reproduced and was accepted. Fixes added:
+
+- Fragment and URL-userinfo secret extraction before display sanitization, for input and provider-discovered URLs.
+- Rejection of noncanonical numeric loopback domain forms before provider calls.
+- Cancellation latching before transport deadline work and listener-race rechecks.
+- Partial artifact-lock owner records treated as in-progress plus monotonic lock deadlines.
+- A compact outcome/artifact index reserved ahead of inline fetched bodies.
+- Cleanup failures cannot mask response-byte safety-policy failures or enable fallback.
+- Auto/Tavily publication bounds accept calendar dates only; explicit Exa preserves supported ISO timestamp precision.
+
+Verdict: all five review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 

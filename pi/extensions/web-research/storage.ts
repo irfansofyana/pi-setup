@@ -60,6 +60,7 @@ export interface ArtifactStoreOptions {
   maxEntries: number;
   maxBytes: number;
   lockTimeoutMs?: number;
+  monotonicNow?: () => number;
 }
 
 interface StoredArtifact {
@@ -105,7 +106,8 @@ export class ArtifactStore {
     const lockPath = join(this.options.root, ".capacity.lock");
     const ownerPath = join(lockPath, "owner.json");
     const ownerToken = randomUUID();
-    const deadline = Date.now() + (this.options.lockTimeoutMs ?? 5_000);
+    const monotonicNow = this.options.monotonicNow ?? (() => performance.now());
+    const deadline = monotonicNow() + (this.options.lockTimeoutMs ?? 5_000);
     while (true) {
       ArtifactStore.throwIfAborted(signal);
       try {
@@ -125,9 +127,10 @@ export class ArtifactStore {
             }
           }
         } catch (lockError) {
-          if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError;
+          const code = (lockError as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT" && !(lockError instanceof SyntaxError)) throw lockError;
         }
-        if (Date.now() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
+        if (monotonicNow() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, 10);
           signal?.addEventListener("abort", () => {

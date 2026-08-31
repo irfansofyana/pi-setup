@@ -165,7 +165,7 @@ async function boundedJson<T>(
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel();
+      try { await reader.cancel(); } catch { /* cleanup must not mask the safety-policy failure */ }
       throw new WebProviderError({
         provider,
         kind: "safety-policy",
@@ -205,16 +205,19 @@ export async function requestJson<T>(
   const remainingMs = () => Math.max(0, deadlineAt - dependencies.monotonicNow());
   for (let attempt = 0; ; attempt++) {
     if (callerSignal?.aborted) throw cancelled(provider, attempt);
+    let firstAbortKind: "cancelled" | "timeout" | undefined;
+    callerSignal?.addEventListener("abort", () => { firstAbortKind ??= "cancelled"; }, { once: true });
+    if (callerSignal?.aborted) firstAbortKind ??= "cancelled";
     const remaining = remainingMs();
+    if (firstAbortKind === "cancelled") throw cancelled(provider, attempt);
     if (remaining <= 0) throw timeout(provider, attempt);
     const attemptTimeout = dependencies.requestTimeoutMs > 0
       ? Math.min(dependencies.requestTimeoutMs, remaining)
       : remaining;
     const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, Math.floor(attemptTimeout))) : undefined;
     const signal = callerSignal && timeoutSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : (callerSignal ?? timeoutSignal);
-    let firstAbortKind: "cancelled" | "timeout" | undefined;
-    callerSignal?.addEventListener("abort", () => { firstAbortKind ??= "cancelled"; }, { once: true });
     timeoutSignal?.addEventListener("abort", () => { firstAbortKind ??= "timeout"; }, { once: true });
+    if (timeoutSignal?.aborted) firstAbortKind ??= "timeout";
     const abortError = () => firstAbortKind === "cancelled"
       ? cancelled(provider, attempt)
       : firstAbortKind === "timeout" ? timeout(provider, attempt) : upstream(provider, attempt);
