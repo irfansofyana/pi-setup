@@ -257,6 +257,18 @@ function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function providerPayload(value: unknown, provider: ProviderName): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new WebProviderError({
+      provider,
+      kind: "upstream",
+      message: `${providerLabel(provider)} returned an invalid payload shape.`,
+      retryable: true,
+    });
+  }
+  return value as Record<string, unknown>;
+}
+
 function numericValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -540,7 +552,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
   const apiKey = dependencies.env.TAVILY_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "tavily", kind: "authentication", message: "Tavily authentication is not configured (set TAVILY_API_KEY)." });
   const resolvedMode = tavilyMode(input.profile);
-  const { response, payload, retryCount } = await requestJson<{ request_id?: unknown; results?: unknown }>("tavily", "https://api.tavily.com/search", {
+  const { response, payload: rawPayload, retryCount } = await requestJson<{ request_id?: unknown; results?: unknown }>("tavily", "https://api.tavily.com/search", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
@@ -554,6 +566,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
       ...(input.publishedBefore ? { end_date: input.publishedBefore.slice(0, 10) } : {}),
     }),
   }, dependencies, signal, deadlineAt);
+  const payload = providerPayload(rawPayload, "tavily");
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.maxResults;
   const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
@@ -578,8 +591,10 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
       score: numericValue(result.score),
     }];
   });
-  const requestId = safeRequestId(payload.request_id) ?? responseRequestId(response);
-  truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
+  const rawRequestId = textValue(payload.request_id);
+  const payloadRequestId = safeRequestId(payload.request_id);
+  const requestId = payloadRequestId ?? responseRequestId(response);
+  truncated ||= rawRequestId !== undefined && payloadRequestId === undefined;
   const providerValues = sensitiveUrlValues(rawResults.flatMap((value) => {
     if (!value || typeof value !== "object") return [];
     const url = textValue((value as Record<string, unknown>).url);
@@ -595,7 +610,7 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
   const apiKey = dependencies.env.EXA_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "exa", kind: "authentication", message: "Exa authentication is not configured (set EXA_API_KEY)." });
   const resolvedMode = exaMode(input.profile);
-  const { response, payload, retryCount } = await requestJson<{ requestId?: unknown; results?: unknown }>("exa", "https://api.exa.ai/search", {
+  const { response, payload: rawPayload, retryCount } = await requestJson<{ requestId?: unknown; results?: unknown }>("exa", "https://api.exa.ai/search", {
     method: "POST",
     headers: { "x-api-key": apiKey, "content-type": "application/json" },
     body: JSON.stringify({
@@ -609,6 +624,7 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
       ...(input.publishedBefore ? { endPublishedDate: input.publishedBefore } : {}),
     }),
   }, dependencies, signal, deadlineAt);
+  const payload = providerPayload(rawPayload, "exa");
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.maxResults;
   const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
@@ -639,8 +655,10 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
       author: author.value,
     }];
   });
-  const requestId = safeRequestId(payload.requestId) ?? responseRequestId(response);
-  truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
+  const rawRequestId = textValue(payload.requestId);
+  const payloadRequestId = safeRequestId(payload.requestId);
+  const requestId = payloadRequestId ?? responseRequestId(response);
+  truncated ||= rawRequestId !== undefined && payloadRequestId === undefined;
   const providerValues = sensitiveUrlValues(rawResults.flatMap((value) => {
     if (!value || typeof value !== "object") return [];
     const url = textValue((value as Record<string, unknown>).url);
@@ -896,7 +914,7 @@ function matchRequestedUrl(returnedUrl: string, requestedUrls: string[]): string
 async function fetchTavily(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
   const apiKey = dependencies.env.TAVILY_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "tavily", kind: "authentication", message: "Tavily authentication is not configured (set TAVILY_API_KEY)." });
-  const { response, payload, retryCount } = await requestJson<{ request_id?: unknown; results?: unknown; failed_results?: unknown }>("tavily", "https://api.tavily.com/extract", {
+  const { response, payload: rawPayload, retryCount } = await requestJson<{ request_id?: unknown; results?: unknown; failed_results?: unknown }>("tavily", "https://api.tavily.com/extract", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
@@ -906,6 +924,7 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
       ...(input.focus ? { query: input.focus } : {}),
     }),
   }, dependencies, signal, deadlineAt);
+  const payload = providerPayload(rawPayload, "tavily");
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
@@ -946,8 +965,10 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
     return [{ url, ...classifyFetchFailure(result.error, "extract_failed") }];
   });
   truncated ||= rawFailures.length > input.urls.length;
-  const requestId = safeRequestId(payload.request_id) ?? responseRequestId(response);
-  truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
+  const rawRequestId = textValue(payload.request_id);
+  const payloadRequestId = safeRequestId(payload.request_id);
+  const requestId = payloadRequestId ?? responseRequestId(response);
+  truncated ||= rawRequestId !== undefined && payloadRequestId === undefined;
   const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
   const providerSecrets = sensitiveUrlValues([
     ...rawResults.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),
@@ -1003,7 +1024,7 @@ function reconcileFetchOutcomes(
 async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
   const apiKey = dependencies.env.EXA_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "exa", kind: "authentication", message: "Exa authentication is not configured (set EXA_API_KEY)." });
-  const { response, payload, retryCount } = await requestJson<{ requestId?: unknown; results?: unknown; statuses?: unknown }>("exa", "https://api.exa.ai/contents", {
+  const { response, payload: rawPayload, retryCount } = await requestJson<{ requestId?: unknown; results?: unknown; statuses?: unknown }>("exa", "https://api.exa.ai/contents", {
     method: "POST",
     headers: { "x-api-key": apiKey, "content-type": "application/json" },
     body: JSON.stringify({
@@ -1012,6 +1033,7 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
       ...(input.focus ? { highlights: { query: input.focus, maxCharacters: input.maxCharactersPerResult } } : {}),
     }),
   }, dependencies, signal, deadlineAt);
+  const payload = providerPayload(rawPayload, "exa");
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
@@ -1059,8 +1081,10 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
     return [{ ...failure, url: requestedUrl }];
   });
   truncated ||= rawStatuses.length > input.urls.length;
-  const requestId = safeRequestId(payload.requestId) ?? responseRequestId(response);
-  truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
+  const rawRequestId = textValue(payload.requestId);
+  const payloadRequestId = safeRequestId(payload.requestId);
+  const requestId = payloadRequestId ?? responseRequestId(response);
+  truncated ||= rawRequestId !== undefined && payloadRequestId === undefined;
   const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
   const providerSecrets = sensitiveUrlValues([
     ...rawResults.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),

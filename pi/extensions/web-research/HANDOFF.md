@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 510 passed, 0 failed.
-- Focused web-research suite: 84 passed, 0 failed.
+- Full repository suite: 514 passed, 0 failed.
+- Focused web-research suite: 88 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -171,6 +171,8 @@ Accepted:
 - Successful-HTTP response-body timeouts now consume same-provider retries within the shared operation deadline before fallback is considered.
 - Sensitive URL redaction is capped at 64 distinct patterns and 32 KiB aggregate; oversized redaction work fails closed before provider work or persistence.
 - All Tavily/Exa search and fetch success adapters preserve safely validated header-only request IDs when the payload omits one.
+- All four adapters reject non-object JSON payloads as normalized retryable upstream failures before dereferencing provider fields.
+- Unsafe payload request IDs still set truncation even when a safe response-header fallback is available.
 
 Rejected as a current PR blocker:
 

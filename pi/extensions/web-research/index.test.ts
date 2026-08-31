@@ -140,6 +140,29 @@ test("successful search adapters preserve safe header-only request IDs", async (
   }
 });
 
+test("search adapters normalize null provider payloads", async () => {
+  for (const provider of ["tavily", "exa"] as const) {
+    const tools = harness(async () => new Response("null", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
+    await assert.rejects(
+      tools.get("web_search").execute("null-search", { query: "null payload", provider }, undefined, undefined, { cwd: "/tmp/project" }),
+      (error: unknown) => error instanceof WebProviderError && error.kind === "upstream" && error.retryable,
+    );
+  }
+});
+
+test("unsafe search payload IDs retain truncation with safe header fallback", async () => {
+  const tools = harness(async () => new Response(JSON.stringify({ request_id: "unsafe request id", results: [] }), {
+    status: 200,
+    headers: { "content-type": "application/json", "x-request-id": "safe-search-header" },
+  }), { TAVILY_API_KEY: "test-tavily" });
+  const result = await tools.get("web_search").execute("unsafe-id", { query: "unsafe id", provider: "tavily" }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.equal(result.details.requestId, "safe-search-header");
+  assert.equal(result.details.truncated, true);
+});
+
 test("web_search redacts sensitive values from URLs embedded in the query", async () => {
   const query = "find https://queryuser:querypass@docs.example.com/signed?token=%73ecret&password=space+value&client_secret=oauthclient&refresh_token=oauthrefresh&secret=secret%ZZvalue&code=secret%252Fvalue&key=ab#id_token=oauthid&access_token=fragmentsecret";
   const tools = harness(async () => new Response(JSON.stringify({
@@ -657,6 +680,35 @@ test("successful fetch adapters preserve safe header-only request IDs", async ()
     assert.equal(result.details.requestId, headerId);
     assert.equal(result.details.attempts[0].requestId, headerId);
   }
+});
+
+test("fetch adapters normalize null provider payloads", async () => {
+  const requested = "https://docs.example.com/null-payload";
+  for (const provider of ["tavily", "exa"] as const) {
+    const tools = harness(async () => new Response("null", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
+    await assert.rejects(
+      tools.get("web_fetch").execute("null-fetch", { urls: [requested], provider }, undefined, undefined, { cwd: "/tmp/project" }),
+      (error: unknown) => error instanceof WebProviderError && error.kind === "upstream" && error.retryable,
+    );
+  }
+});
+
+test("unsafe fetch payload IDs retain truncation with safe header fallback", async () => {
+  const requested = "https://docs.example.com/unsafe-id";
+  const tools = harness(async () => new Response(JSON.stringify({
+    request_id: "unsafe request id",
+    results: [{ url: requested, raw_content: "body" }],
+    failed_results: [],
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json", "x-request-id": "safe-fetch-header" },
+  }), { TAVILY_API_KEY: "test-tavily" });
+  const result = await tools.get("web_fetch").execute("unsafe-id", { urls: [requested], provider: "tavily" }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.equal(result.details.requestId, "safe-fetch-header");
+  assert.equal(result.details.truncated, true);
 });
 
 test("web_fetch drops provider-returned content attached to a non-public URL", async () => {
