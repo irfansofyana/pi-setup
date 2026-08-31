@@ -1302,6 +1302,28 @@ test("identical searches reuse the bounded session cache without replaying route
   assert.deepEqual(second.details.attempts, []);
 });
 
+test("cache TTL uses monotonic time across wall-clock rollback", async () => {
+  let calls = 0;
+  let wallClock = 10_000;
+  const tools = harness(async () => {
+    calls++;
+    return new Response(JSON.stringify({
+      request_id: `rollback-${calls}`,
+      results: [{ title: "Fresh", url: "https://example.com/fresh", content: "Evidence." }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily" }, {
+    now: () => wallClock,
+    searchCacheTtlMs: 10,
+  });
+  const params = { query: "monotonic cache", provider: "tavily" };
+  await tools.get("web_search").execute("rollback-1", params, undefined, undefined, { cwd: "/tmp/project" });
+  wallClock = 0;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const second = await tools.get("web_search").execute("rollback-2", params, undefined, undefined, { cwd: "/tmp/project" });
+  assert.equal(calls, 2);
+  assert.equal(second.details.cacheHit, false);
+});
+
 test("an aborted web_search rejects instead of returning a cached result", async () => {
   let calls = 0;
   const tools = harness(async () => {
