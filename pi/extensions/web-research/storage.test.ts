@@ -118,6 +118,21 @@ test("ArtifactStore periodically discovers expired artifacts from peer processes
   await assert.rejects(stat(path), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
 });
 
+test("ArtifactStore does not reuse artifacts before creator commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-pending-reuse-"));
+  const input = { url: "https://example.test/shared", title: "Shared", content: "shared body", provider: "tavily", context: { focus: "same" } };
+  const creator = new ArtifactStore({ root, now: Date.now, randomId: () => "creator", ttlMs: 60_000, maxEntries: 1, maxBytes: 10_000 });
+  const peer = new ArtifactStore({ root, now: Date.now, randomId: () => "peer", ttlMs: 60_000, maxEntries: 1, maxBytes: 10_000 });
+  const created = await creator.save(input);
+  assert.equal(created.reused, undefined);
+  await assert.rejects(peer.save(input), /capacity is full/i);
+  await creator.commit([created.id]);
+  const reused = await peer.save(input);
+  assert.equal(reused.id, created.id);
+  assert.equal(reused.reused, true);
+  await assert.rejects(stat(join(root, ".creator.pending")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
 test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-capacity-"));
   let id = 0;

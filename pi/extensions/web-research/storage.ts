@@ -250,6 +250,15 @@ export class ArtifactStore {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+    for (const name of names.filter((candidate) => candidate.startsWith(".") && candidate.endsWith(".pending"))) {
+      const id = name.slice(1, -".pending".length);
+      try { await lstat(join(this.options.root, `${id}.json`)); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        try { await unlink(join(this.options.root, name)); } catch (unlinkError) {
+          if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+        }
+      }
+    }
     let entries = additionalEntries;
     let bytes = additionalBytes;
     let nearestExpiryAt: number | undefined;
@@ -260,6 +269,9 @@ export class ArtifactStore {
         const expiresAt = Date.parse(record.expiresAt);
         if (expiresAt <= this.options.now()) {
           try { await unlink(path); } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          try { await unlink(join(this.options.root, `.${record.id}.pending`)); } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
           continue;
@@ -283,7 +295,15 @@ export class ArtifactStore {
       const path = join(this.options.root, name);
       const record = await this.loadStoredArtifact(path, name.slice(0, -5));
       const expiresAt = Date.parse(record.expiresAt);
-      if (expiresAt <= this.options.now() || record.contextKey !== contextKey) continue;
+      let pending = false;
+      try {
+        const pendingInfo = await lstat(join(this.options.root, `.${record.id}.pending`));
+        if (pendingInfo.isSymbolicLink() || !pendingInfo.isFile()) throw new Error("Artifact pending marker is unsafe.");
+        pending = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (pending || expiresAt <= this.options.now() || record.contextKey !== contextKey) continue;
       this.scheduleExpirySweep(expiresAt);
       return {
         id: record.id,
@@ -335,7 +355,11 @@ export class ArtifactStore {
       ArtifactStore.throwIfAborted(signal);
       const target = join(this.options.root, `${id}.json`);
       const temporary = join(this.options.root, `.${id}.${process.pid}.tmp`);
+      const pending = join(this.options.root, `.${id}.pending`);
+      let ownsPending = false;
       try {
+        await writeFile(pending, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+        ownsPending = true;
         await writeFile(temporary, data, { encoding: "utf8", flag: "wx", mode: 0o600 });
         await chmod(temporary, 0o600);
         ArtifactStore.throwIfAborted(signal);
@@ -353,6 +377,7 @@ export class ArtifactStore {
         }
       } catch (error) {
         try { await unlink(temporary); } catch { /* nothing to clean */ }
+        if (ownsPending) try { await unlink(pending); } catch { /* nothing to clean */ }
         await compensate();
         throw error;
       }
@@ -361,9 +386,28 @@ export class ArtifactStore {
     }, signal);
   }
 
+  async commit(ids: string[]): Promise<void> {
+    if (ids.some((id) => !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id))) throw new Error("Unsafe artifact ID.");
+    await this.withCapacityLock(async () => {
+      for (const id of ids) {
+        const target = join(this.options.root, `${id}.json`);
+        const info = await lstat(target);
+        if (info.isSymbolicLink() || !info.isFile()) throw new Error("Artifact is not a safe regular file.");
+      }
+      for (const id of ids) {
+        try { await unlink(join(this.options.root, `.${id}.pending`)); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    });
+  }
+
   async discard(id: string): Promise<void> {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) return;
     try { await unlink(join(this.options.root, `${id}.json`)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    try { await unlink(join(this.options.root, `.${id}.pending`)); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }

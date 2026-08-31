@@ -1357,6 +1357,8 @@ async function prepareFetchResults(
         usedCharacters += separatorLength + entry.length;
       }
     }
+    ensureNotCancelled(signal, response.provider);
+    if (rollbackIds.length) await artifacts.commit(rollbackIds);
   } catch (error) {
     await Promise.allSettled(rollbackIds.map((id) => artifacts.discard(id)));
     throw error;
