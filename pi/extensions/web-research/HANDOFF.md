@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 460 passed, 0 failed.
-- Focused web-research suite: 34 passed, 0 failed.
+- Full repository suite: 466 passed, 0 failed.
+- Focused web-research suite: 40 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -66,7 +66,17 @@ Rejected:
 
 - None. Every blocking finding was reproduced against the reviewed commit and accepted.
 
-Verdict: accepted fixes are locally verified; fresh independent Standards and Specification reviews against the exact current commit remain mandatory before delivery.
+The second independent review inspected `d8e90ac045b75e3b5432b10c7298854b534b051e`. Its accepted fixes added:
+
+- IPv4-translated IPv6 rejection (`::ffff:0:0:0/96`).
+- Cancellation-aware artifact lock acquisition/publication and live-owner lock identity.
+- One monotonic deadline shared across provider fallback, including post-response checks for transports that ignore abort signals.
+- Redaction of sensitive URL values echoed through provider titles, snippets, bodies, metadata, failures, or artifacts.
+- Distinct per-URL `timeout`, `rate_limit`, and `not_found` classes.
+- Safe structured validation/artifact errors without local-path disclosure.
+- Branch-wide trailing-whitespace cleanup.
+
+Verdict: both review rounds' accepted fixes are locally verified; one final independent review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 

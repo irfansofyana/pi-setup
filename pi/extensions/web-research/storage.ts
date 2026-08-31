@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, readdir, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -86,34 +86,67 @@ export class ArtifactStore {
     await chmod(this.options.root, 0o700);
   }
 
-  private async withCapacityLock<T>(operation: () => Promise<T>): Promise<T> {
+  private static processIsAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+  }
+
+  private static throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) throw new Error("Artifact operation cancelled.");
+  }
+
+  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     await this.ensureRoot();
     const lockPath = join(this.options.root, ".capacity.lock");
+    const ownerPath = join(lockPath, "owner.json");
+    const ownerToken = randomUUID();
     const deadline = Date.now() + 5_000;
     while (true) {
+      ArtifactStore.throwIfAborted(signal);
       try {
         await mkdir(lockPath, { mode: 0o700 });
+        await writeFile(ownerPath, `${JSON.stringify({ pid: process.pid, token: ownerToken })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         try {
-          const info = await stat(lockPath);
-          if (Date.now() - info.mtimeMs > 30_000) {
-            await rmdir(lockPath);
-            continue;
+          const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { pid?: unknown; token?: unknown };
+          if (Number.isInteger(owner.pid) && typeof owner.token === "string" && !ArtifactStore.processIsAlive(owner.pid as number)) {
+            const current = JSON.parse(await readFile(ownerPath, "utf8")) as { token?: unknown };
+            if (current.token === owner.token) {
+              await unlink(ownerPath);
+              await rmdir(lockPath);
+              continue;
+            }
           }
         } catch (lockError) {
-          if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError;
-          continue;
+          if ((lockError as NodeJS.ErrnoException).code === "ENOENT") continue;
         }
         if (Date.now() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
-        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 10);
+          signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new Error("Artifact operation cancelled."));
+          }, { once: true });
+        });
       }
     }
     try {
+      ArtifactStore.throwIfAborted(signal);
       return await operation();
     } finally {
-      try { await rmdir(lockPath); } catch { /* stale-lock recovery handles abnormal removal */ }
+      try {
+        const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { token?: unknown };
+        if (owner.token === ownerToken) {
+          await unlink(ownerPath);
+          await rmdir(lockPath);
+        }
+      } catch { /* a lost lock must not remove a replacement owner's lock */ }
     }
   }
 
@@ -147,8 +180,9 @@ export class ArtifactStore {
     }
   }
 
-  async save(input: { url: string; title: string; content: string; provider: string; context?: Record<string, unknown> }): Promise<ArtifactRecord> {
+  async save(input: { url: string; title: string; content: string; provider: string; context?: Record<string, unknown> }, signal?: AbortSignal): Promise<ArtifactRecord> {
     return this.withCapacityLock(async () => {
+      ArtifactStore.throwIfAborted(signal);
       const id = this.options.randomId();
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new Error("Artifact ID generator returned an unsafe value.");
       const createdAt = new Date(this.options.now()).toISOString();
@@ -161,20 +195,30 @@ export class ArtifactStore {
       const data = `${JSON.stringify(record)}\n`;
       if (Buffer.byteLength(data) > this.options.maxBytes) throw new Error("Fetched content exceeds the artifact store byte limit.");
       await this.cleanup(1, Buffer.byteLength(data));
+      ArtifactStore.throwIfAborted(signal);
       const target = join(this.options.root, `${id}.json`);
       const temporary = join(this.options.root, `.${id}.${process.pid}.tmp`);
       try {
         await writeFile(temporary, data, { encoding: "utf8", flag: "wx", mode: 0o600 });
         await chmod(temporary, 0o600);
+        ArtifactStore.throwIfAborted(signal);
         await link(temporary, target);
+        if (signal?.aborted) {
+          await unlink(target);
+          throw new Error("Artifact operation cancelled.");
+        }
         await unlink(temporary);
         await chmod(target, 0o600);
+        if (signal?.aborted) {
+          await unlink(target);
+          throw new Error("Artifact operation cancelled.");
+        }
       } catch (error) {
         try { await unlink(temporary); } catch { /* nothing to clean */ }
         throw error;
       }
       return { id, path: target, url: input.url, chars: input.content.length, createdAt, expiresAt };
-    });
+    }, signal);
   }
 
   async read(id: string, offset: number, maxCharacters: number): Promise<{

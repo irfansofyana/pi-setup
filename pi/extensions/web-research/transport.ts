@@ -54,6 +54,7 @@ export interface TransportDependencies {
   maxResponseBytes: number;
   maxRetryDelayMs: number;
   totalRequestTimeoutMs: number;
+  monotonicNow: () => number;
 }
 
 export interface JsonTransportResponse<T> {
@@ -180,12 +181,13 @@ export async function requestJson<T>(
   init: RequestInit,
   dependencies: TransportDependencies,
   callerSignal?: AbortSignal,
+  operationDeadlineAt?: number,
 ): Promise<JsonTransportResponse<T>> {
-  const startedAt = Date.now();
-  const deadlineAt = dependencies.totalRequestTimeoutMs > 0
+  const startedAt = dependencies.monotonicNow();
+  const deadlineAt = operationDeadlineAt ?? (dependencies.totalRequestTimeoutMs > 0
     ? startedAt + dependencies.totalRequestTimeoutMs
-    : Number.POSITIVE_INFINITY;
-  const remainingMs = () => Math.max(0, deadlineAt - Date.now());
+    : Number.POSITIVE_INFINITY);
+  const remainingMs = () => Math.max(0, deadlineAt - dependencies.monotonicNow());
   for (let attempt = 0; ; attempt++) {
     if (callerSignal?.aborted) throw cancelled(provider, attempt);
     const remaining = remainingMs();
@@ -193,7 +195,7 @@ export async function requestJson<T>(
     const attemptTimeout = dependencies.requestTimeoutMs > 0
       ? Math.min(dependencies.requestTimeoutMs, remaining)
       : remaining;
-    const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, attemptTimeout)) : undefined;
+    const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, Math.floor(attemptTimeout))) : undefined;
     const signal = callerSignal && timeoutSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : (callerSignal ?? timeoutSignal);
     let response: Response;
     try {
@@ -212,6 +214,7 @@ export async function requestJson<T>(
     }
 
     if (callerSignal?.aborted) throw cancelled(provider, attempt);
+    if (timeoutSignal?.aborted || remainingMs() <= 0) throw timeout(provider, attempt);
 
     if (!response.ok) {
       const error = responseError(provider, response, attempt);
@@ -227,6 +230,7 @@ export async function requestJson<T>(
     try {
       const payload = await boundedJson<T>(provider, response, dependencies.maxResponseBytes, attempt);
       if (callerSignal?.aborted) throw cancelled(provider, attempt);
+      if (timeoutSignal?.aborted || remainingMs() <= 0) throw timeout(provider, attempt);
       return { response, payload, retryCount: attempt };
     } catch (caught) {
       if (callerSignal?.aborted) throw cancelled(provider, attempt);

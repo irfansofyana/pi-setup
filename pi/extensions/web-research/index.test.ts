@@ -106,6 +106,20 @@ test("web_search uses Tavily by default and labels compact snippets as discovery
   assert.ok(updates.length >= 1);
 });
 
+test("web_search normalizes semantic validation failures", async () => {
+  const tools = harness(async () => { throw new Error("provider must not run"); }, { TAVILY_API_KEY: "test-tavily" });
+  await assert.rejects(
+    tools.get("web_search").execute("invalid-max-results", { query: "valid", maxResults: 0 }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebProviderError);
+      assert.equal(error.kind, "validation");
+      assert.equal(error.details.errorKind, "validation");
+      assert.deepEqual(error.details.attempts, []);
+      return true;
+    },
+  );
+});
+
 test("web_search locally caps provider over-return and adversarial metadata", async () => {
   const longTitle = `Title-${"t".repeat(2_000)}-TITLE-END`;
   const longSnippet = `Snippet-${"s".repeat(8_000)}-SNIPPET-END`;
@@ -487,7 +501,7 @@ test("web_fetch redacts sensitive query values from output and artifact metadata
     requestBody = JSON.parse(String(init.body));
     return new Response(JSON.stringify({
       request_id: "redacted-url",
-      results: [{ url: signedUrl, raw_content: "sensitive source body".repeat(20) }],
+      results: [{ url: signedUrl, title: "echo secret123", raw_content: "provider echoed secret123 in source body ".repeat(20) }],
       failed_results: [],
     }), { status: 200, headers: { "content-type": "application/json" } });
   }, { TAVILY_API_KEY: "test-tavily" }, {
@@ -608,6 +622,7 @@ test("web_fetch rejects non-public URLs before calling a provider", async () => 
     "http://169.254.169.254/latest/meta-data",
     "http://[::127.0.0.1]/admin",
     "http://[::ffff:127.0.0.1]/admin",
+    "http://[::ffff:0:127.0.0.1]/admin",
     "http://[2002:7f00:1::]/admin",
     "http://[::1]/admin",
     "http://[fe80::1]/admin",
@@ -700,6 +715,29 @@ test("transport applies one end-to-end deadline across provider attempts", async
     /timed out/i,
   );
   assert.equal(calls, 1);
+});
+
+test("transport keeps one end-to-end deadline across provider fallback", async () => {
+  let calls = 0;
+  const tools = harness(async (input) => {
+    calls++;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    if (String(input).includes("tavily")) return new Response("busy", { status: 503 });
+    return new Response(JSON.stringify({ requestId: "too-late", results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, {
+    maxRetries: 0,
+    totalRequestTimeoutMs: 20,
+    requestTimeoutMs: 100,
+  });
+
+  await assert.rejects(
+    tools.get("web_search").execute("global-deadline-fallback", { query: "deadline across fallback" }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "timeout",
+  );
+  assert.ok(calls >= 1 && calls <= 2, `unexpected provider calls: ${calls}`);
 });
 
 test("caller cancellation aborts the underlying provider request and never falls back", async () => {
@@ -848,6 +886,21 @@ test("web_fetch retrieves default oversized evidence by opaque artifact ID witho
   assert.equal(retrieved.details.hasMore, false);
 });
 
+test("web_fetch normalizes a missing opaque artifact without leaking its path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-research-missing-artifact-"));
+  const tools = harness(async () => { throw new Error("provider must not run"); }, {}, { artifactRoot: root });
+  await assert.rejects(
+    tools.get("web_fetch").execute("missing-artifact", { artifactId: "missing-opaque-id" }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebProviderError);
+      assert.equal(error.kind, "not_found");
+      assert.equal(error.details.errorKind, "not_found");
+      assert.doesNotMatch(String(error), /missing-artifact-|\.json|\/tmp\//);
+      return true;
+    },
+  );
+});
+
 test("web_fetch locally enforces maxCharactersPerResult when a provider exceeds it", async () => {
   const fullContent = `${"x".repeat(7_000)}END-MUST-NOT-APPEAR`;
   const tools = harness(async () => new Response(JSON.stringify({
@@ -901,7 +954,7 @@ test("web_fetch falls back to Exa only when automatic Tavily extraction has no s
   assert.deepEqual(requests, ["https://api.tavily.com/extract", "https://api.exa.ai/contents"]);
   assert.equal(result.details.provider, "exa");
   assert.deepEqual(result.details.attempts, [
-    { provider: "tavily", outcome: "error", status: 200, errorKind: "upstream", durationMs: 0 },
+    { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", durationMs: 0 },
     { provider: "exa", outcome: "success", status: 200, durationMs: 0 },
   ]);
   assert.match(result.content[0]?.text ?? "", /Recovered body\./);
@@ -929,6 +982,29 @@ test("web_fetch does not fall back after an all-failed permission response", asy
   assert.deepEqual(requests, ["https://api.tavily.com/extract"]);
   assert.deepEqual(result.details.failureKinds, ["permission"]);
   assert.match(result.content[0]?.text ?? "", /permission/i);
+});
+
+test("web_fetch preserves timeout rate-limit and not-found failure classes", async () => {
+  for (const [code, expectedKind] of [
+    ["CRAWL_TIMEOUT", "timeout"],
+    ["RATE_LIMIT", "rate_limit"],
+    ["NOT_FOUND", "not_found"],
+  ] as const) {
+    const tools = harness(async () => new Response(JSON.stringify({
+      request_id: `failure-${code}`,
+      results: [],
+      failed_results: [{ url: "https://example.test/page", error: code }],
+    }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" });
+    const result = await tools.get("web_fetch").execute(
+      `failure-${code}`,
+      { urls: ["https://example.test/page"], provider: "tavily" },
+      undefined,
+      undefined,
+      { cwd: "/tmp/project" },
+    );
+    assert.deepEqual(result.details.failureKinds, [expectedKind]);
+    assert.equal(result.details.attempts[0].errorKind, expectedKind);
+  }
 });
 
 test("web_fetch reports retries spent before transient fallback", async () => {

@@ -1,8 +1,8 @@
 # Pi Native Web Research Harness — Approved Requirements
 
-Status: Approved for repository implementation  
-Date: 2026-08-30  
-Updated: 2026-08-31 — implementation approved; live-device removal remains separately gated  
+Status: Approved for repository implementation
+Date: 2026-08-30
+Updated: 2026-08-31 — implementation approved; live-device removal remains separately gated
 Scope: Extension, bundled skill, Ciung template source, tests, trackers, and setup documentation
 
 ## 1. Purpose

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -126,4 +126,52 @@ test("ArtifactStore retrieves bounded content by opaque ID and rejects unsafe ID
   assert.equal(page.hasMore, true);
   assert.match(page.contextKey, /^[a-f0-9]{64}$/);
   await assert.rejects(store.read("../escape", 0, 10), /unsafe artifact ID/i);
+});
+
+test("ArtifactStore cancellation while waiting for a stale lock never publishes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-cancel-lock-"));
+  const lock = join(root, ".capacity.lock");
+  await mkdir(lock);
+  await utimes(lock, new Date(0), new Date(0));
+  const controller = new AbortController();
+  controller.abort();
+  const store = new ArtifactStore({
+    root,
+    now: () => 1_725_000_000_000,
+    randomId: () => "cancelled-artifact",
+    ttlMs: 60_000,
+    maxEntries: 1,
+    maxBytes: 10_000,
+  });
+
+  await assert.rejects(
+    store.save({ url: "https://example.test", title: "cancelled", content: "never publish", provider: "tavily" }, controller.signal),
+    /cancelled/i,
+  );
+  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
+});
+
+test("ArtifactStore never reclaims a stale-looking lock owned by a live process", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-live-owner-"));
+  const lock = join(root, ".capacity.lock");
+  await mkdir(lock);
+  await writeFile(join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
+  await utimes(lock, new Date(0), new Date(0));
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 30);
+  const store = new ArtifactStore({
+    root,
+    now: () => 1_725_000_000_000,
+    randomId: () => "must-not-publish",
+    ttlMs: 60_000,
+    maxEntries: 1,
+    maxBytes: 10_000,
+  });
+
+  await assert.rejects(
+    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }, controller.signal),
+    /cancelled/i,
+  );
+  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
+  assert.equal((await readFile(join(lock, "owner.json"), "utf8")).includes("live-owner"), true);
 });

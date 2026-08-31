@@ -55,6 +55,7 @@ export type SearchIntent = "general" | "semantic" | "code";
 export interface WebResearchDependencies extends TransportDependencies {
   env: Record<string, string | undefined>;
   now: () => number;
+  monotonicNow: () => number;
   searchCacheTtlMs: number;
   fetchCacheTtlMs: number;
   maxCacheEntries: number;
@@ -71,6 +72,7 @@ const DEFAULT_DEPENDENCIES: WebResearchDependencies = {
   fetch: globalThis.fetch.bind(globalThis),
   env: process.env,
   now: Date.now,
+  monotonicNow: () => performance.now(),
   sleep: defaultSleep,
   requestTimeoutMs: 30_000,
   maxRetries: 2,
@@ -143,10 +145,43 @@ type ToolUpdate = {
 };
 type ToolUpdateCallback = ((update: ToolUpdate) => void) | undefined;
 
+function localWebError(kind: ErrorKind, message: string, provider: ProviderName = "tavily"): WebProviderError {
+  return new WebProviderError({
+    provider,
+    kind,
+    message,
+    details: {
+      attempts: [],
+      retryCount: 0,
+      durationMs: 0,
+      cacheState: "bypass",
+      cacheAgeMs: 0,
+      returnedCharacters: 0,
+      storedCharacters: 0,
+      cancellationState: kind === "cancelled",
+      errorKind: kind,
+    },
+  });
+}
+
+function validationError(message: string): never {
+  throw localWebError("validation", message);
+}
+
+function normalizeArtifactError(error: unknown, provider: ProviderName): WebProviderError {
+  if (error instanceof WebProviderError) return error;
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (message.includes("cancelled")) return localWebError("cancelled", "Artifact operation was cancelled.", provider);
+  if (message.includes("enoent") || message.includes("expired") || message.includes("not found")) return localWebError("not_found", "Artifact was not found or has expired.", provider);
+  if (message.includes("unsafe artifact id") || message.includes("offset") || message.includes("maxcharacters")) return localWebError("validation", "Artifact retrieval parameters are invalid.", provider);
+  if (message.includes("timed out")) return localWebError("timeout", "Artifact storage timed out.", provider);
+  return localWebError("unknown", "Artifact storage or retrieval failed safely.", provider);
+}
+
 function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number, field: string): number {
   if (value === undefined) return fallback;
   if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${field} must be an integer between ${minimum} and ${maximum}.`);
+    validationError(`${field} must be an integer between ${minimum} and ${maximum}.`);
   }
   return value;
 }
@@ -154,23 +189,23 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
 function enumValue<T extends string>(value: unknown, fallback: T, allowed: readonly T[], field: string): T {
   if (value === undefined) return fallback;
   if (typeof value === "string" && allowed.includes(value as T)) return value as T;
-  throw new Error(`${field} must be one of: ${allowed.join(", ")}.`);
+  validationError(`${field} must be one of: ${allowed.join(", ")}.`);
 }
 
 function requiredQuery(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error("query is required.");
+  if (typeof value !== "string" || !value.trim()) validationError("query is required.");
   const query = value.trim();
-  if (query.length > 2_000) throw new Error("query must not exceed 2000 characters.");
+  if (query.length > 2_000) validationError("query must not exceed 2000 characters.");
   return query;
 }
 
 function domainList(value: unknown, field: string): string[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > 20) throw new Error(`${field} must be an array of at most 20 domains.`);
+  if (!Array.isArray(value) || value.length > 20) validationError(`${field} must be an array of at most 20 domains.`);
   const domains = value.map((item) => {
-    if (typeof item !== "string" || !item.trim()) throw new Error(`${field} must contain non-empty domain strings.`);
+    if (typeof item !== "string" || !item.trim()) validationError(`${field} must contain non-empty domain strings.`);
     const domain = item.trim().toLowerCase();
-    if (domain.length > 253 || /[\s/@]/.test(domain)) throw new Error(`${field} contains an invalid domain.`);
+    if (domain.length > 253 || /[\s/@]/.test(domain)) validationError(`${field} contains an invalid domain.`);
     return domain;
   });
   return [...new Set(domains)];
@@ -179,7 +214,7 @@ function domainList(value: unknown, field: string): string[] {
 function publishedDate(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !value.trim() || !Number.isFinite(Date.parse(value))) {
-    throw new Error(`${field} must be an ISO 8601 date or timestamp.`);
+    validationError(`${field} must be an ISO 8601 date or timestamp.`);
   }
   return value.trim();
 }
@@ -218,7 +253,10 @@ function classifyFetchFailure(value: unknown, fallback: string): { error: string
   if (/auth|unauthori/.test(normalized)) return { error, kind: "authentication", retryable: false };
   if (/quota|payment|credit/.test(normalized)) return { error, kind: "payment_or_quota", retryable: false };
   if (/invalid|validation|bad_request/.test(normalized)) return { error, kind: "validation", retryable: false };
-  if (/timeout|temporar|network|rate_limit|upstream|crawl_timeout/.test(normalized)) return { error, kind: "upstream", retryable: true };
+  if (/rate_limit|ratelimit|too_many|429/.test(normalized)) return { error, kind: "rate_limit", retryable: true };
+  if (/timeout|timed_out|crawl_timeout/.test(normalized)) return { error, kind: "timeout", retryable: true };
+  if (/not_found|notfound|404/.test(normalized)) return { error, kind: "not_found", retryable: false };
+  if (/temporar|network|upstream/.test(normalized)) return { error, kind: "upstream", retryable: true };
   return { error, kind: "unknown", retryable: false };
 }
 
@@ -252,6 +290,45 @@ function redactUrlForDisplay(value: string): string {
     if (SENSITIVE_QUERY_KEYS.has(normalized)) parsed.searchParams.set(key, "REDACTED");
   }
   return parsed.toString();
+}
+
+function sensitiveUrlValues(urls: string[]): string[] {
+  const values = new Set<string>();
+  for (const url of urls) {
+    const parsed = new URL(url);
+    for (const [key, value] of parsed.searchParams) {
+      if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) && value.length >= 3) {
+        values.add(value);
+        values.add(encodeURIComponent(value));
+      }
+    }
+  }
+  return [...values].sort((a, b) => b.length - a.length);
+}
+
+function redactValues(text: string | undefined, values: string[]): string | undefined {
+  if (text === undefined) return undefined;
+  return values.reduce((result, value) => result.split(value).join("[REDACTED]"), text);
+}
+
+function redactFetchResponse(response: ProviderFetchResponse, values: string[]): ProviderFetchResponse {
+  if (values.length === 0) return response;
+  return {
+    ...response,
+    requestId: redactValues(response.requestId, values),
+    documents: response.documents.map((document) => ({
+      ...document,
+      title: redactValues(document.title, values) ?? "Untitled result",
+      snippets: document.snippets.map((snippet) => redactValues(snippet, values) ?? ""),
+      content: redactValues(document.content, values) ?? "",
+      publishedAt: redactValues(document.publishedAt, values),
+      author: redactValues(document.author, values),
+    })),
+    failures: response.failures.map((failure) => ({
+      ...failure,
+      error: redactValues(failure.error, values) ?? "provider_failure",
+    })),
+  };
 }
 
 function publicProviderUrl(value: unknown): string | undefined {
@@ -292,7 +369,7 @@ function formatSearchResults(results: WebDocument[]): { text: string; truncated:
     : { text: formatted, truncated: false };
 }
 
-async function searchTavily(input: SearchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderSearchResponse> {
+async function searchTavily(input: SearchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderSearchResponse> {
   const apiKey = dependencies.env.TAVILY_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "tavily", kind: "authentication", message: "Tavily authentication is not configured (set TAVILY_API_KEY)." });
   const resolvedMode = tavilyMode(input.profile);
@@ -309,7 +386,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
       ...(input.publishedAfter ? { start_date: input.publishedAfter.slice(0, 10) } : {}),
       ...(input.publishedBefore ? { end_date: input.publishedBefore.slice(0, 10) } : {}),
     }),
-  }, dependencies, signal);
+  }, dependencies, signal, deadlineAt);
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.maxResults;
   const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
@@ -339,7 +416,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
   return { provider: "tavily", resolvedMode, status: response.status, requestId, documents, retryCount, truncated };
 }
 
-async function searchExa(input: SearchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderSearchResponse> {
+async function searchExa(input: SearchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderSearchResponse> {
   const apiKey = dependencies.env.EXA_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "exa", kind: "authentication", message: "Exa authentication is not configured (set EXA_API_KEY)." });
   const resolvedMode = exaMode(input.profile);
@@ -356,7 +433,7 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
       ...(input.publishedAfter ? { startPublishedDate: input.publishedAfter } : {}),
       ...(input.publishedBefore ? { endPublishedDate: input.publishedBefore } : {}),
     }),
-  }, dependencies, signal);
+  }, dependencies, signal, deadlineAt);
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.maxResults;
   const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
@@ -406,13 +483,16 @@ async function executeSearch(
   const selected = initialProvider(input);
   const attempts: SearchAttempt[] = [];
   let retryCount = 0;
+  const deadlineAt = dependencies.totalRequestTimeoutMs > 0
+    ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
+    : Number.POSITIVE_INFINITY;
   const run = async (provider: ProviderName): Promise<ProviderSearchResponse> => {
     const attemptStartedAt = dependencies.now();
     onUpdate?.({ content: [{ type: "text", text: `Searching ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
-        ? await searchTavily(input, dependencies, signal)
-        : await searchExa(input, dependencies, signal);
+        ? await searchTavily(input, dependencies, signal, deadlineAt)
+        : await searchExa(input, dependencies, signal, deadlineAt);
       retryCount += response.retryCount;
       attempts.push({
         provider,
@@ -532,6 +612,7 @@ function isPrivateIpv6(host: string): boolean {
   const specialRanges: Array<[string, number]> = [
     ["::", 96],
     ["::ffff:0:0", 96],
+    ["::ffff:0:0:0", 96],
     ["64:ff9b::", 96],
     ["64:ff9b:1::", 48],
     ["100::", 64],
@@ -587,13 +668,13 @@ function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[]
 
 function optionalFocus(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim()) throw new Error("focus must be a non-empty string.");
+  if (typeof value !== "string" || !value.trim()) validationError("focus must be a non-empty string.");
   const focus = value.trim();
-  if (focus.length > 1_000) throw new Error("focus must not exceed 1000 characters.");
+  if (focus.length > 1_000) validationError("focus must not exceed 1000 characters.");
   return focus;
 }
 
-async function fetchTavily(input: FetchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderFetchResponse> {
+async function fetchTavily(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
   const apiKey = dependencies.env.TAVILY_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "tavily", kind: "authentication", message: "Tavily authentication is not configured (set TAVILY_API_KEY)." });
   const { response, payload, retryCount } = await requestJson<{ request_id?: unknown; results?: unknown; failed_results?: unknown }>("tavily", "https://api.tavily.com/extract", {
@@ -605,7 +686,7 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
       format: "markdown",
       ...(input.focus ? { query: input.focus } : {}),
     }),
-  }, dependencies, signal);
+  }, dependencies, signal, deadlineAt);
   const allowedUrls = new Set(input.urls.map(redactUrlForDisplay));
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
@@ -662,7 +743,7 @@ function exaStatusFailure(value: unknown): FetchFailure | undefined {
   };
 }
 
-async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderFetchResponse> {
+async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
   const apiKey = dependencies.env.EXA_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "exa", kind: "authentication", message: "Exa authentication is not configured (set EXA_API_KEY)." });
   const { response, payload, retryCount } = await requestJson<{ requestId?: unknown; results?: unknown; statuses?: unknown }>("exa", "https://api.exa.ai/contents", {
@@ -673,7 +754,7 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
       text: { maxCharacters: input.maxCharactersPerResult },
       ...(input.focus ? { highlights: { query: input.focus, maxCharacters: input.maxCharactersPerResult } } : {}),
     }),
-  }, dependencies, signal);
+  }, dependencies, signal, deadlineAt);
   const allowedUrls = new Set(input.urls.map(redactUrlForDisplay));
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
@@ -737,13 +818,16 @@ async function executeFetch(
   const selected: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
   const attempts: FetchAttempt[] = [];
   let retryCount = 0;
+  const deadlineAt = dependencies.totalRequestTimeoutMs > 0
+    ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
+    : Number.POSITIVE_INFINITY;
   const run = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
     const attemptStartedAt = dependencies.now();
     onUpdate?.({ content: [{ type: "text", text: `Fetching with ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
-        ? await fetchTavily(input, dependencies, signal)
-        : await fetchExa(input, dependencies, signal);
+        ? await fetchTavily(input, dependencies, signal, deadlineAt)
+        : await fetchExa(input, dependencies, signal, deadlineAt);
       retryCount += response.retryCount;
       const outcome = response.documents.length && response.failures.length
         ? "partial"
@@ -825,13 +909,18 @@ async function prepareFetchResults(
       ? `\n\n[Provider content capped at ${document.content.length} characters.]`
       : "";
     if (content.length > maxInlineChars) {
-      const artifact = await artifacts.save({
-        url: document.url,
-        title: document.title,
-        content: document.content,
-        provider: response.provider,
-        context: artifactContext,
-      });
+      let artifact: ArtifactRecord;
+      try {
+        artifact = await artifacts.save({
+          url: document.url,
+          title: document.title,
+          content: document.content,
+          provider: response.provider,
+          context: artifactContext,
+        }, signal);
+      } catch (error) {
+        throw normalizeArtifactError(error, response.provider);
+      }
       ensureNotCancelled(signal, response.provider);
       const { path: _path, ...handle } = artifact;
       records.push(handle);
@@ -999,12 +1088,17 @@ export default function webResearch(
     ) {
       const raw = params;
       if (raw.artifactId !== undefined) {
-        if (raw.urls !== undefined) throw new WebProviderError({ provider: "tavily", kind: "validation", message: "Use either urls or artifactId, not both." });
+        if (raw.urls !== undefined) throw localWebError("validation", "Use either urls or artifactId, not both.");
         ensureNotCancelled(signal, "tavily");
-        if (typeof raw.artifactId !== "string") throw new WebProviderError({ provider: "tavily", kind: "validation", message: "artifactId must be a string." });
+        if (typeof raw.artifactId !== "string") throw localWebError("validation", "artifactId must be a string.");
         const offset = boundedInteger(raw.artifactOffset, 0, 0, Number.MAX_SAFE_INTEGER, "artifactOffset");
         const maxCharacters = boundedInteger(raw.artifactMaxCharacters, 12_000, 1, 12_000, "artifactMaxCharacters");
-        const page = await artifactStore.read(raw.artifactId, offset, maxCharacters);
+        let page: Awaited<ReturnType<ArtifactStore["read"]>>;
+        try {
+          page = await artifactStore.read(raw.artifactId, offset, maxCharacters);
+        } catch (error) {
+          throw normalizeArtifactError(error, "tavily");
+        }
         ensureNotCancelled(signal, "tavily");
         return {
           content: [{ type: "text", text: [`Artifact: ${page.id}`, `URL: ${page.url}`, `Provider: ${page.provider}`, "", page.content].join("\n") }],
@@ -1050,7 +1144,7 @@ export default function webResearch(
       let retryCount = 0;
       if (!response) {
         const executed = await executeFetch(input, dependencies, signal, onUpdate);
-        response = executed.response;
+        response = redactFetchResponse(executed.response, sensitiveUrlValues(input.urls));
         attempts = executed.attempts;
         retryCount = executed.retryCount;
         if (!input.noCache) fetchCache.set(cacheKey, response);
