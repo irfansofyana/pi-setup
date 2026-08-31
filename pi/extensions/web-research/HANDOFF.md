@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 505 passed, 0 failed.
-- Focused web-research suite: 79 passed, 0 failed.
+- Full repository suite: 508 passed, 0 failed.
+- Focused web-research suite: 82 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -167,8 +167,14 @@ Accepted:
 - Once the provider byte ceiling is observed, a later timeout or caller abort caused by best-effort stream cleanup cannot replace the authoritative non-retryable safety-policy failure.
 - Artifact parsing uses a stable 4 MiB per-record safety ceiling rather than the mutable aggregate capacity, so expired records remain inspectable and prunable after a configured byte-cap reduction.
 - Cache expiry uses both monotonic and nonnegative wall-clock elapsed time, with an unref'd one-second recheck bound while entries exist; rollback cannot extend TTL and suspend time still counts toward retention.
+- Configured Tavily/Exa credential literals are rejected in search queries, fetch URLs, and focus text before cache construction or provider calls.
+- Successful-HTTP response-body timeouts now consume same-provider retries within the shared operation deadline before fallback is considered.
+- Sensitive URL redaction is capped at 64 distinct patterns and 32 KiB aggregate; oversized redaction work fails closed before provider work or persistence.
 
 Rejected as a current PR blocker:
+
+- Blanket rejection of all credential-shaped fetch URL parameters: provider-backed extraction intentionally sends the user-selected public URL to the selected external provider, and existing requirements/tests cover local redaction plus provider-retention disclosure. Configured provider credentials are separately rejected before transmission.
+- Automatic reclamation of uncertain crash-left artifact locks: the approved filesystem-only design deliberately fails closed and documents deterministic manual removal after confirming no Pi process is using the store; adding process-identity recovery would enlarge the rejected coordination architecture.
 
 - Running every frozen baseline/skill/Ciung/legacy evaluation case. `REQUIREMENTS.md` G-6 and M-3 explicitly keep these as dogfood and legacy-deprecation gates, some require credentials and deployment approval, and the draft PR already states they are incomplete. The frozen corpus remains shipped and legacy routes remain untouched; no benchmark result is fabricated.
 

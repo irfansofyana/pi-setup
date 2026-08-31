@@ -342,14 +342,26 @@ function tolerantDecodeStages(rawValue: string): string[] {
   return [...stages];
 }
 
-function sensitiveUrlValues(urls: string[]): string[] {
+const MAX_REDACTION_VALUES = 64;
+const MAX_REDACTION_VALUE_CHARS = 32_768;
+
+function sensitiveUrlValues(urls: string[], provider: ProviderName = "tavily"): string[] {
   const values = new Set<string>();
+  let totalCharacters = 0;
+  const addCandidate = (value: string): void => {
+    if (!value || values.has(value)) return;
+    if (values.size >= MAX_REDACTION_VALUES || totalCharacters + value.length > MAX_REDACTION_VALUE_CHARS) {
+      throw localWebError("safety-policy", "Sensitive URL metadata exceeds the redaction safety bound.", provider);
+    }
+    values.add(value);
+    totalCharacters += value.length;
+  };
   const addValue = (rawValue: string): void => {
     for (const value of tolerantDecodeStages(rawValue)) {
       if (!value) continue;
-      values.add(value);
-      values.add(encodeURIComponent(value));
-      values.add(encodeURIComponent(value).replace(/%20/g, "+"));
+      addCandidate(value);
+      addCandidate(encodeURIComponent(value));
+      addCandidate(encodeURIComponent(value).replace(/%20/g, "+"));
     }
   };
   const addPairs = (serialized: string): void => {
@@ -434,6 +446,18 @@ function requestRedactionValues(dependencies: WebResearchDependencies, contextua
     ...contextual,
     ...literalSecretValues([dependencies.env.TAVILY_API_KEY, dependencies.env.EXA_API_KEY]),
   ])].sort((a, b) => b.length - a.length);
+}
+
+function rejectConfiguredCredentialLiterals(
+  values: Array<string | undefined>,
+  dependencies: WebResearchDependencies,
+  provider: ProviderName,
+): void {
+  const input = values.filter((value): value is string => value !== undefined).join("\n").toLowerCase();
+  const credentials = literalSecretValues([dependencies.env.TAVILY_API_KEY, dependencies.env.EXA_API_KEY]);
+  if (credentials.some((credential) => input.includes(credential.toLowerCase()))) {
+    throw localWebError("safety-policy", "Input contains configured provider credentials.", provider);
+  }
 }
 
 function redactSearchResponse(response: ProviderSearchResponse, values: string[]): ProviderSearchResponse {
@@ -1299,6 +1323,7 @@ export default function webResearch(
       }
       const startedAt = dependencies.monotonicNow();
       const selectedProvider = initialProvider(input);
+      rejectConfiguredCredentialLiterals([input.query], dependencies, selectedProvider);
       ensureNotCancelled(signal, selectedProvider);
       const cacheKey = createOpaqueCacheKey(cacheKeySecret, input);
       const cachedEntry = searchCache.getWithAge(cacheKey);
@@ -1429,6 +1454,7 @@ export default function webResearch(
         noCache: raw.noCache === true,
       };
       const selectedProvider: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
+      rejectConfiguredCredentialLiterals([...input.urls, input.focus], dependencies, selectedProvider);
       ensureNotCancelled(signal, selectedProvider);
       const cacheKey = createOpaqueCacheKey(cacheKeySecret, {
         urls: input.urls,

@@ -295,8 +295,16 @@ export async function requestJson<T>(
       // Once the byte ceiling has been observed, best-effort body cleanup
       // cannot replace that authoritative safety failure with a later abort.
       if (caught instanceof WebProviderError && caught.kind === "safety-policy") throw caught;
+      if (caught instanceof WebProviderError) {
+        if (!caught.retryable || attempt >= dependencies.maxRetries || remainingMs() <= 0) throw caught;
+        try {
+          await dependencies.sleep(delayFor(caught, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
+        } catch {
+          throw cancelled(provider, attempt);
+        }
+        continue;
+      }
       if (firstAbortKind) throw abortError();
-      if (caught instanceof WebProviderError) throw caught;
       const error = new WebProviderError({
         provider,
         kind: "upstream",

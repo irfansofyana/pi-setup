@@ -160,6 +160,44 @@ test("web_search redacts configured provider credentials from output and telemet
   assert.match(JSON.stringify(result), /REDACTED/);
 });
 
+test("tools reject configured provider credentials before outbound requests", async () => {
+  const apiKey = "configured-provider-secret";
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    return new Response("{}");
+  }, { TAVILY_API_KEY: apiKey });
+
+  await assert.rejects(
+    tools.get("web_search").execute("secret-query", { query: `find ${apiKey}` }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "safety-policy",
+  );
+  await assert.rejects(
+    tools.get("web_fetch").execute("secret-focus", { urls: ["https://docs.example.com/page"], focus: `inspect ${apiKey}` }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "safety-policy",
+  );
+  await assert.rejects(
+    tools.get("web_fetch").execute("secret-url", { urls: [`https://docs.example.com/${apiKey}`] }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "safety-policy",
+  );
+  assert.equal(calls, 0);
+});
+
+test("web_fetch rejects excessive redaction patterns before provider work", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    return new Response("{}");
+  }, { TAVILY_API_KEY: "test-tavily" });
+  const query = Array.from({ length: 80 }, (_, index) => `token=secret-${index}`).join("&");
+
+  await assert.rejects(
+    tools.get("web_fetch").execute("redaction-bound", { urls: [`https://docs.example.com/page?${query}`] }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "safety-policy",
+  );
+  assert.equal(calls, 0);
+});
+
 test("web_search normalizes semantic validation failures", async () => {
   const tools = harness(async () => { throw new Error("provider must not run"); }, { TAVILY_API_KEY: "test-tavily" });
   await assert.rejects(
@@ -641,11 +679,11 @@ test("web_fetch redacts configured credentials and focus URL secrets from output
   const root = await mkdtemp(join(tmpdir(), "pi-web-research-focus-redaction-"));
   const apiKey = "tavily-fetch-secret";
   const focusSecret = "focus-oauth-secret";
-  const requestedUrl = `https://docs.example.com/${apiKey}?ordinary=${apiKey}`;
+  const requestedUrl = "https://docs.example.com/page";
   const tools = harness(async () => new Response(JSON.stringify({
     request_id: apiKey,
     results: [{
-      url: requestedUrl,
+      url: `${requestedUrl}#ordinary=${apiKey}`,
       title: `echo ${apiKey} ${focusSecret}`,
       raw_content: `body ${apiKey} ${focusSecret} `.repeat(100),
     }],
@@ -1090,6 +1128,34 @@ test("stalled response-body reads obey caller cancellation and the operation dea
     ]),
     (error: unknown) => error instanceof WebProviderError && error.kind === "timeout",
   );
+});
+
+test("response-body timeout retries the same provider within the operation deadline", async () => {
+  let calls = 0;
+  const dependencies = {
+    fetch: async () => {
+      calls++;
+      if (calls === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.enqueue(new TextEncoder().encode('{"results":[')); },
+          cancel() { return Promise.resolve(); },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response('{"results":[]}', { status: 200, headers: { "content-type": "application/json" } });
+    },
+    sleep: async () => {},
+    requestTimeoutMs: 10,
+    maxRetries: 1,
+    maxResponseBytes: 2_000_000,
+    maxRetryDelayMs: 0,
+    totalRequestTimeoutMs: 200,
+    monotonicNow: () => performance.now(),
+  };
+
+  const result = await requestJson<{ results: unknown[] }>("tavily", "https://api.tavily.com/search", {}, dependencies);
+  assert.equal(calls, 2);
+  assert.equal(result.retryCount, 1);
+  assert.deepEqual(result.payload, { results: [] });
 });
 
 test("successful sleeps and requests remove caller abort listeners", async () => {
