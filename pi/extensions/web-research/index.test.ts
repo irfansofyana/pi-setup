@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import webResearch from "./index.ts";
-import { requestJson, WebProviderError } from "./transport.ts";
+import { defaultSleep, requestJson, WebProviderError } from "./transport.ts";
 
 function harness(
   fetchImpl: typeof fetch,
@@ -171,6 +172,7 @@ test("web_search rejects unsafe domains invalid dates and contradictory publicat
     { includeDomains: ["service.local"] },
     { includeDomains: ["example.test"] },
     { includeDomains: ["service.onion"] },
+    { includeDomains: ["service.alt"] },
     { includeDomains: ["198.51.100.1"] },
     { includeDomains: ["127.1"] },
     { includeDomains: ["0x7f.0.0.1"] },
@@ -647,6 +649,26 @@ test("web_fetch redacts configured credentials and focus URL secrets from output
   assert.doesNotMatch(stored, new RegExp(`${apiKey}|${focusSecret}`, "i"));
 });
 
+test("web_fetch redacts secrets discovered only in raw provider result URLs", async () => {
+  for (const provider of ["tavily", "exa"] as const) {
+    const secret = `${provider}-provider-only-secret`;
+    const requested = "https://docs.example.com/provider-secret";
+    const resultEntry = provider === "tavily"
+      ? { url: `${requested}#client_secret=${secret}`, title: `title ${secret}`, raw_content: `body ${secret}${"x".repeat(13_000)}` }
+      : { url: `${requested}#client_secret=${secret}`, title: `title ${secret}`, text: `body ${secret}${"x".repeat(13_000)}` };
+    const payload = provider === "tavily" ? { results: [resultEntry] } : { results: [resultEntry] };
+    const root = await mkdtemp(join(tmpdir(), `pi-web-research-${provider}-provider-secret-`));
+    const tools = harness(async () => new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } }), provider === "tavily" ? { TAVILY_API_KEY: "test-tavily" } : { EXA_API_KEY: "test-exa" }, {
+      artifactRoot: root,
+      randomId: () => `${provider}-provider-secret`,
+    });
+    const result = await tools.get("web_fetch").execute("provider-secret", { urls: [requested], provider }, undefined, undefined, { cwd: "/tmp/project" });
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(secret));
+    const artifact = await readFile(join(root, `${provider}-provider-secret.json`), "utf8");
+    assert.doesNotMatch(artifact, new RegExp(secret));
+  }
+});
+
 test("web_fetch uses Exa Contents when selected and preserves focused highlights", async () => {
   let requestBody: Record<string, unknown> | undefined;
   const tools = harness(async (input, init = {}) => {
@@ -709,6 +731,40 @@ test("web_fetch preserves requested identity when Exa canonicalizes an ArXiv URL
   assert.equal(result.details.failureCount, 0);
   assert.match(result.content[0]?.text ?? "", new RegExp(requested.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(result.content[0]?.text ?? "", /Canonicalized paper body/);
+});
+
+test("web_fetch rejects canonical-looking responses with different queries or unrelated paths", async () => {
+  for (const [requested, returned] of [
+    ["https://docs.example.com/page?id=1", "https://docs.example.com/page?id=2"],
+    ["https://docs.example.com/pdf/account.pdf?tenant=alice", "https://docs.example.com/abs/account?tenant=alice"],
+  ]) {
+    const tools = harness(async () => new Response(JSON.stringify({
+      requestId: "exa-wrong-resource",
+      results: [{ url: returned, title: "Wrong body", text: "must-not-be-attributed" }],
+    }), { status: 200, headers: { "content-type": "application/json" } }), { EXA_API_KEY: "test-exa" });
+    const result = await tools.get("web_fetch").execute("wrong-resource", { urls: [requested], provider: "exa" }, undefined, undefined, { cwd: "/tmp/project" });
+    assert.equal(result.details.successCount, 0);
+    assert.equal(result.details.failureCount, 1);
+    assert.doesNotMatch(result.content[0]?.text ?? "", /must-not-be-attributed/);
+  }
+});
+
+test("web_fetch renders and stores requested and provider-canonical URL identities", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-research-canonical-identity-"));
+  const requested = "https://arxiv.org/pdf/2307.06435";
+  const canonical = "https://arxiv.org/pdf/2307.06435.pdf";
+  const tools = harness(async () => new Response(JSON.stringify({
+    results: [{ url: canonical, title: "Paper", text: "x".repeat(13_000) }],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { EXA_API_KEY: "test-exa" }, {
+    artifactRoot: root,
+    randomId: () => "canonical-identities",
+  });
+  const result = await tools.get("web_fetch").execute("canonical-identities", { urls: [requested], provider: "exa" }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.match(result.content[0]?.text ?? "", /Requested URL: https:\/\/arxiv\.org\/pdf\/2307\.06435/);
+  assert.match(result.content[0]?.text ?? "", /Canonical URL: https:\/\/arxiv\.org\/pdf\/2307\.06435\.pdf/);
+  const artifact = JSON.parse(await readFile(join(root, "canonical-identities.json"), "utf8"));
+  assert.equal(artifact.url, requested);
+  assert.equal(artifact.canonicalUrl, canonical);
 });
 
 test("web_fetch emits an outcome for every requested URL when providers omit entries", async () => {
@@ -823,6 +879,9 @@ test("web_fetch rejects non-public URLs before calling a provider", async () => 
     "http://198.51.100.1/private",
     "https://example.test/private",
     "https://service.onion/private",
+    "https://service.alt/private",
+    "https://bad..example.com/private",
+    "https://-bad.example.com/private",
     "http://user:pass@example.com/secret",
     "http://service.local/private",
     "http://localhost./admin",
@@ -904,6 +963,59 @@ test("never-settling stream cleanup cannot delay the authoritative safety failur
   assert.ok(outcome instanceof WebProviderError);
   assert.equal(outcome.kind, "safety-policy");
   assert.equal(calls, 1);
+});
+
+test("stalled response-body reads obey caller cancellation and the operation deadline", async () => {
+  const stalledResponse = () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"results":[')); },
+    cancel() { return new Promise<void>(() => {}); },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  const base = {
+    fetch: async () => stalledResponse(),
+    sleep: defaultSleep,
+    requestTimeoutMs: 1_000,
+    maxRetries: 0,
+    maxResponseBytes: 2_000_000,
+    maxRetryDelayMs: 4_000,
+    totalRequestTimeoutMs: 1_000,
+    monotonicNow: () => performance.now(),
+  };
+  const caller = new AbortController();
+  setTimeout(() => caller.abort(), 10);
+  await assert.rejects(
+    Promise.race([
+      requestJson("tavily", "https://api.tavily.com/search", {}, base, caller.signal),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("hung after cancellation")), 100)),
+    ]),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "cancelled",
+  );
+  await assert.rejects(
+    Promise.race([
+      requestJson("tavily", "https://api.tavily.com/search", {}, { ...base, totalRequestTimeoutMs: 25 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("hung after deadline")), 100)),
+    ]),
+    (error: unknown) => error instanceof WebProviderError && error.kind === "timeout",
+  );
+});
+
+test("successful sleeps and requests remove caller abort listeners", async () => {
+  const controller = new AbortController();
+  for (let index = 0; index < 12; index++) await defaultSleep(1, controller.signal);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+  const dependencies = {
+    fetch: async () => new Response('{"ok":true}', { status: 200, headers: { "content-type": "application/json" } }),
+    sleep: defaultSleep,
+    requestTimeoutMs: 1_000,
+    maxRetries: 0,
+    maxResponseBytes: 1_000,
+    maxRetryDelayMs: 100,
+    totalRequestTimeoutMs: 1_000,
+    monotonicNow: () => performance.now(),
+  };
+  for (let index = 0; index < 12; index++) {
+    await requestJson("tavily", "https://api.tavily.com/search", {}, dependencies, controller.signal);
+  }
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 });
 
 test("transport honors Retry-After before returning a successful search", async () => {

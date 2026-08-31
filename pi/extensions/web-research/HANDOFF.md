@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 486 passed, 0 failed.
-- Focused web-research suite: 60 passed, 0 failed.
+- Full repository suite: 493 passed, 0 failed.
+- Focused web-research suite: 67 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -117,6 +117,17 @@ The sixth independent review inspected `fdbeb3688446ccfd4e38041b408c411d961441bc
 - Complete artifact-retrieval observability with validated provider identity and retrieval truncation state.
 
 Verdict: all six review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
+
+The seventh independent review inspected `2f7d8d6902ae13463c7c4961228dd87d809fbf76`. Every finding reproduced and was accepted. Fixes added:
+
+- Exact query-preserving fetch correlation with ArXiv-only `/abs`/`/pdf` canonicalization and explicit requested/canonical identities in output and artifacts.
+- Redaction of secrets discovered only in raw Tavily/Exa fetch result and status URLs.
+- Cancellation- and deadline-aware streaming body reads plus deterministic abort-listener cleanup.
+- SQLite `BEGIN IMMEDIATE` capacity transactions with cancellation-aware bounded polling, same-process queuing, crash rollback, and cross-process regression coverage; this supersedes pathname lock reclamation.
+- Fail-closed artifact stat/unlink handling, post-cleanup capacity verification, dead-owner temporary cleanup, and live-owner temporary byte accounting.
+- Shared strict DNS-label validation and RFC 9476 `.alt` rejection at domain and URL boundaries.
+
+Verdict: all seven review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 

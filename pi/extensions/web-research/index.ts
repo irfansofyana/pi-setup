@@ -202,8 +202,13 @@ function requiredQuery(value: unknown): string {
 }
 
 function isSpecialUseHostname(hostname: string): boolean {
-  return ["localhost", "local", "internal", "test", "example", "invalid", "onion", "home.arpa"]
+  return ["localhost", "local", "internal", "test", "example", "invalid", "onion", "alt", "home.arpa"]
     .some((suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`));
+}
+
+function isCanonicalDnsHostname(hostname: string): boolean {
+  return hostname.length <= 253 && hostname.includes(".") && !hostname.endsWith(".")
+    && hostname.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
 }
 
 function domainList(value: unknown, field: string): string[] {
@@ -217,8 +222,7 @@ function domainList(value: unknown, field: string): string[] {
     if (canonicalHost !== domain) validationError(`${field} contains an invalid public domain.`);
     const ipVersion = isIP(domain);
     const blockedName = isSpecialUseHostname(domain);
-    const canonicalName = domain.length <= 253 && domain.includes(".") && !domain.endsWith(".")
-      && domain.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+    const canonicalName = isCanonicalDnsHostname(domain);
     const publicIp = (ipVersion === 4 && !isPrivateIpv4(domain)) || (ipVersion === 6 && !isPrivateIpv6(domain));
     if (blockedName || (ipVersion === 0 ? !canonicalName : !publicIp)) validationError(`${field} contains an invalid public domain.`);
     return domain;
@@ -454,11 +458,15 @@ function redactProviderError(error: WebProviderError, values: string[]): WebProv
 }
 
 function publicProviderUrl(value: unknown): string | undefined {
+  const publicUrl = validatedProviderUrl(value);
+  return publicUrl ? redactUrlForDisplay(publicUrl) : undefined;
+}
+
+function validatedProviderUrl(value: unknown): string | undefined {
   const url = textValue(value);
   if (!url || url.length > 4_096) return undefined;
   try {
-    const publicUrl = publicUrls([url])[0];
-    return publicUrl ? redactUrlForDisplay(publicUrl) : undefined;
+    return publicUrls([url])[0];
   } catch {
     return undefined;
   }
@@ -809,7 +817,7 @@ function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[]
     if ((ipVersion === 4 && isPrivateIpv4(hostname)) || (ipVersion === 6 && isPrivateIpv6(hostname))) {
       reject("safety-policy", "Each URL must use a public hostname.");
     }
-    if (ipVersion === 0 && !hostname.includes(".")) reject("safety-policy", "Each URL must use a public hostname.");
+    if (ipVersion === 0 && !isCanonicalDnsHostname(hostname)) reject("safety-policy", "Each URL must use a public hostname.");
     parsed.hash = "";
     return parsed.toString();
   });
@@ -827,22 +835,22 @@ function optionalFocus(value: unknown): string | undefined {
 function canonicalResourceKey(value: string): string | undefined {
   try {
     const parsed = new URL(value);
-    let path = parsed.pathname.replace(/\/+$/, "").replace(/\.pdf$/i, "");
-    path = path.replace(/^\/(?:abs|pdf)\//i, "/");
-    return `${parsed.origin.toLowerCase()}${path || "/"}`;
+    parsed.hash = "";
+    let path = parsed.pathname;
+    if (parsed.hostname.toLowerCase() === "arxiv.org") {
+      path = path.replace(/\.pdf$/i, "").replace(/^\/(?:abs|pdf)\//i, "/");
+    }
+    return `${parsed.origin.toLowerCase()}${path}${parsed.search}`;
   } catch {
     return undefined;
   }
 }
 
 function matchRequestedUrl(returnedUrl: string, requestedUrls: string[]): string | undefined {
-  const displayed = redactUrlForDisplay(returnedUrl);
-  const requested = requestedUrls.map(redactUrlForDisplay);
-  if (requested.includes(displayed)) return displayed;
-  const key = canonicalResourceKey(displayed);
+  const key = canonicalResourceKey(returnedUrl);
   if (!key) return undefined;
-  const matches = requested.filter((value) => canonicalResourceKey(value) === key);
-  return matches.length === 1 ? matches[0] : undefined;
+  const matches = requestedUrls.filter((value) => canonicalResourceKey(value) === key);
+  return matches.length === 1 ? redactUrlForDisplay(matches[0]!) : undefined;
 }
 
 async function fetchTavily(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
@@ -863,8 +871,9 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
     if (!value || typeof value !== "object") return [];
     const result = value as Record<string, unknown>;
-    const canonicalUrl = publicProviderUrl(result.url);
-    const url = canonicalUrl ? matchRequestedUrl(canonicalUrl, input.urls) : undefined;
+    const rawCanonicalUrl = validatedProviderUrl(result.url);
+    const canonicalUrl = rawCanonicalUrl ? redactUrlForDisplay(rawCanonicalUrl) : undefined;
+    const url = rawCanonicalUrl ? matchRequestedUrl(rawCanonicalUrl, input.urls) : undefined;
     const rawContent = textValue(result.raw_content);
     if (!url || !canonicalUrl || !rawContent) {
       truncated = true;
@@ -887,8 +896,9 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   const failures = rawFailures.slice(0, input.urls.length).flatMap((value): FetchFailure[] => {
     if (!value || typeof value !== "object") return [];
     const result = value as Record<string, unknown>;
-    const canonicalUrl = publicProviderUrl(result.url);
-    const url = canonicalUrl ? matchRequestedUrl(canonicalUrl, input.urls) : undefined;
+    const rawCanonicalUrl = validatedProviderUrl(result.url);
+    const canonicalUrl = rawCanonicalUrl ? redactUrlForDisplay(rawCanonicalUrl) : undefined;
+    const url = rawCanonicalUrl ? matchRequestedUrl(rawCanonicalUrl, input.urls) : undefined;
     if (!url) {
       truncated = true;
       return [];
@@ -899,14 +909,21 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   const requestId = safeRequestId(payload.request_id);
   truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
   const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
-  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated };
+  const providerSecrets = sensitiveUrlValues([
+    ...rawResults.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),
+    ...rawFailures.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),
+  ]);
+  return redactFetchResponse(
+    { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated },
+    providerSecrets,
+  );
 }
 
 function exaStatusFailure(value: unknown): FetchFailure | undefined {
   if (!value || typeof value !== "object") return undefined;
   const status = value as Record<string, unknown>;
   if (status.status === "success") return undefined;
-  const url = publicProviderUrl(status.id) ?? publicProviderUrl(status.url);
+  const url = validatedProviderUrl(status.id) ?? validatedProviderUrl(status.url);
   if (!url) return undefined;
   const error = status.error && typeof status.error === "object" ? status.error as Record<string, unknown> : {};
   const rawError = error.tag ?? error.error ?? status.status;
@@ -960,8 +977,9 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
     if (!value || typeof value !== "object") return [];
     const result = value as Record<string, unknown>;
-    const canonicalUrl = publicProviderUrl(result.url);
-    const url = canonicalUrl ? matchRequestedUrl(canonicalUrl, input.urls) : undefined;
+    const rawCanonicalUrl = validatedProviderUrl(result.url);
+    const canonicalUrl = rawCanonicalUrl ? redactUrlForDisplay(rawCanonicalUrl) : undefined;
+    const url = rawCanonicalUrl ? matchRequestedUrl(rawCanonicalUrl, input.urls) : undefined;
     const rawContent = textValue(result.text);
     if (!url || !canonicalUrl || !rawContent) {
       truncated = true;
@@ -1004,7 +1022,16 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
   const requestId = safeRequestId(payload.requestId);
   truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
   const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
-  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated };
+  const providerSecrets = sensitiveUrlValues([
+    ...rawResults.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),
+    ...rawStatuses.flatMap((value) => value && typeof value === "object"
+      ? [textValue((value as Record<string, unknown>).id) ?? "", textValue((value as Record<string, unknown>).url) ?? ""]
+      : []),
+  ]);
+  return redactFetchResponse(
+    { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated },
+    providerSecrets,
+  );
 }
 
 async function executeFetch(
@@ -1136,7 +1163,8 @@ async function prepareFetchResults(
         : "";
       const header = [
         `${index + 1}. ${document.title}`,
-        `   URL: ${document.url}`,
+        `   Requested URL: ${document.url}`,
+        `   Canonical URL: ${document.canonicalUrl}`,
         ...(document.publishedAt ? [`   Published: ${document.publishedAt}`] : []),
         ...(document.author ? [`   Author: ${document.author}`] : []),
         ...(document.snippets.length ? [`   Evidence: ${document.snippets.join(" […] ")}`] : []),
@@ -1149,6 +1177,7 @@ async function prepareFetchResults(
         try {
           artifact = await artifacts.save({
             url: document.url,
+            canonicalUrl: document.canonicalUrl,
             title: document.title,
             content: document.content,
             provider: response.provider,
@@ -1352,7 +1381,7 @@ export default function webResearch(
         }
         ensureNotCancelled(signal, "tavily");
         return {
-          content: [{ type: "text", text: [`Artifact: ${page.id}`, `URL: ${page.url}`, `Provider: ${page.provider}`, "", page.content].join("\n") }],
+          content: [{ type: "text", text: [`Artifact: ${page.id}`, `Requested URL: ${page.url}`, `Canonical URL: ${page.canonicalUrl}`, `Provider: ${page.provider}`, "", page.content].join("\n") }],
           details: {
             provider: page.provider,
             resolvedMode: "artifact",

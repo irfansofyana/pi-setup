@@ -114,12 +114,18 @@ function responseError(provider: ProviderName, response: Response, retryCount: n
 export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(new DOMException("aborted", "AbortError"));
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-    signal?.addEventListener("abort", () => {
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const onAbort = () => {
       clearTimeout(timer);
+      cleanup();
       reject(new DOMException("aborted", "AbortError"));
-    }, { once: true });
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -144,6 +150,8 @@ async function boundedJson<T>(
   response: Response,
   maxBytes: number,
   retryCount: number,
+  signal?: AbortSignal,
+  abortError?: () => WebProviderError,
 ): Promise<T> {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
@@ -161,7 +169,20 @@ async function boundedJson<T>(
   const chunks: Uint8Array[] = [];
   let total = 0;
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        cleanup();
+        try { void reader.cancel().catch(() => {}); } catch { /* untrusted cleanup is best effort */ }
+        reject(abortError?.() ?? cancelled(provider, retryCount));
+      };
+      if (signal?.aborted) return onAbort();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      reader.read().then(
+        (result) => { cleanup(); resolve(result); },
+        (error) => { cleanup(); reject(error); },
+      );
+    });
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
@@ -206,21 +227,30 @@ export async function requestJson<T>(
   for (let attempt = 0; ; attempt++) {
     if (callerSignal?.aborted) throw cancelled(provider, attempt);
     let firstAbortKind: "cancelled" | "timeout" | undefined;
-    callerSignal?.addEventListener("abort", () => { firstAbortKind ??= "cancelled"; }, { once: true });
+    const onCallerAbort = () => { firstAbortKind ??= "cancelled"; };
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
     if (callerSignal?.aborted) firstAbortKind ??= "cancelled";
     const remaining = remainingMs();
-    if (firstAbortKind === "cancelled") throw cancelled(provider, attempt);
-    if (remaining <= 0) throw timeout(provider, attempt);
+    if (firstAbortKind === "cancelled") {
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      throw cancelled(provider, attempt);
+    }
+    if (remaining <= 0) {
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      throw timeout(provider, attempt);
+    }
     const attemptTimeout = dependencies.requestTimeoutMs > 0
       ? Math.min(dependencies.requestTimeoutMs, remaining)
       : remaining;
     const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, Math.floor(attemptTimeout))) : undefined;
     const signal = callerSignal && timeoutSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : (callerSignal ?? timeoutSignal);
-    timeoutSignal?.addEventListener("abort", () => { firstAbortKind ??= "timeout"; }, { once: true });
+    const onTimeoutAbort = () => { firstAbortKind ??= "timeout"; };
+    timeoutSignal?.addEventListener("abort", onTimeoutAbort, { once: true });
     if (timeoutSignal?.aborted) firstAbortKind ??= "timeout";
     const abortError = () => firstAbortKind === "cancelled"
       ? cancelled(provider, attempt)
       : firstAbortKind === "timeout" ? timeout(provider, attempt) : upstream(provider, attempt);
+    try {
     let response: Response;
     try {
       response = await dependencies.fetch(url, { ...init, signal });
@@ -257,7 +287,7 @@ export async function requestJson<T>(
     }
 
     try {
-      const payload = await boundedJson<T>(provider, response, dependencies.maxResponseBytes, attempt);
+      const payload = await boundedJson<T>(provider, response, dependencies.maxResponseBytes, attempt, signal, abortError);
       if (firstAbortKind) throw abortError();
       if (remainingMs() <= 0) throw timeout(provider, attempt);
       return { response, payload, retryCount: attempt };
@@ -278,6 +308,10 @@ export async function requestJson<T>(
       } catch {
         throw cancelled(provider, attempt);
       }
+    }
+    } finally {
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      timeoutSignal?.removeEventListener("abort", onTimeoutAbort);
     }
   }
 }

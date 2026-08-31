@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { ArtifactStore, TimedCache } from "./storage.ts";
+
+const execFileAsync = promisify(execFile);
 
 test("TimedCache expires entries and evicts the least recently used entry", () => {
   let now = 1_000;
@@ -101,6 +106,22 @@ test("ArtifactStore serializes concurrent byte-cap reservations across store ins
   assert.ok(totalBytes <= maxBytes, `${totalBytes} exceeds ${maxBytes}`);
 });
 
+test("ArtifactStore serializes capacity reservations across processes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-cross-process-"));
+  const moduleUrl = new URL("./storage.ts", import.meta.url).href;
+  const script = `
+    import { ArtifactStore } from ${JSON.stringify(moduleUrl)};
+    const [root, id] = process.argv.slice(1);
+    const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => id, ttlMs: 60000, maxEntries: 1, maxBytes: 10000 });
+    await store.save({ url: 'https://example.test/' + id, title: id, content: id, provider: 'tavily' });
+  `;
+  await Promise.all([
+    execFileAsync(process.execPath, ["--input-type=module", "--eval", script, root, "process-one"]),
+    execFileAsync(process.execPath, ["--input-type=module", "--eval", script, root, "process-two"]),
+  ]);
+  assert.equal((await readdir(root)).filter((name) => name.endsWith(".json")).length, 1);
+});
+
 test("ArtifactStore retrieves bounded content by opaque ID and rejects unsafe IDs", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-read-"));
   const store = new ArtifactStore({
@@ -187,7 +208,8 @@ test("ArtifactStore recovers a crashed partial owner publication", async () => {
 
 test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-monotonic-lock-"));
-  await writeFile(join(root, ".capacity.lock"), `${JSON.stringify({ pid: process.pid, token: "live-monotonic-owner" })}\n`);
+  const lock = new DatabaseSync(join(root, ".capacity.sqlite"));
+  lock.exec("CREATE TABLE IF NOT EXISTS capacity_lock (id INTEGER PRIMARY KEY); BEGIN IMMEDIATE");
   let monotonic = 0;
   const controller = new AbortController();
   const safetyTimer = setTimeout(() => controller.abort(), 100);
@@ -209,6 +231,8 @@ test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
       /timed out/i,
     );
   } finally {
+    lock.exec("ROLLBACK");
+    lock.close();
     clearTimeout(safetyTimer);
     Date.now = originalDateNow;
   }
@@ -216,9 +240,8 @@ test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
 
 test("ArtifactStore never reclaims a stale-looking lock owned by a live process", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-live-owner-"));
-  const lock = join(root, ".capacity.lock");
-  await writeFile(lock, `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
-  await utimes(lock, new Date(0), new Date(0));
+  const lock = new DatabaseSync(join(root, ".capacity.sqlite"));
+  lock.exec("CREATE TABLE IF NOT EXISTS capacity_lock (id INTEGER PRIMARY KEY); BEGIN IMMEDIATE");
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 30);
   const store = new ArtifactStore({
@@ -234,6 +257,30 @@ test("ArtifactStore never reclaims a stale-looking lock owned by a live process"
     store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }, controller.signal),
     /cancelled/i,
   );
+  lock.exec("ROLLBACK");
+  lock.close();
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
-  assert.equal((await readFile(lock, "utf8")).includes("live-owner"), true);
+});
+
+test("ArtifactStore removes dead-owner temporaries and counts live-owner temporaries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-orphan-temp-"));
+  await writeFile(join(root, ".orphan.999999.tmp"), "x".repeat(2_000));
+  const store = new ArtifactStore({
+    root,
+    now: () => 1_725_000_000_000,
+    randomId: () => "after-orphan",
+    ttlMs: 60_000,
+    maxEntries: 2,
+    maxBytes: 1_000,
+  });
+  await store.save({ url: "https://example.test", title: "saved", content: "small", provider: "tavily" });
+  assert.equal((await readdir(root)).includes(".orphan.999999.tmp"), false);
+
+  const live = join(root, `.live.${process.pid}.tmp`);
+  await writeFile(live, "x".repeat(2_000));
+  await assert.rejects(
+    store.save({ url: "https://example.test/two", title: "blocked", content: "small", provider: "tavily" }),
+    /capacity/i,
+  );
+  assert.equal((await stat(live)).isFile(), true);
 });
