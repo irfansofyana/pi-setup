@@ -90,6 +90,34 @@ test("ArtifactStore prunes expired records discovered at startup", async () => {
   await assert.rejects(stat(join(root, "startup-expired.json")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
 });
 
+test("ArtifactStore periodically discovers expired artifacts from peer processes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-peer-expiry-"));
+  new ArtifactStore({
+    root,
+    now: Date.now,
+    randomId: () => "unused",
+    ttlMs: 10,
+    maxEntries: 10,
+    maxBytes: 1_000_000,
+    discoveryIntervalMs: 10,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const path = join(root, "peer-expired.json");
+  await writeFile(path, `${JSON.stringify({
+    id: "peer-expired",
+    url: "https://example.com/peer",
+    canonicalUrl: "https://example.com/peer",
+    title: "Peer expired",
+    content: "body",
+    provider: "exa",
+    contextKey: "b".repeat(64),
+    createdAt: new Date(Date.now() - 2_000).toISOString(),
+    expiresAt: new Date(Date.now() - 1_000).toISOString(),
+  })}\n`, { mode: 0o600 });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await assert.rejects(stat(path), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
 test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-capacity-"));
   let id = 0;

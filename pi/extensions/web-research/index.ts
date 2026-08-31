@@ -1160,13 +1160,14 @@ async function executeFetch(
   const deadlineAt = dependencies.totalRequestTimeoutMs > 0
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
     : Number.POSITIVE_INFINITY;
-  const run = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
+  const run = async (provider: ProviderName, maxRetries = dependencies.maxRetries): Promise<ProviderFetchResponse> => {
     const attemptStartedAt = dependencies.monotonicNow();
     onUpdate?.({ content: [{ type: "text", text: `Fetching with ${providerLabel(provider)}…` }], details: { provider } });
     try {
+      const attemptDependencies = maxRetries === dependencies.maxRetries ? dependencies : { ...dependencies, maxRetries };
       const response = provider === "tavily"
-        ? await fetchTavily(input, dependencies, signal, deadlineAt)
-        : await fetchExa(input, dependencies, signal, deadlineAt);
+        ? await fetchTavily(input, attemptDependencies, signal, deadlineAt)
+        : await fetchExa(input, attemptDependencies, signal, deadlineAt);
       retryCount += response.retryCount;
       const outcome = response.documents.length && response.failures.length
         ? "partial"
@@ -1216,21 +1217,48 @@ async function executeFetch(
   };
 
   const runWithBatchRetries = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
+    let providerRetriesUsed = 0;
     for (let batchRetry = 0; ; batchRetry++) {
-      const response = await run(provider);
+      const response = await run(provider, Math.max(0, dependencies.maxRetries - providerRetriesUsed));
+      providerRetriesUsed += response.retryCount;
       const retryableBatch = response.documents.length === 0
         && response.failures.length > 0
         && response.failures.every((failure) => failure.retryable);
       const remaining = Math.max(0, deadlineAt - dependencies.monotonicNow());
-      if (!retryableBatch || batchRetry >= dependencies.maxRetries || remaining <= 0) return response;
+      if (!retryableBatch || providerRetriesUsed >= dependencies.maxRetries || remaining <= 0) return response;
+      providerRetriesUsed++;
       retryCount++;
       const delay = Math.max(0, Math.min(250 * (2 ** batchRetry), dependencies.maxRetryDelayMs, remaining));
       try {
         await dependencies.sleep(delay, signal);
       } catch {
-        throw localWebError("cancelled", `${providerLabel(provider)} request was cancelled.`, provider);
+        const error = localWebError("cancelled", `${providerLabel(provider)} request was cancelled.`, provider);
+        error.details = {
+          attempts: [...attempts],
+          retryCount,
+          cacheState: "miss",
+          cacheAgeMs: 0,
+          returnedCharacters: 0,
+          storedCharacters: 0,
+          cancellationState: true,
+          errorKind: "cancelled",
+        };
+        throw error;
       }
-      ensureNotCancelled(signal, provider);
+      if (signal?.aborted) {
+        const error = localWebError("cancelled", `${providerLabel(provider)} request was cancelled.`, provider);
+        error.details = {
+          attempts: [...attempts],
+          retryCount,
+          cacheState: "miss",
+          cacheAgeMs: 0,
+          returnedCharacters: 0,
+          storedCharacters: 0,
+          cancellationState: true,
+          errorKind: "cancelled",
+        };
+        throw error;
+      }
     }
   };
 

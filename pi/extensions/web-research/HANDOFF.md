@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 525 passed, 0 failed.
-- Focused web-research suite: 99 passed, 0 failed.
+- Full repository suite: 528 passed, 0 failed.
+- Focused web-research suite: 102 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -183,6 +183,9 @@ Accepted:
 - Filesystem artifacts use an unref'd nearest-expiry sweep and startup discovery sweep; idle expired files are removed while Pi runs, and expired files found after restart are pruned without creating the artifact directory when absent.
 - HTTP-200 batches containing only retryable per-URL failures exhaust same-provider retries within the shared deadline before provider fallback.
 - `web_fetch` rejects URL-mode parameters in artifact mode and artifact-pagination parameters in URL mode instead of silently ignoring them.
+- Transport, payload-shape, and HTTP-200 batch retries share one per-provider retry budget; retry transitions no longer reset the provider allowance.
+- Cancellation during batch backoff retains accumulated attempts and retry counts in normalized terminal telemetry.
+- Running processes periodically discover artifacts created by peer processes, so retention does not depend on the writer staying alive.
 
 Rejected as a current PR blocker:
 

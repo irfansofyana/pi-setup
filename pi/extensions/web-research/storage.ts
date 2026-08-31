@@ -116,6 +116,7 @@ export interface ArtifactStoreOptions {
   maxBytes: number;
   lockTimeoutMs?: number;
   monotonicNow?: () => number;
+  discoveryIntervalMs?: number;
 }
 
 interface StoredArtifact {
@@ -159,11 +160,15 @@ export class ArtifactStore {
     try {
       root = await lstat(this.options.root);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.scheduleExpirySweep(this.options.now() + (this.options.discoveryIntervalMs ?? 60_000));
+        return;
+      }
       throw error;
     }
     if (root.isSymbolicLink() || !root.isDirectory()) throw new Error("Web research artifact root must be a real directory.");
     await this.withCapacityLock(() => this.cleanup(), undefined, 0);
+    this.scheduleExpirySweep(this.options.now() + (this.options.discoveryIntervalMs ?? 60_000));
   }
 
   private async ensureRoot(): Promise<void> {

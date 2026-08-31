@@ -1962,6 +1962,65 @@ test("web_fetch locally enforces maxCharactersPerResult when a provider exceeds 
   assert.deepEqual(result.details.artifacts, []);
 });
 
+test("web_fetch shares one retry budget across transport and retryable batches", async () => {
+  const requests: string[] = [];
+  let tavilyCalls = 0;
+  const tools = harness(async (input) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("tavily")) {
+      tavilyCalls++;
+      if (tavilyCalls < 3) return new Response("upstream", { status: 503 });
+      return new Response(JSON.stringify({
+        request_id: "tavily-budget-exhausted",
+        results: [],
+        failed_results: [{ url: "https://example.com/budget", error: "CRAWL_TIMEOUT" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      requestId: "exa-after-budget",
+      results: [{ url: "https://example.com/budget", title: "Recovered", text: "Recovered after shared budget." }],
+      statuses: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetryDelayMs: 0 });
+
+  const result = await tools.get("web_fetch").execute("shared-budget", { urls: ["https://example.com/budget"] }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.deepEqual(requests, [
+    "https://api.tavily.com/extract",
+    "https://api.tavily.com/extract",
+    "https://api.tavily.com/extract",
+    "https://api.exa.ai/contents",
+  ]);
+  assert.equal(result.details.retryCount, 2);
+});
+
+test("batch-backoff cancellation preserves accumulated telemetry", async () => {
+  const controller = new AbortController();
+  const tools = harness(async () => new Response(JSON.stringify({
+    request_id: "batch-before-cancel",
+    results: [],
+    failed_results: [{ url: "https://example.com/cancel-batch", error: "CRAWL_TIMEOUT" }],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" }, {
+    sleep: async () => {
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    },
+  });
+
+  await assert.rejects(
+    tools.get("web_fetch").execute("batch-cancel", { urls: ["https://example.com/cancel-batch"], provider: "tavily" }, controller.signal, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebProviderError);
+      assert.equal(error.kind, "cancelled");
+      assert.equal(error.details.retryCount, 1);
+      assert.deepEqual(error.details.attempts, [
+        { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", requestId: "batch-before-cancel", durationMs: 0 },
+      ]);
+      return true;
+    },
+  );
+});
+
 test("web_fetch falls back to Exa only when automatic Tavily extraction has no successes", async () => {
   const requests: string[] = [];
   const tools = harness(async (input) => {
