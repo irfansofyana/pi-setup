@@ -1215,16 +1215,35 @@ async function executeFetch(
     }
   };
 
+  const runWithBatchRetries = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
+    for (let batchRetry = 0; ; batchRetry++) {
+      const response = await run(provider);
+      const retryableBatch = response.documents.length === 0
+        && response.failures.length > 0
+        && response.failures.every((failure) => failure.retryable);
+      const remaining = Math.max(0, deadlineAt - dependencies.monotonicNow());
+      if (!retryableBatch || batchRetry >= dependencies.maxRetries || remaining <= 0) return response;
+      retryCount++;
+      const delay = Math.max(0, Math.min(250 * (2 ** batchRetry), dependencies.maxRetryDelayMs, remaining));
+      try {
+        await dependencies.sleep(delay, signal);
+      } catch {
+        throw localWebError("cancelled", `${providerLabel(provider)} request was cancelled.`, provider);
+      }
+      ensureNotCancelled(signal, provider);
+    }
+  };
+
   let first: ProviderFetchResponse;
   try {
-    first = await run(selected);
+    first = await runWithBatchRetries(selected);
   } catch (error) {
     const mayFallbackAfterError = input.provider === "auto"
       && selected === "tavily"
       && error instanceof WebProviderError
       && error.retryable
       && Boolean(dependencies.env.EXA_API_KEY);
-    if (mayFallbackAfterError) return { response: await run("exa"), attempts, retryCount };
+    if (mayFallbackAfterError) return { response: await runWithBatchRetries("exa"), attempts, retryCount };
     throw error;
   }
   const mayFallback = input.provider === "auto"
@@ -1232,7 +1251,7 @@ async function executeFetch(
     && first.documents.length === 0
     && (first.failures.length === 0 || first.failures.every((failure) => failure.retryable))
     && Boolean(dependencies.env.EXA_API_KEY);
-  if (mayFallback) return { response: await run("exa"), attempts, retryCount };
+  if (mayFallback) return { response: await runWithBatchRetries("exa"), attempts, retryCount };
   return { response: first, attempts, retryCount };
 }
 
@@ -1477,6 +1496,9 @@ export default function webResearch(
       const startedAt = dependencies.monotonicNow();
       if (raw.artifactId !== undefined) {
         if (raw.urls !== undefined) throw localWebError("validation", "Use either urls or artifactId, not both.");
+        for (const field of ["provider", "focus", "maxCharactersPerResult", "noCache"]) {
+          if (raw[field] !== undefined) throw localWebError("validation", `${field} is only valid with urls.`);
+        }
         ensureNotCancelled(signal, "tavily");
         if (typeof raw.artifactId !== "string") throw localWebError("validation", "artifactId must be a string.");
         const offset = boundedInteger(raw.artifactOffset, 0, 0, Number.MAX_SAFE_INTEGER, "artifactOffset");
@@ -1511,6 +1533,9 @@ export default function webResearch(
             errorKind: null,
           },
         };
+      }
+      for (const field of ["artifactOffset", "artifactMaxCharacters"]) {
+        if (raw[field] !== undefined) throw localWebError("validation", `${field} is only valid with artifactId.`);
       }
       const provider = enumValue(raw.provider, "auto", ["auto", "tavily", "exa"] as const, "provider");
       const input: FetchInput = {

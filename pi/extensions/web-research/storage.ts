@@ -132,9 +132,38 @@ interface StoredArtifact {
 
 export class ArtifactStore {
   private readonly options: ArtifactStoreOptions;
+  private expiryTimer?: ReturnType<typeof setTimeout>;
+  private nextExpiryAt?: number;
 
   constructor(options: ArtifactStoreOptions) {
     this.options = options;
+    this.scheduleExpirySweep(this.options.now() + 1);
+  }
+
+  private scheduleExpirySweep(expiresAt: number): void {
+    if (!Number.isFinite(expiresAt)) return;
+    if (this.expiryTimer && this.nextExpiryAt !== undefined && this.nextExpiryAt <= expiresAt) return;
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.nextExpiryAt = expiresAt;
+    const delay = Math.max(1, Math.min(2_147_483_647, expiresAt - this.options.now()));
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = undefined;
+      this.nextExpiryAt = undefined;
+      void this.sweepExpired().catch(() => this.scheduleExpirySweep(this.options.now() + 1_000));
+    }, delay);
+    this.expiryTimer.unref?.();
+  }
+
+  private async sweepExpired(): Promise<void> {
+    let root: Awaited<ReturnType<typeof lstat>>;
+    try {
+      root = await lstat(this.options.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (root.isSymbolicLink() || !root.isDirectory()) throw new Error("Web research artifact root must be a real directory.");
+    await this.withCapacityLock(() => this.cleanup(), undefined, 0);
   }
 
   private async ensureRoot(): Promise<void> {
@@ -148,10 +177,10 @@ export class ArtifactStore {
     if (signal?.aborted) throw new Error("Artifact operation cancelled.");
   }
 
-  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal, lockTimeoutMs = this.options.lockTimeoutMs ?? 5_000): Promise<T> {
     await this.ensureRoot();
     const monotonicNow = this.options.monotonicNow ?? (() => performance.now());
-    const deadline = monotonicNow() + (this.options.lockTimeoutMs ?? 5_000);
+    const deadline = monotonicNow() + lockTimeoutMs;
     const lockPath = join(this.options.root, ".capacity.lock");
     let lockIdentity: { dev: bigint | number; ino: bigint | number } | undefined;
     while (!lockIdentity) {
@@ -217,22 +246,26 @@ export class ArtifactStore {
     }
     let entries = additionalEntries;
     let bytes = additionalBytes;
+    let nearestExpiryAt: number | undefined;
     for (const name of names.filter((candidate) => candidate.endsWith(".json"))) {
       const path = join(this.options.root, name);
       try {
         const record = await this.loadStoredArtifact(path, name.slice(0, -5));
-        if (Date.parse(record.expiresAt) <= this.options.now()) {
+        const expiresAt = Date.parse(record.expiresAt);
+        if (expiresAt <= this.options.now()) {
           try { await unlink(path); } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
           continue;
         }
+        nearestExpiryAt = nearestExpiryAt === undefined ? expiresAt : Math.min(nearestExpiryAt, expiresAt);
         entries++;
         bytes += (await lstat(path)).size;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+    if (nearestExpiryAt !== undefined) this.scheduleExpirySweep(nearestExpiryAt);
     if (entries > this.options.maxEntries || bytes > this.options.maxBytes) {
       throw new Error("Web research artifact capacity is full; valid artifacts are preserved until they expire or are discarded.");
     }
@@ -287,6 +320,7 @@ export class ArtifactStore {
         await compensate();
         throw error;
       }
+      this.scheduleExpirySweep(Date.parse(expiresAt));
       return { id, path: target, url: input.url, chars: input.content.length, createdAt, expiresAt };
     }, signal);
   }

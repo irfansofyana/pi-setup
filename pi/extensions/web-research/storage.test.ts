@@ -49,6 +49,47 @@ test("TimedCache expires idle entries when wall time advances across suspend", a
   assert.equal((cache as any).entries.has("suspend-sensitive-key"), false);
 });
 
+test("ArtifactStore removes expired artifacts while idle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-idle-expiry-"));
+  const store = new ArtifactStore({
+    root,
+    now: Date.now,
+    randomId: () => "idle-expiry",
+    ttlMs: 10,
+    maxEntries: 10,
+    maxBytes: 1_000_000,
+  });
+  await store.save({ url: "https://example.com/idle", title: "Idle", content: "body", provider: "tavily" });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await assert.rejects(stat(join(root, "idle-expiry.json")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
+test("ArtifactStore prunes expired records discovered at startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-startup-expiry-"));
+  const expiredAt = new Date(Date.now() - 1_000).toISOString();
+  await writeFile(join(root, "startup-expired.json"), `${JSON.stringify({
+    id: "startup-expired",
+    url: "https://example.com/startup",
+    canonicalUrl: "https://example.com/startup",
+    title: "Expired",
+    content: "body",
+    provider: "tavily",
+    contextKey: "a".repeat(64),
+    createdAt: new Date(Date.now() - 2_000).toISOString(),
+    expiresAt: expiredAt,
+  })}\n`, { mode: 0o600 });
+  new ArtifactStore({
+    root,
+    now: Date.now,
+    randomId: () => "unused",
+    ttlMs: 10,
+    maxEntries: 10,
+    maxBytes: 1_000_000,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await assert.rejects(stat(join(root, "startup-expired.json")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
 test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-capacity-"));
   let id = 0;

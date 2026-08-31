@@ -1163,6 +1163,29 @@ test("web_fetch caps provider over-return and untrusted metadata", async () => {
   assert.doesNotMatch(text, /TITLE-END|HIGHLIGHT-END|AUTHOR-END|unrequested|must not appear/);
 });
 
+test("web_fetch rejects parameters from the inactive retrieval mode", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    return new Response(JSON.stringify({ results: [], failed_results: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily" });
+
+  for (const params of [
+    { artifactId: "opaque-id", provider: "exa" },
+    { artifactId: "opaque-id", focus: "ignored" },
+    { artifactId: "opaque-id", maxCharactersPerResult: 5_000 },
+    { artifactId: "opaque-id", noCache: true },
+    { urls: ["https://example.com/page"], artifactOffset: 1 },
+    { urls: ["https://example.com/page"], artifactMaxCharacters: 100 },
+  ]) {
+    await assert.rejects(
+      tools.get("web_fetch").execute("inactive-mode", params, undefined, undefined, { cwd: "/tmp/project" }),
+      (error: unknown) => error instanceof WebProviderError && error.kind === "validation",
+    );
+  }
+  assert.equal(calls, 0);
+});
+
 test("web_fetch rejects oversized URLs before calling a provider", async () => {
   let calls = 0;
   const tools = harness(async () => {
@@ -1956,7 +1979,7 @@ test("web_fetch falls back to Exa only when automatic Tavily extraction has no s
       results: [{ url: "https://example.com/page", title: "Recovered", text: "Recovered body." }],
       statuses: [],
     }), { status: 200, headers: { "content-type": "application/json" } });
-  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+  }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetryDelayMs: 0 });
 
   const result = await tools.get("web_fetch").execute(
     "fetch-fallback",
@@ -1966,12 +1989,20 @@ test("web_fetch falls back to Exa only when automatic Tavily extraction has no s
     { cwd: "/tmp/project" },
   );
 
-  assert.deepEqual(requests, ["https://api.tavily.com/extract", "https://api.exa.ai/contents"]);
+  assert.deepEqual(requests, [
+    "https://api.tavily.com/extract",
+    "https://api.tavily.com/extract",
+    "https://api.tavily.com/extract",
+    "https://api.exa.ai/contents",
+  ]);
   assert.equal(result.details.provider, "exa");
   assert.deepEqual(result.details.attempts, [
     { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", requestId: "tavily-all-failed", durationMs: 0 },
+    { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", requestId: "tavily-all-failed", durationMs: 0 },
+    { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", requestId: "tavily-all-failed", durationMs: 0 },
     { provider: "exa", outcome: "success", status: 200, requestId: "exa-fallback-fetch", durationMs: 0 },
   ]);
+  assert.equal(result.details.retryCount, 2);
   assert.match(result.content[0]?.text ?? "", /Recovered body\./);
 });
 
