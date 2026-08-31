@@ -9,6 +9,20 @@ import { ArtifactStore, TimedCache } from "./storage.ts";
 
 const execFileAsync = promisify(execFile);
 
+async function waitForMissing(path: string, timeoutMs = 1_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      await stat(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`Timed out waiting for removal: ${path}`);
+}
+
 test("TimedCache expires entries and evicts the least recently used entry", () => {
   let now = 1_000;
   const cache = new TimedCache<string>(() => now, 100, 2);
@@ -60,8 +74,7 @@ test("ArtifactStore removes expired artifacts while idle", async () => {
     maxBytes: 1_000_000,
   });
   await store.save({ url: "https://example.com/idle", title: "Idle", content: "body", provider: "tavily" });
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(stat(join(root, "idle-expiry.json")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  await waitForMissing(join(root, "idle-expiry.json"));
 });
 
 test("ArtifactStore prunes expired records discovered at startup", async () => {
@@ -86,8 +99,7 @@ test("ArtifactStore prunes expired records discovered at startup", async () => {
     maxEntries: 10,
     maxBytes: 1_000_000,
   });
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(stat(join(root, "startup-expired.json")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  await waitForMissing(join(root, "startup-expired.json"));
 });
 
 test("ArtifactStore periodically discovers expired artifacts from peer processes", async () => {
@@ -114,8 +126,7 @@ test("ArtifactStore periodically discovers expired artifacts from peer processes
     createdAt: new Date(Date.now() - 2_000).toISOString(),
     expiresAt: new Date(Date.now() - 1_000).toISOString(),
   })}\n`, { mode: 0o600 });
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(stat(path), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  await waitForMissing(path);
 });
 
 test("ArtifactStore commits a batch through one marker and restores it on cancellation", async () => {

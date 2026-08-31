@@ -772,11 +772,13 @@ async function executeSearch(
       && selected === "tavily"
       && error instanceof WebProviderError
       && error.retryable
+      && dependencies.monotonicNow() < deadlineAt
       && Boolean(dependencies.env.EXA_API_KEY);
     if (mayFallbackAfterError) return { response: await run("exa"), attempts, retryCount };
     throw error;
   }
-  const mayFallback = input.provider === "auto" && selected === "tavily" && first.documents.length === 0 && Boolean(dependencies.env.EXA_API_KEY);
+  const mayFallback = input.provider === "auto" && selected === "tavily" && first.documents.length === 0
+    && dependencies.monotonicNow() < deadlineAt && Boolean(dependencies.env.EXA_API_KEY);
   if (mayFallback) return { response: await run("exa"), attempts, retryCount };
   return { response: first, attempts, retryCount };
 }
@@ -1270,6 +1272,7 @@ async function executeFetch(
       && selected === "tavily"
       && error instanceof WebProviderError
       && error.retryable
+      && dependencies.monotonicNow() < deadlineAt
       && Boolean(dependencies.env.EXA_API_KEY);
     if (mayFallbackAfterError) return { response: await runWithBatchRetries("exa"), attempts, retryCount };
     throw error;
@@ -1278,6 +1281,7 @@ async function executeFetch(
     && selected === "tavily"
     && first.documents.length === 0
     && (first.failures.length === 0 || first.failures.every((failure) => failure.retryable))
+    && dependencies.monotonicNow() < deadlineAt
     && Boolean(dependencies.env.EXA_API_KEY);
   if (mayFallback) return { response: await runWithBatchRetries("exa"), attempts, retryCount };
   return { response: first, attempts, retryCount };

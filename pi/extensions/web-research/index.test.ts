@@ -1606,6 +1606,36 @@ test("transport keeps one end-to-end deadline across provider fallback", async (
   assert.ok(calls >= 1 && calls <= 2, `unexpected provider calls: ${calls}`);
 });
 
+test("expired shared deadlines never record a provider fallback", async () => {
+  for (const [toolName, args] of [
+    ["web_search", { query: "deadline fallback accounting" }],
+    ["web_fetch", { urls: ["https://docs.example.com/deadline"] }],
+  ] as const) {
+    let clock = 0;
+    let calls = 0;
+    const tools = harness(async () => {
+      calls++;
+      clock = 20;
+      return new Response("busy", { status: 503 });
+    }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, {
+      monotonicNow: () => clock,
+      maxRetries: 0,
+      totalRequestTimeoutMs: 20,
+      requestTimeoutMs: 100,
+    });
+
+    await assert.rejects(
+      tools.get(toolName).execute(`expired-${toolName}`, args, undefined, undefined, { cwd: "/tmp/project" }),
+      (error: unknown) => error instanceof WebProviderError
+        && error.kind === "timeout"
+        && Array.isArray(error.details.attempts)
+        && error.details.attempts.length === 1
+        && error.details.attempts[0]?.provider === "tavily",
+    );
+    assert.equal(calls, 1);
+  }
+});
+
 test("transport preserves the first abort cause when rejection is delayed", async () => {
   for (const [callerDelay, requestTimeoutMs, expectedKind] of [
     [20, 10, "timeout"],

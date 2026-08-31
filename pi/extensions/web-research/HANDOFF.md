@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 532 passed, 0 failed.
-- Focused web-research suite: 105 passed, 0 failed.
+- Full repository suite: 533 passed, 0 failed.
+- Focused web-research suite: 106 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 8 passed, 0 failed.
@@ -194,6 +194,8 @@ Accepted:
 - A timeout owned by the shared operation deadline is terminal even if timer granularity fires slightly before the monotonic deadline; shorter per-attempt timeouts remain retryable.
 - The frozen evaluation corpus enumerates every E-1 benchmark dimension and E-2 quality metric for both direct-native and Ciung comparison modes; package-contract coverage prevents silent omissions.
 - Similar-page evaluation uses the supported provider-neutral sequence—fetch the seed, derive concepts, run observable Exa semantic discovery, then fetch candidates—rather than claiming an unimplemented dedicated route.
+- Automatic provider fallback is gated on remaining shared deadline budget, so an expired Tavily operation cannot record a synthetic Exa attempt when no Exa request can start.
+- Timer-driven artifact tests poll against a bounded monotonic deadline instead of assuming cleanup completes within a fixed wall-clock sleep under parallel CI load.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
 Rejected as a current PR blocker:
