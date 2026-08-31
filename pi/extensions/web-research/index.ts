@@ -1293,7 +1293,13 @@ async function prepareFetchResults(
   maxInlineChars: number,
   artifactContext: { focus?: string; maxCharactersPerResult: number },
   signal?: AbortSignal,
-): Promise<{ text: string; truncated: boolean; artifacts: Array<Omit<ArtifactRecord, "path">> }> {
+): Promise<{
+  text: string;
+  truncated: boolean;
+  artifacts: Array<Omit<ArtifactRecord, "path">>;
+  batchId: string;
+  ownedArtifactIds: string[];
+}> {
   ensureNotCancelled(signal, response.provider);
   const records: Array<Omit<ArtifactRecord, "path">> = [];
   const artifactBatchId = randomUUID();
@@ -1381,6 +1387,8 @@ async function prepareFetchResults(
     text,
     truncated,
     artifacts: records,
+    batchId: artifactBatchId,
+    ownedArtifactIds: rollbackIds,
   };
 }
 
@@ -1478,10 +1486,12 @@ export default function webResearch(
         };
       }
       const executed = await executeSearch(input, dependencies, signal, onUpdate);
+      ensureNotCancelled(signal, executed.response.provider);
       const response = redactSearchResponse(executed.response, requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query)));
       const { attempts, retryCount } = executed;
-      searchCache.set(cacheKey, response);
       const formatted = formatSearchResults(response.documents);
+      ensureNotCancelled(signal, response.provider);
+      searchCache.set(cacheKey, response);
       return {
         content: [{ type: "text", text: formatted.text }],
         details: {
@@ -1601,20 +1611,32 @@ export default function webResearch(
       if (cacheHit) ensureNotCancelled(signal, selectedProvider);
       let attempts: FetchAttempt[] = [];
       let retryCount = 0;
+      let shouldCache = false;
       if (!response) {
         const executed = await executeFetch(input, dependencies, signal, onUpdate);
+        ensureNotCancelled(signal, executed.response.provider);
         response = redactFetchResponse(executed.response, requestRedactionValues(dependencies, [
           ...sensitiveUrlValues(input.urls),
           ...sensitiveValuesFromQuery(input.focus ?? ""),
         ]));
         attempts = executed.attempts;
         retryCount = executed.retryCount;
-        if (!input.noCache) fetchCache.set(cacheKey, response);
+        shouldCache = !input.noCache;
       }
-      const prepared = await prepareFetchResults(response, artifactStore, dependencies.maxInlineChars, {
-        ...(input.focus ? { focus: input.focus } : {}),
-        maxCharactersPerResult: input.maxCharactersPerResult,
-      }, signal);
+      let prepared: Awaited<ReturnType<typeof prepareFetchResults>> | undefined;
+      try {
+        prepared = await prepareFetchResults(response, artifactStore, dependencies.maxInlineChars, {
+          ...(input.focus ? { focus: input.focus } : {}),
+          maxCharactersPerResult: input.maxCharactersPerResult,
+        }, signal);
+        ensureNotCancelled(signal, response.provider);
+      } catch (error) {
+        if (prepared?.ownedArtifactIds.length) {
+          await artifactStore.rollback(prepared.batchId, prepared.ownedArtifactIds).catch(() => undefined);
+        }
+        throw error;
+      }
+      if (shouldCache) fetchCache.set(cacheKey, response);
       return {
         content: [{ type: "text", text: prepared.text }],
         details: {

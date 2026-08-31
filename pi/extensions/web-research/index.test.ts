@@ -533,6 +533,68 @@ test("provider text is terminal-safe before fetch caching and artifact persisten
   }
 });
 
+test("post-transport cancellation never returns success or primes search and fetch caches", async () => {
+  const cases = [
+    {
+      toolName: "web_search",
+      params: { query: "post-transport cancellation" },
+      response: { request_id: "cancel-search", results: [{ url: "https://docs.example.com/search", title: "Search", content: "snippet" }] },
+    },
+    {
+      toolName: "web_fetch",
+      params: { urls: ["https://docs.example.com/fetch"] },
+      response: { request_id: "cancel-fetch", results: [{ url: "https://docs.example.com/fetch", raw_content: "body" }], failed_results: [] },
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    for (let abortAt = 1; abortAt <= 24; abortAt++) {
+      let providerCalls = 0;
+      let abortChecks = 0;
+      const controller = new AbortController();
+      Object.defineProperty(controller.signal, "aborted", {
+        configurable: true,
+        get() {
+          abortChecks++;
+          return abortChecks >= abortAt;
+        },
+      });
+      const tools = harness(async () => {
+        providerCalls++;
+        return new Response(JSON.stringify(testCase.response), { status: 200, headers: { "content-type": "application/json" } });
+      }, { TAVILY_API_KEY: "test-tavily" });
+
+      let firstResolved = false;
+      try {
+        await tools.get(testCase.toolName).execute(
+          `post-transport-${testCase.toolName}-${abortAt}`,
+          testCase.params,
+          controller.signal,
+          undefined,
+          { cwd: "/tmp/project" },
+        );
+        firstResolved = true;
+      } catch (error) {
+        assert.match(String(error), /cancelled/i);
+      }
+      const cancellationObserved = abortChecks >= abortAt;
+      const second = await tools.get(testCase.toolName).execute(
+        `post-transport-second-${testCase.toolName}-${abortAt}`,
+        testCase.params,
+        undefined,
+        undefined,
+        { cwd: "/tmp/project" },
+      );
+      const cachePrimedByCancelledCall = !firstResolved && second.details.cacheHit === true && providerCalls === 1;
+      assert.equal(
+        firstResolved && cancellationObserved || cachePrimedByCancelledCall,
+        false,
+        `${testCase.toolName} crossed cancellation boundary ${abortAt} with success or cache mutation`,
+      );
+    }
+  }
+});
+
 test("caller cancellation after provider response prevents artifact persistence", async () => {
   const parent = await mkdtemp(join(tmpdir(), "pi-web-cancel-artifact-"));
   const artifactRoot = join(parent, "artifacts");
