@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import webResearch, { createOpaqueCacheKey } from "./index.ts";
+import webResearch, { createOpaqueCacheKey, exaStatusFailure } from "./index.ts";
 import { defaultSleep, requestJson, WebProviderError } from "./transport.ts";
 
 function harness(
@@ -1201,6 +1201,34 @@ test("transport preserves response metadata on payload-validation failures", asy
   );
 });
 
+test("transport preserves response metadata on terminal invalid JSON failures", async () => {
+  await assert.rejects(
+    requestJson(
+      "exa",
+      "https://api.exa.ai/contents",
+      {},
+      {
+        fetch: async () => new Response("{", {
+          status: 200,
+          headers: { "content-type": "application/json", "x-correlation-id": "invalid-json-id" },
+        }),
+        sleep: defaultSleep,
+        requestTimeoutMs: 100,
+        maxRetries: 0,
+        maxResponseBytes: 2_000_000,
+        maxRetryDelayMs: 0,
+        totalRequestTimeoutMs: 1_000,
+        monotonicNow: () => performance.now(),
+      },
+    ),
+    (error: unknown) => error instanceof WebProviderError
+      && error.kind === "upstream"
+      && error.status === 200
+      && error.requestId === "invalid-json-id"
+      && error.retryCount === 0,
+  );
+});
+
 test("transport cancels rejected provider response bodies", async () => {
   for (const mode of ["declared-oversize", "http-error"] as const) {
     let cancelled = false;
@@ -1873,6 +1901,34 @@ test("web_fetch does not fall back after an all-failed permission response", asy
   assert.deepEqual(requests, ["https://api.tavily.com/extract"]);
   assert.deepEqual(result.details.failureKinds, ["permission"]);
   assert.match(result.content[0]?.text ?? "", /permission/i);
+});
+
+test("web_fetch maps documented Exa status failures", async () => {
+  for (const [tag, httpStatusCode, expectedKind, expectedRetryable] of [
+    ["SOURCE_NOT_AVAILABLE", 403, "permission", false],
+    ["CRAWL_UNKNOWN_ERROR", 500, "upstream", true],
+    ["UNSUPPORTED_URL", 400, "validation", false],
+  ] as const) {
+    const requested = `https://example.com/${tag.toLowerCase()}`;
+    const exaStatus = { id: requested, status: "error", error: { tag, httpStatusCode } };
+    const tools = harness(async () => new Response(JSON.stringify({
+      requestId: `exa-${tag}`,
+      results: [],
+      statuses: [exaStatus],
+    }), { status: 200, headers: { "content-type": "application/json" } }), { EXA_API_KEY: "test-exa" });
+    const result = await tools.get("web_fetch").execute(
+      `exa-failure-${tag}`,
+      { urls: [requested], provider: "exa" },
+      undefined,
+      undefined,
+      { cwd: "/tmp/project" },
+    );
+    assert.deepEqual(result.details.failureKinds, [expectedKind]);
+    const classified = exaStatusFailure(exaStatus);
+    assert.equal(classified?.kind, expectedKind);
+    assert.equal(classified?.retryable, expectedRetryable);
+    assert.equal(result.details.attempts[0].errorKind, expectedKind);
+  }
 });
 
 test("web_fetch preserves timeout rate-limit and not-found failure classes", async () => {

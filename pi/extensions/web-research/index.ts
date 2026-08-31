@@ -996,7 +996,7 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   );
 }
 
-function exaStatusFailure(value: unknown): FetchFailure | undefined {
+export function exaStatusFailure(value: unknown): FetchFailure | undefined {
   if (!value || typeof value !== "object") return undefined;
   const status = value as Record<string, unknown>;
   if (status.status === "success") return undefined;
@@ -1004,10 +1004,24 @@ function exaStatusFailure(value: unknown): FetchFailure | undefined {
   if (!url) return undefined;
   const error = status.error && typeof status.error === "object" ? status.error as Record<string, unknown> : {};
   const rawError = error.tag ?? error.error ?? status.status;
-  return {
-    url,
-    ...classifyFetchFailure(rawError, "contents_failed"),
-  };
+  const code = safeFailureCode(rawError, "contents_failed");
+  const tag = code.toUpperCase();
+  if (tag === "SOURCE_NOT_AVAILABLE") return { url, error: code, kind: "permission", retryable: false };
+  if (tag === "CRAWL_UNKNOWN_ERROR") return { url, error: code, kind: "upstream", retryable: true };
+  if (tag === "UNSUPPORTED_URL") return { url, error: code, kind: "validation", retryable: false };
+  const httpStatusCode = typeof error.httpStatusCode === "number" && Number.isInteger(error.httpStatusCode)
+    ? error.httpStatusCode
+    : undefined;
+  if (httpStatusCode === 401) return { url, error: code, kind: "authentication", retryable: false };
+  if (httpStatusCode === 402) return { url, error: code, kind: "payment_or_quota", retryable: false };
+  if (httpStatusCode === 403) return { url, error: code, kind: "permission", retryable: false };
+  if (httpStatusCode === 404) return { url, error: code, kind: "not_found", retryable: false };
+  if (httpStatusCode === 429) return { url, error: code, kind: "rate_limit", retryable: true };
+  if (httpStatusCode !== undefined && httpStatusCode >= 500) return { url, error: code, kind: "upstream", retryable: true };
+  if (httpStatusCode === 400 || httpStatusCode === 409 || httpStatusCode === 422) {
+    return { url, error: code, kind: "validation", retryable: false };
+  }
+  return { url, ...classifyFetchFailure(rawError, "contents_failed") };
 }
 
 function reconcileFetchOutcomes(

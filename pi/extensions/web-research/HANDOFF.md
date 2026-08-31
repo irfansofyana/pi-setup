@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 517 passed, 0 failed.
-- Focused web-research suite: 91 passed, 0 failed.
+- Full repository suite: 519 passed, 0 failed.
+- Focused web-research suite: 93 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -176,6 +176,8 @@ Accepted:
 - Required provider result collections and optional failure/status collections are validated inside the transport retry boundary; missing, wrong-typed, or malformed collections exhaust same-provider retries before fallback.
 - `x-api-key`/`xapikey` URL parameters are classified and redacted as sensitive across output, telemetry, cache, and artifacts.
 - Retryable validation failures from successful HTTP responses preserve the available HTTP status and safely validated response-header request ID through retries and terminal telemetry.
+- Terminal invalid-JSON failures also preserve safely validated response-header request IDs.
+- Documented Exa per-URL status tags and HTTP status codes map to normalized permission, validation, upstream, authentication, quota, not-found, and rate-limit classes before generic string classification.
 
 Rejected as a current PR blocker:
 

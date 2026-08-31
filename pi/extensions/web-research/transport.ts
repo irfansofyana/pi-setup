@@ -330,6 +330,7 @@ export async function requestJson<T>(
         message: `${providerLabel(provider)} returned an invalid JSON response.`,
         retryable: true,
         status: response.status,
+        requestId: responseRequestId(response),
         retryCount: attempt,
       });
       if (attempt >= dependencies.maxRetries) throw invalidJsonError;
