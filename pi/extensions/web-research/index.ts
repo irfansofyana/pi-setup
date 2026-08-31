@@ -1370,8 +1370,6 @@ async function prepareFetchResults(
       }
     }
     ensureNotCancelled(signal, response.provider);
-    if (rollbackIds.length) await artifacts.commit(artifactBatchId, rollbackIds, signal);
-    ensureNotCancelled(signal, response.provider);
   } catch (error) {
     await artifacts.rollback(artifactBatchId, rollbackIds).catch(() => undefined);
     throw error;
@@ -1630,6 +1628,9 @@ export default function webResearch(
           maxCharactersPerResult: input.maxCharactersPerResult,
         }, signal);
         ensureNotCancelled(signal, response.provider);
+        if (prepared.ownedArtifactIds.length) {
+          await artifactStore.commit(prepared.batchId, prepared.ownedArtifactIds, signal);
+        }
       } catch (error) {
         if (prepared?.ownedArtifactIds.length) {
           await artifactStore.rollback(prepared.batchId, prepared.ownedArtifactIds).catch(() => undefined);

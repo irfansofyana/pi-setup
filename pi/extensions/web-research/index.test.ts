@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -656,6 +656,44 @@ test("cancellation immediately after artifact publication rolls it back", async 
     /cancelled/i,
   );
   assert.equal(existsSync(target), false);
+});
+
+test("artifact publication has no cancellable boundary after peer visibility", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "pi-web-final-artifact-boundary-"));
+  const artifactRoot = join(parent, "artifacts");
+  const target = join(artifactRoot, "final-boundary.json");
+  let visibleChecks = 0;
+  const controller = new AbortController();
+  Object.defineProperty(controller.signal, "aborted", {
+    configurable: true,
+    get() {
+      if (!existsSync(target)) return false;
+      const pending = readdirSync(artifactRoot).some((name) => name.startsWith(".batch-") && name.endsWith(".pending"));
+      if (pending) return false;
+      visibleChecks++;
+      return visibleChecks > 1;
+    },
+  });
+  const tools = harness(async () => new Response(JSON.stringify({
+    request_id: "final-artifact-boundary",
+    results: [{ url: "https://docs.example.com/final", raw_content: "x".repeat(20_000) }],
+    failed_results: [],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" }, {
+    artifactRoot,
+    maxInlineChars: 1_000,
+    randomId: () => "final-boundary",
+  });
+
+  const result = await tools.get("web_fetch").execute(
+    "final-artifact-boundary",
+    { urls: ["https://docs.example.com/final"], maxCharactersPerResult: 20_000 },
+    controller.signal,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+  assert.equal(result.details.artifacts[0]?.id, "final-boundary");
+  assert.equal(existsSync(target), true);
+  assert.equal(visibleChecks, 1);
 });
 
 test("web_search never falls back to Exa after a Tavily authentication failure", async () => {

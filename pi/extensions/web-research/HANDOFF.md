@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 534 passed, 0 failed.
-- Focused web-research suite: 107 passed, 0 failed.
+- Full repository suite: 535 passed, 0 failed.
+- Focused web-research suite: 108 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 8 passed, 0 failed.
@@ -196,7 +196,7 @@ Accepted:
 - Similar-page evaluation uses the supported provider-neutral sequence—fetch the seed, derive concepts, run observable Exa semantic discovery, then fetch candidates—rather than claiming an unimplemented dedicated route.
 - Automatic provider fallback is gated on remaining shared deadline budget, so an expired Tavily operation cannot record a synthetic Exa attempt when no Exa request can start.
 - Provider completion is followed by an authoritative cancellation check before redaction or cache mutation; fetch cache publication waits until artifact preparation and its final cancellation boundary complete.
-- If cancellation wins after fetch artifact commit but before return, only artifacts owned by that call are rolled back; reused peer artifacts remain untouched.
+- Artifact batches remain pending through all cancellable preparation; the outer fetch path commits once at the final boundary and performs no asynchronous work after peer visibility, so rollback never invalidates a peer-visible handle.
 - Timer-driven artifact tests poll against a bounded monotonic deadline instead of assuming cleanup completes within a fixed wall-clock sleep under parallel CI load.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
