@@ -118,19 +118,38 @@ test("ArtifactStore periodically discovers expired artifacts from peer processes
   await assert.rejects(stat(path), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
 });
 
+test("ArtifactStore commits a batch through one marker and restores it on cancellation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-batch-commit-"));
+  let ids = 0;
+  const store = new ArtifactStore({ root, now: Date.now, randomId: () => `batch-${++ids}`, ttlMs: 60_000, maxEntries: 4, maxBytes: 10_000 });
+  const batchId = "shared-batch";
+  const first = await store.save({ url: "https://example.test/one", title: "One", content: "one", provider: "tavily", batchId });
+  const second = await store.save({ url: "https://example.test/two", title: "Two", content: "two", provider: "tavily", batchId });
+  assert.ok((await stat(join(root, `.batch-${batchId}.pending`))).isFile());
+
+  let checks = 0;
+  const signal = {} as AbortSignal;
+  Object.defineProperty(signal, "aborted", { get: () => ++checks > 1 });
+  await assert.rejects(store.commit(batchId, [first.id, second.id], signal), /cancelled/i);
+  assert.ok((await stat(join(root, `.batch-${batchId}.pending`))).isFile());
+
+  await store.commit(batchId, [first.id, second.id]);
+  await assert.rejects(stat(join(root, `.batch-${batchId}.pending`)), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+});
+
 test("ArtifactStore does not reuse artifacts before creator commit", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-pending-reuse-"));
-  const input = { url: "https://example.test/shared", title: "Shared", content: "shared body", provider: "tavily", context: { focus: "same" } };
+  const input = { url: "https://example.test/shared", title: "Shared", content: "shared body", provider: "tavily", context: { focus: "same" }, batchId: "creator-batch" };
   const creator = new ArtifactStore({ root, now: Date.now, randomId: () => "creator", ttlMs: 60_000, maxEntries: 1, maxBytes: 10_000 });
   const peer = new ArtifactStore({ root, now: Date.now, randomId: () => "peer", ttlMs: 60_000, maxEntries: 1, maxBytes: 10_000 });
   const created = await creator.save(input);
   assert.equal(created.reused, undefined);
   await assert.rejects(peer.save(input), /capacity is full/i);
-  await creator.commit([created.id]);
+  await creator.commit("creator-batch", [created.id]);
   const reused = await peer.save(input);
   assert.equal(reused.id, created.id);
   assert.equal(reused.reused, true);
-  await assert.rejects(stat(join(root, ".creator.pending")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  await assert.rejects(stat(join(root, ".batch-creator-batch.pending")), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
 });
 
 test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {

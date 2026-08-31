@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 530 passed, 0 failed.
-- Focused web-research suite: 104 passed, 0 failed.
+- Full repository suite: 531 passed, 0 failed.
+- Focused web-research suite: 105 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -189,6 +189,8 @@ Accepted:
 - Oversized fetch preparation reuses an unexpired exact-match artifact under the filesystem lock; the opaque key covers normalized URL, canonical URL, title, provider, options, and content, allowing cache hits to succeed at capacity without duplicate files.
 - Reused artifacts are not rollback-owned by the current call, so cancellation cannot delete an artifact created by an earlier request or peer.
 - Newly published artifacts carry owner-only pending markers and are ineligible for exact-match reuse until the creating call atomically commits its whole artifact set after every rollback point.
+- A fetch set shares one batch marker, so one filesystem-atomic unlink publishes every member together; a partial per-artifact commit is impossible.
+- Batch commit checks cancellation before publication and immediately after the unlink while still holding the capacity lock; cancellation restores the marker before rollback can release the lock.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
 Rejected as a current PR blocker:

@@ -128,6 +128,7 @@ interface StoredArtifact {
   content: string;
   provider: string;
   contextKey: string;
+  batchId?: string;
   createdAt: string;
   expiresAt: string;
 }
@@ -239,6 +240,9 @@ export class ArtifactStore {
     if (typeof record.url !== "string" || (record.canonicalUrl !== undefined && typeof record.canonicalUrl !== "string") || typeof record.title !== "string" || (record.provider !== "tavily" && record.provider !== "exa") || typeof record.contextKey !== "string") {
       throw new Error("Artifact metadata is invalid.");
     }
+    if (record.batchId !== undefined && (typeof record.batchId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(record.batchId))) {
+      throw new Error("Artifact batch metadata is invalid.");
+    }
     return { ...record, canonicalUrl: record.canonicalUrl ?? record.url } as StoredArtifact;
   }
 
@@ -250,7 +254,7 @@ export class ArtifactStore {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
-    for (const name of names.filter((candidate) => candidate.startsWith(".") && candidate.endsWith(".pending"))) {
+    for (const name of names.filter((candidate) => candidate.startsWith(".") && !candidate.startsWith(".batch-") && candidate.endsWith(".pending"))) {
       const id = name.slice(1, -".pending".length);
       try { await lstat(join(this.options.root, `${id}.json`)); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -262,6 +266,7 @@ export class ArtifactStore {
     let entries = additionalEntries;
     let bytes = additionalBytes;
     let nearestExpiryAt: number | undefined;
+    const activeBatchIds = new Set<string>();
     for (const name of names.filter((candidate) => candidate.endsWith(".json"))) {
       const path = join(this.options.root, name);
       try {
@@ -271,15 +276,25 @@ export class ArtifactStore {
           try { await unlink(path); } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
-          try { await unlink(join(this.options.root, `.${record.id}.pending`)); } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          if (!record.batchId) {
+            try { await unlink(join(this.options.root, `.${record.id}.pending`)); } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
           }
           continue;
         }
+        if (record.batchId) activeBatchIds.add(record.batchId);
         nearestExpiryAt = nearestExpiryAt === undefined ? expiresAt : Math.min(nearestExpiryAt, expiresAt);
         entries++;
         bytes += (await lstat(path)).size;
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    for (const name of names.filter((candidate) => candidate.startsWith(".batch-") && candidate.endsWith(".pending"))) {
+      const batchId = name.slice(".batch-".length, -".pending".length);
+      if (activeBatchIds.has(batchId)) continue;
+      try { await unlink(join(this.options.root, name)); } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
@@ -297,7 +312,8 @@ export class ArtifactStore {
       const expiresAt = Date.parse(record.expiresAt);
       let pending = false;
       try {
-        const pendingInfo = await lstat(join(this.options.root, `.${record.id}.pending`));
+        const pendingName = record.batchId ? `.batch-${record.batchId}.pending` : `.${record.id}.pending`;
+        const pendingInfo = await lstat(join(this.options.root, pendingName));
         if (pendingInfo.isSymbolicLink() || !pendingInfo.isFile()) throw new Error("Artifact pending marker is unsafe.");
         pending = true;
       } catch (error) {
@@ -318,7 +334,7 @@ export class ArtifactStore {
     return undefined;
   }
 
-  async save(input: { url: string; canonicalUrl?: string; title: string; content: string; provider: string; context?: Record<string, unknown> }, signal?: AbortSignal): Promise<ArtifactRecord> {
+  async save(input: { url: string; canonicalUrl?: string; title: string; content: string; provider: string; context?: Record<string, unknown>; batchId?: string }, signal?: AbortSignal): Promise<ArtifactRecord> {
     let publishedTarget: string | undefined;
     const compensate = async () => {
       if (!publishedTarget) return;
@@ -346,6 +362,7 @@ export class ArtifactStore {
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new Error("Artifact ID generator returned an unsafe value.");
       const createdAt = new Date(this.options.now()).toISOString();
       const expiresAt = new Date(this.options.now() + this.options.ttlMs).toISOString();
+      if (input.batchId && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(input.batchId)) throw new Error("Unsafe artifact batch ID.");
       const { context: _context, ...storedInput } = input;
       const record: StoredArtifact = { id, ...storedInput, canonicalUrl: input.canonicalUrl ?? input.url, contextKey, createdAt, expiresAt };
       const data = `${JSON.stringify(record)}\n`;
@@ -355,11 +372,15 @@ export class ArtifactStore {
       ArtifactStore.throwIfAborted(signal);
       const target = join(this.options.root, `${id}.json`);
       const temporary = join(this.options.root, `.${id}.${process.pid}.tmp`);
-      const pending = join(this.options.root, `.${id}.pending`);
-      let ownsPending = false;
+      const pending = join(this.options.root, input.batchId ? `.batch-${input.batchId}.pending` : `.${id}.pending`);
       try {
-        await writeFile(pending, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
-        ownsPending = true;
+        try {
+          await writeFile(pending, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          const marker = await lstat(pending);
+          if (marker.isSymbolicLink() || !marker.isFile()) throw new Error("Artifact pending marker is unsafe.");
+        }
         await writeFile(temporary, data, { encoding: "utf8", flag: "wx", mode: 0o600 });
         await chmod(temporary, 0o600);
         ArtifactStore.throwIfAborted(signal);
@@ -377,7 +398,6 @@ export class ArtifactStore {
         }
       } catch (error) {
         try { await unlink(temporary); } catch { /* nothing to clean */ }
-        if (ownsPending) try { await unlink(pending); } catch { /* nothing to clean */ }
         await compensate();
         throw error;
       }
@@ -386,18 +406,38 @@ export class ArtifactStore {
     }, signal);
   }
 
-  async commit(ids: string[]): Promise<void> {
+  async commit(batchId: string, ids: string[], signal?: AbortSignal): Promise<void> {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(batchId)) throw new Error("Unsafe artifact batch ID.");
     if (ids.some((id) => !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id))) throw new Error("Unsafe artifact ID.");
     await this.withCapacityLock(async () => {
+      ArtifactStore.throwIfAborted(signal);
       for (const id of ids) {
         const target = join(this.options.root, `${id}.json`);
         const info = await lstat(target);
         if (info.isSymbolicLink() || !info.isFile()) throw new Error("Artifact is not a safe regular file.");
+        const record = await this.loadStoredArtifact(target, id);
+        if (record.batchId !== batchId) throw new Error("Artifact batch ownership mismatch.");
       }
+      const marker = join(this.options.root, `.batch-${batchId}.pending`);
+      await unlink(marker);
+      if (signal?.aborted) {
+        await writeFile(marker, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+        throw new Error("Artifact operation cancelled.");
+      }
+    }, signal);
+  }
+
+  async rollback(batchId: string, ids: string[]): Promise<void> {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(batchId)) return;
+    await this.withCapacityLock(async () => {
       for (const id of ids) {
-        try { await unlink(join(this.options.root, `.${id}.pending`)); } catch (error) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) continue;
+        try { await unlink(join(this.options.root, `${id}.json`)); } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
+      }
+      try { await unlink(join(this.options.root, `.batch-${batchId}.pending`)); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     });
   }
