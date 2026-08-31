@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "purpose": "Frozen public/synthetic cases for native web tools, my-web-search methodology, and Ciung parent-context isolation. No runtime or provider credentials are included.",
+  "comparisonModes": [
+    "native tools without my-web-search",
+    "native tools with my-web-search",
+    "fresh-context Ciung with my-web-search",
+    "legacy route during explicitly approved side-by-side dogfood"
+  ],
+  "metrics": [
+    "correctness",
+    "primarySourceShare",
+    "claimLevelEvidence",
+    "citationValidity",
+    "contradictionCoverage",
+    "unsupportedClaims",
+    "unresolvedClaimsLabeledHonestly",
+    "relevance",
+    "latencyMs",
+    "providerCost",
+    "parentVisibleCharacters",
+    "fallbackCount",
+    "retryCount",
+    "cancellationStoppedWork",
+    "scopeDiscipline",
+    "toolEfficiency"
+  ],
+  "cases": [
+    {
+      "id": "current-official-fact",
+      "goal": "Confirm one current fact from its owning official source.",
+      "fixture": "Public official page with a visible publication or update date.",
+      "mustShow": ["compact search", "fetched source body", "retrieval date", "no snippet-only confirmation"]
+    },
+    {
+      "id": "release-versus-main",
+      "goal": "Determine whether a documented option exists in a named released package version.",
+      "fixture": "Versioned docs, tagged source, current main branch, and release notes.",
+      "mustShow": ["released artifact distinction", "version", "primary source", "explicit unknowns"]
+    },
+    {
+      "id": "official-documentation-lookup",
+      "goal": "Answer a product behavior question from the owning project's current official documentation.",
+      "fixture": "Public first-party documentation and one non-authoritative secondary explanation.",
+      "mustShow": ["official source selected", "fetched evidence", "secondary source not treated as authority", "retrieval date"]
+    },
+    {
+      "id": "obscure-technical-error",
+      "goal": "Resolve an uncommon exact error using primary technical evidence.",
+      "fixture": "Public issue or source history containing the exact error and a nearby irrelevant keyword match.",
+      "mustShow": ["exact error preserved", "source or issue evidence", "irrelevant match rejected", "uncertainty labeled"]
+    },
+    {
+      "id": "semantic-discovery",
+      "goal": "Find conceptually related technical material where keyword matching is weak.",
+      "fixture": "Public technical corpus with one known relevant semantic neighbor.",
+      "mustShow": ["observable Exa route", "selected source fetch", "provider attempt metadata"]
+    },
+    {
+      "id": "conflicting-sources",
+      "goal": "Represent a conflict between current official documentation and an older article.",
+      "fixture": "Two public dated URLs with materially different claims.",
+      "mustShow": ["both dates", "support and contradiction", "confirmed/inferred/unknown state", "stopping reason"]
+    },
+    {
+      "id": "similar-page-discovery",
+      "goal": "Find pages materially similar to a known public technical page.",
+      "fixture": "One seed URL, one known similar page, and one topically adjacent but structurally unrelated page.",
+      "mustShow": ["seed page fetched", "observable Exa semantic route using seed concepts", "selected candidate fetched", "adjacent false positive rejected"]
+    },
+    {
+      "id": "news-freshness",
+      "goal": "Identify the newest material update on a public topic within a stated date window.",
+      "fixture": "Dated official announcement, newer low-authority repost, and older official documentation.",
+      "mustShow": ["date window applied", "publication dates", "authority and freshness distinguished", "latest material claim fetched"]
+    },
+    {
+      "id": "domain-restrictions",
+      "goal": "Research only within an explicit allowlist of public domains.",
+      "fixture": "Relevant results inside and outside two allowed domains.",
+      "mustShow": ["domain filter sent", "all returned evidence in scope", "out-of-scope result excluded", "no silent filter widening"]
+    },
+    {
+      "id": "partial-batch-fetch",
+      "goal": "Extract three public URLs when one provider result fails.",
+      "fixture": "Two successful provider fixtures and one per-URL failure fixture.",
+      "mustShow": ["independent outcomes", "success and failure counts", "safe failure code", "no batch-wide false failure"]
+    },
+    {
+      "id": "oversized-content",
+      "goal": "Fetch a source exceeding the inline budget.",
+      "fixture": "Synthetic public document over the configured inline character limit.",
+      "mustShow": ["explicit truncation", "owner-only artifact handle", "entry and byte bounds", "no full body in parent output"]
+    },
+    {
+      "id": "cancel-during-provider-work",
+      "goal": "Cancel a pending provider request and retry wait.",
+      "fixture": "Deterministic abortable fetch and sleep fixtures.",
+      "mustShow": ["underlying signal aborted", "no fallback", "no artifact write", "cancelled classification"]
+    },
+    {
+      "id": "operation-timeout",
+      "goal": "Stop provider work when the shared operation deadline expires.",
+      "fixture": "Deterministic provider response delayed beyond the operation deadline.",
+      "mustShow": ["timeout classification", "bounded attempts", "underlying signal aborted", "no post-deadline fallback"]
+    },
+    {
+      "id": "rate-limit-transient-retry",
+      "goal": "Retry bounded transient failures and expose the consumed retry budget.",
+      "fixture": "Synthetic 429 with Retry-After, synthetic 503, then a successful response within the deadline.",
+      "mustShow": ["retryable classification", "bounded Retry-After", "retry count", "shared deadline preserved"]
+    },
+    {
+      "id": "auth-failure-no-fallback",
+      "goal": "Handle a Tavily authentication failure while Exa is configured.",
+      "fixture": "Synthetic 401 response containing an unsafe upstream body.",
+      "mustShow": ["no provider switch", "redacted error", "one provider attempt", "no credential value"]
+    },
+    {
+      "id": "provider-validation-failure",
+      "goal": "Fail closed on a provider validation or malformed-payload response.",
+      "fixture": "Synthetic HTTP 400 validation response and malformed HTTP 200 collection payload.",
+      "mustShow": ["normalized validation or upstream class", "same-provider retry policy", "safe request metadata", "no raw provider exception"]
+    },
+    {
+      "id": "unsafe-url-preflight",
+      "goal": "Reject private, special-use, credential-bearing, and malformed target URLs before provider work.",
+      "fixture": "Synthetic loopback, private IPv4, special-use IPv6, URL userinfo, and malformed host inputs.",
+      "mustShow": ["zero provider calls", "safety-policy classification", "no DNS or target fetch", "no sensitive URL echo"]
+    },
+    {
+      "id": "ciung-context-isolation",
+      "goal": "Research a three-source public question without moving raw retrieval into the parent context.",
+      "fixture": "Self-contained sanitized task packet and three public sources.",
+      "mustShow": ["fresh context", "only native web tools", "compact claim ledger", "materially lower parent-visible characters"]
+    }
+  ]
+}

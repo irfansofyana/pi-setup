@@ -41,7 +41,7 @@ The package owns `/pi-setup-init` and `/pi-setup-doctor` as thin prompt adapters
 
 Distinguish every target:
 
-- **Package-owned:** repository code, themes, and skills loaded from the installed first-party package.
+- **Package-owned:** repository code, themes, and skills loaded from the installed first-party package, including `web-research` and `my-web-search`.
 - **Companion package-owned:** the separate Pi package sources pinned by `piSetup.requiredPackages`.
 - **Global user-owned:** settings, manual loaders, agents, component config/state/logs, generated skills, and Pi-specific MCP under `~/.pi/agent/`.
 - **Global shared MCP:** `~/.config/mcp/mcp.json`.
@@ -58,13 +58,15 @@ Audit relevant surfaces:
 
 - Pi availability/version and `pi list` package sources.
 - First-party package presence and declared resources against `package.json`.
+- Native `web-research` discovery, both exact tool names, bundled `my-web-search`, and owner-only artifact state without reading fetched bodies.
 - Presence and installed source/version of every separately managed package in `piSetup.requiredPackages`.
 - Known legacy manual extension files/directories under `~/.pi/agent/extensions/`, including same-command or same-tool registrations.
 - Potential custom-editor claimants among enabled, resolved package entrypoints. Inspect effective load order plus runtime feature/config evidence. Report static `setEditorComponent()` matches as potential claimants; call them effective owners only when proven, otherwise classify ownership as `blocked`. Never reorder packages during audit.
 - Manually copied package themes under `~/.pi/agent/themes/`.
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
-- Component config/state for Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, permissions, and MCP.
-- Trusted global subagent templates and `subagents.json`; remember package resources do not natively include agents.
+- Component config/state for Web Research artifacts, Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, permissions, and MCP.
+- Trusted global subagent templates and `subagents.json`; compare installed Ciung against the native `web-research`/`my-web-search` source template and remember package resources do not natively activate agents.
+- Separately installed `9router-web-researcher`, legacy 9router web routes, and Tavily/Exa MCP entries as distinct coexistence/removal targets; do not infer removal approval from native resource health.
 - Requested optional skills/tools and external service prerequisites.
 - Credential variable names/references without reading or printing values.
 
@@ -109,6 +111,7 @@ Separate proposal groups:
 - duplicate legacy manual loader cleanup;
 - optional settings/config changes, including theme;
 - global subagent template deployment;
+- later legacy web-skill/route/MCP removal, separate from native Ciung template deployment;
 - external service setup requiring manual auth/credentials.
 
 Ask the user to approve specific proposal numbers. General setup intent, package installation, or audit approval is not mutation approval.
@@ -125,7 +128,7 @@ For each approved proposal, one at a time:
 6. Preserve settings, unknown config keys, state, archives, logs, memory, generated skills, and unrelated entries.
 7. Remove legacy manual code/theme loaders only when they are proven duplicates. Never remove a component config/state directory merely because code is now package-owned.
 8. Keep companion packages as separate Pi-managed sources. Install or update only an explicitly approved exact source; never remove one as a first-party-package duplicate.
-9. For global agents, follow `docs/setup/subagents.md`: review templates, back up existing files, preserve machine-local model choices unless approved, and merge `subagents.json` narrowly.
+9. For global agents, follow `docs/setup/subagents.md`: review templates, back up existing files, preserve machine-local model choices unless approved, and merge `subagents.json` narrowly. Deploying native Ciung does not authorize deleting its legacy skill/routes/MCP configuration.
 10. Never expose, generate, copy, or write credentials. Ask the user to complete `/login`, environment, or provider-profile steps.
 11. Reload/restart and verify this mutation before continuing. On failure, restore only its approved legacy loader when rollback is safe and deterministic; never overwrite newer user data with stale config.
 12. Stop on command failure, validation failure, permission denial, or undocumented state.

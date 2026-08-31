@@ -2,6 +2,23 @@
 
 The first-party Pi package loads repository-owned extensions directly. Required third-party companions remain separate Pi-managed sources declared in `piSetup.requiredPackages`. Do not manually copy first-party code into `~/.pi/agent/extensions/`. This guide owns component behavior and user-owned configuration/state; see [Installation](installation.md#existing-device-migration) for approval-gated legacy cleanup.
 
+## Native web research
+
+The package-owned [`web-research`](../../pi/extensions/web-research/README.md) extension exposes two read-only primitives:
+
+- `web_search` returns compact candidate sources. `auto` uses Tavily for ordinary queries and Exa only for declared semantic/code intent; an explicit provider override wins.
+- `web_fetch` extracts selected public pages through Tavily Extract or Exa Contents. It never performs direct local HTTP.
+
+The Pi process needs `TAVILY_API_KEY`. `EXA_API_KEY` is optional unless Exa is selected or needed as an allowed fallback. Credentials stay in the process environment and must not be written into agent templates, repository files, logs, or tool output.
+
+Operational defaults are deliberately bounded: two retries after retryable rate-limit/timeout/upstream failures, a 30-second end-to-end provider budget, 5-minute in-memory search cache, 1-hour in-memory fetch cache, 50,000 provider characters per fetched source, and 12,000 inline characters. Cache keys are opaque per-process digests, and an unref'd expiry timer removes entries at TTL even when Pi is idle. Oversized content is written atomically as owner-only JSON under `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/`; artifacts expire after 24 hours and the store is capped at 128 entries and 64 MiB. Expired artifacts are pruned, but valid artifacts are never evicted to admit a new one; overflow storage fails closed when capacity is full. A filesystem lock directory serializes capacity changes across Pi processes; the extension never uses SQLite. An uncertain pre-existing lock is not reclaimed automatically: saves wait up to the bounded lock timeout and then fail closed. Remove `.capacity.lock` manually only after confirming no Pi process is writing artifacts. `web_fetch` pages artifacts by opaque ID without exposing local paths. Tool details expose provider, resolved mode, per-attempt status/duration, retry count, cache state/age, returned/stored sizes, cancellation state, truncation, normalized errors, and artifact handles without response bodies or credentials.
+
+Persistence has separate owners. The extension controls only its in-memory caches and the artifact directory described above. Normal Pi logs remain wherever the local Pi installation is configured to write them, under Pi's retention policy. Tavily and Exa may retain API requests or provider-side logs according to their current account settings and published policies; this extension cannot disable, locate, or expire those remote records. Disabling subagent transcripts reduces one local copy but does not disable Pi logging or provider-side retention.
+
+Fallback is allowed only after an empty/all-failed response or an exhausted retryable operational failure. Authentication, payment/quota, permission, validation, cancellation, and safety failures fail closed without switching providers. Search snippets are discovery aids; load `my-web-search` and fetch important sources before treating a material claim as confirmed.
+
+Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and rollback purposes, but the native tools do not call them. Do not remove legacy packages, skills, MCP configuration, credentials, caches, or logs until the migration gate is separately approved. Run `/reload` after package updates, then verify both tools and Ciung as described in [Subagent Team](subagents.md#verification).
+
 ## Irfan Sumi theme editor
 
 Purpose: provide `irfan-sumi` colors and compact chat input as one package-owned theme bundle without patching Pi or `@earendil-works/pi-tui`.

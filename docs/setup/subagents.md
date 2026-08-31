@@ -6,7 +6,7 @@ This setup turns `@tintinweb/pi-subagents` into a small agent team instead of a 
 
 | Identity | Role ID | Job | Authority | Preloaded skills |
 | --- | --- | --- | --- | --- |
-| **Ciung** | `researcher` | Current public-web research with primary-source evidence | 9router search/fetch only; no local file tools | `9router-web-researcher` |
+| **Ciung** | `researcher` | Current public-web research with primary-source evidence | Native `web_search`/`web_fetch` only; no local file tools | bundled `my-web-search` |
 | **Laya** | `code-mapper` | Trace architecture, execution flow, change surface, and tests | Read-only; no shell or extensions | `mermaid`, `teach` |
 | **Sangkur** | `builder` | Prepares behavior tests and implementation in a Git worktree; parent executes tests | Local read/edit/write only; no shell, test execution, network, or extensions | `code-review` |
 | **Prabu** | `reviewer` | Independent diff, risk, and test review | Read-only; no shell or extensions | `code-review` |
@@ -18,22 +18,21 @@ The main Pi session remains coordinator. Specialists return evidence and branche
 - Research and code understanding can run in parallel without sharing a checkout or modifying state.
 - Builder uses `isolation: worktree` so its file edits do not collide with the parent checkout. Worktree isolation is only checkout separation, not a security boundary and not protection against external side effects. The builder separately has only `read`, `grep`, `find`, `ls`, `edit`, and `write`; it has no shell, network, extensions, or nested-agent tools. A changed worktree is preserved on a local `pi-agent-*` branch for explicit review/integration.
 - Reviewer is separate from builder and has only `read`, `grep`, `find`, and `ls`; it cannot execute shell commands or load extensions. The parent supplies the actual diff and verification evidence so review authority remains genuinely read-only.
-- Ciung has only external 9router search/fetch and cannot read repository files. Give it sanitized public questions and URLs; Laya handles local repository evidence, and the parent reconciles both streams.
+- Ciung loads only the package-owned `web-research` extension and cannot read repository files. Give it sanitized public questions and URLs; Laya handles local repository evidence, and the parent reconciles both streams.
 - Every role sets `inherit_context: false`; the coordinator must supply a self-contained task packet instead of leaking unrelated conversation context.
-- Subagent transcripts are disabled by default. This reduces stray local copies; normal Pi/provider logs and builder worktree commits may still persist.
+- Subagent transcripts are disabled by default. This reduces one source of local copies; it does not disable normal Pi logs, builder worktree commits, or Tavily/Exa API-side logs and retention. Pi log locations and lifetime follow the local Pi configuration. Provider-side storage follows the account settings and published policies of each provider and is not controlled by this extension. Extension-owned cache/artifact locations and retention are documented in [Local Extensions](local-extensions.md#native-web-research).
 
 ## Prerequisites
 
-`@tintinweb/pi-subagents` is a separately managed [required companion package](../../README.md#required-npm-package-manifest). Pi package resources do not natively include agents, so continue to review and deploy the global templates in this guide. Install the role skills from [Skills and optional tools](skills-and-tools.md):
+`@tintinweb/pi-subagents` is a separately managed [required companion package](../../README.md#required-npm-package-manifest). Pi package resources do not natively include agents, so continue to review and deploy the global templates in this guide. The native web extension and `my-web-search` skill are already package resources; do not install either separately. Install only the remaining role skills from [Skills and optional tools](skills-and-tools.md):
 
 ```bash
-npx skills add irfansofyana/ai-marketplace --global --skill 9router-web-researcher
 npx skills add irfansofyana/ai-marketplace --global --skill mermaid
 npx skills add irfansofyana/ai-marketplace --global --skill code-review
 npx skills@latest add mattpocock/skills --global --skill teach
 ```
 
-`researcher` also needs `pi-9router-ext` configured with working web search/fetch routes. Run `/9router-config` if either tool reports that no route is available.
+The Pi process running `researcher` needs `TAVILY_API_KEY`; `EXA_API_KEY` is optional unless Exa is explicitly requested or selected for semantic/code intent. Keep credentials in the process environment, never in the agent template. Existing `pi-9router-ext` and Tavily/Exa MCP configuration may remain during side-by-side dogfood, but Ciung cannot call those legacy tools after this template is deployed.
 
 ## Install the trusted templates
 
@@ -244,8 +243,8 @@ Smoke test with a harmless read-only request:
 Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
 ```
 
-Expected: the role appears as global, uses only read/grep/find/ls, cites repository files, and returns an explicit deliverable. Then run a researcher query and confirm only `ninerouter_web_search`/`ninerouter_web_fetch` are exposed from 9router.
+Expected: the role appears as global, uses only read/grep/find/ls, cites repository files, and returns an explicit deliverable. Then run a researcher query and confirm only `web_search`/`web_fetch` are exposed from the `web-research` extension, `my-web-search` is preloaded, and no local/MCP/9router tools are available.
 
 ## Rollback
 
-Restore each prior `*.md` from the printed private backup directory, or remove a newly added role if no prior file existed. Restore the separately backed-up `~/.pi/agent/subagents.json`, then run `/reload` or restart Pi.
+Restore each prior `*.md` from the printed private backup directory, or remove a newly added role if no prior file existed. Restore the separately backed-up `~/.pi/agent/subagents.json`; if the package itself must be rolled back, reinstall the previously reviewed package tag before running `/reload` or restarting Pi. Do not delete legacy skills, MCP configuration, credentials, caches, or logs as part of rollback unless they were separately audited and explicitly approved for removal.

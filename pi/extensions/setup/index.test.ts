@@ -42,6 +42,19 @@ test("init delegates to the bundled skill without granting mutation approval", a
   assert.match(INIT_PROMPT, /companion packages/);
 });
 
+test("setup prompts audit native web delivery and legacy coexistence without removal authority", () => {
+  for (const prompt of [INIT_PROMPT, DOCTOR_PROMPT]) {
+    assert.match(prompt, /web-research/);
+    assert.match(prompt, /my-web-search/);
+    assert.match(prompt, /Ciung/);
+    assert.match(prompt, /9router/);
+    assert.match(prompt, /Tavily\/Exa MCP/);
+  }
+  assert.match(INIT_PROMPT, /separate numbered proposals/i);
+  assert.match(INIT_PROMPT, /do not remove/i);
+  assert.match(DOCTOR_PROMPT, /read-only/i);
+});
+
 test("doctor delegates a strictly read-only health audit", async () => {
   const pi = new MockPi();
   registerSetupCommands(pi as never);

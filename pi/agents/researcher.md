@@ -1,9 +1,9 @@
 ---
 description: Evidence-first public web researcher
 display_name: Ciung
-tools: "ext:pi-9router-ext/ninerouter_web_search, ext:pi-9router-ext/ninerouter_web_fetch"
-extensions: [pi-9router-ext]
-skills: 9router-web-researcher
+tools: "ext:web-research/web_search, ext:web-research/web_fetch"
+extensions: [web-research]
+skills: my-web-search
 thinking: medium
 max_turns: 20
 prompt_mode: append

@@ -13,6 +13,7 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
 | `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
 | `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
+| `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/` | Global Pi | Owner-only bounded native-web artifacts; package code owns format, user owns retained state |
 | `<project>/.pi/agents/` | Project-local | Project agent definitions; trusted repositories only |
 | `<project>/.agents/agents/` | Project-local | Shared project agent definitions; trusted repositories only |
 | `<project>/.pi/subagents.json` | Project-local | Subagent settings overriding global defaults |
@@ -41,9 +42,10 @@ Prefer `/login` or environment variables. Never commit secrets.
 # LLM provider example
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# Search providers
+# Native web-research providers (`TAVILY_API_KEY` is the ordinary default)
 export TAVILY_API_KEY="tvly-..."
 export EXA_API_KEY="exa-..."
+# Optional legacy/other search integrations
 export BRAVE_API_KEY="BSA..."
 
 # Work MCP examples

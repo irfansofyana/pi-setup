@@ -1,0 +1,8 @@
+{
+  "name": "pi-local-web-research",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "pi": ">=0.84.1"
+  }
+}

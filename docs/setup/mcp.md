@@ -33,7 +33,9 @@ mkdir -p ~/.config/mcp
 $EDITOR ~/.config/mcp/mcp.json
 ```
 
-## Search MCP example
+## Legacy search MCP example
+
+The first-party `web-research` extension calls Tavily and Exa directly and does not need MCP. Keep the following only for side-by-side benchmark or rollback, or when another client still depends on those servers. Do not add it on a fresh Pi setup solely for `web_search`/`web_fetch`, and do not remove an existing configuration without the approval-gated migration audit.
 
 ```json
 {
