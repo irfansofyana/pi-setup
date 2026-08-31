@@ -62,6 +62,37 @@ test("ArtifactStore preserves valid artifacts and rejects a save when the entry 
   assert.equal(JSON.parse(await readFile(first.path, "utf8")).content, "one");
 });
 
+test("ArtifactStore honors persisted expiresAt across process TTL changes", async () => {
+  const base = 1_725_000_000_000;
+
+  const validRoot = await mkdtemp(join(tmpdir(), "pi-web-artifact-valid-expiry-"));
+  const original = new ArtifactStore({ root: validRoot, now: () => base, randomId: () => "original-valid", ttlMs: 86_400_000, maxEntries: 2, maxBytes: 10_000 });
+  const valid = await original.save({ url: "https://example.test/valid", title: "valid", content: "valid", provider: "tavily" });
+  await utimes(valid.path, new Date(base), new Date(base));
+  const shorterConfig = new ArtifactStore({ root: validRoot, now: () => base + 1_000, randomId: () => "new-valid", ttlMs: 1, maxEntries: 2, maxBytes: 10_000 });
+  await shorterConfig.save({ url: "https://example.test/new", title: "new", content: "new", provider: "tavily" });
+  assert.deepEqual((await readdir(validRoot)).filter((name) => name.endsWith(".json")).sort(), ["new-valid.json", "original-valid.json"]);
+
+  const expiredRoot = await mkdtemp(join(tmpdir(), "pi-web-artifact-expired-record-"));
+  const shortLived = new ArtifactStore({ root: expiredRoot, now: () => base, randomId: () => "expired", ttlMs: 1, maxEntries: 1, maxBytes: 10_000 });
+  const expired = await shortLived.save({ url: "https://example.test/expired", title: "expired", content: "expired", provider: "tavily" });
+  await utimes(expired.path, new Date(base + 86_400_000), new Date(base + 86_400_000));
+  const longerConfig = new ArtifactStore({ root: expiredRoot, now: () => base + 1_000, randomId: () => "replacement", ttlMs: 86_400_000, maxEntries: 1, maxBytes: 10_000 });
+  await longerConfig.save({ url: "https://example.test/replacement", title: "replacement", content: "replacement", provider: "exa" });
+  assert.deepEqual((await readdir(expiredRoot)).filter((name) => name.endsWith(".json")), ["replacement.json"]);
+});
+
+test("ArtifactStore fails closed on ambiguous artifact expiry metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-invalid-expiry-"));
+  await writeFile(join(root, "invalid.json"), "not-json", { mode: 0o600 });
+  const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => "must-not-publish", ttlMs: 60_000, maxEntries: 2, maxBytes: 10_000 });
+  await assert.rejects(
+    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
+    /invalid|metadata|JSON/i,
+  );
+  assert.equal(await readFile(join(root, "invalid.json"), "utf8"), "not-json");
+});
+
 test("ArtifactStore refuses an ID collision without overwriting the existing artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-collision-"));
   const store = new ArtifactStore({

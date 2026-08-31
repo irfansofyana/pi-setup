@@ -931,6 +931,8 @@ test("web_fetch rejects non-public URLs before calling a provider", async () => 
     "http://[fe80::1]/admin",
     "http://[fc00::1]/admin",
     "http://[2001:db8::1]/admin",
+    "http://[2001:100::1]/admin",
+    "http://[100:0:0:1::1]/admin",
     "http://198.51.100.1/private",
     "https://example.test/private",
     "https://service.onion/private",
@@ -954,9 +956,37 @@ test("web_fetch rejects non-public URLs before calling a provider", async () => 
         { cwd: "/tmp/project" },
       ),
       (error: unknown) => error instanceof WebProviderError && error.kind === "safety-policy",
+      url,
     );
   }
   assert.equal(calls, 0);
+});
+
+test("web_fetch permits explicit globally reachable IANA IPv6 exceptions", async () => {
+  const requested = [
+    "http://[2001:1::1]/",
+    "http://[2001:3::1]/",
+    "http://[2001:20::1]/",
+    "http://[2001:30::1]/",
+  ];
+  let calls = 0;
+  const tools = harness(async (_input, init = {}) => {
+    calls++;
+    const body = JSON.parse(String(init.body)) as { urls: string[] };
+    return new Response(JSON.stringify({
+      results: body.urls.map((url) => ({ url, title: "IANA exception", raw_content: "public content" })),
+      failed_results: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily" });
+  const result = await tools.get("web_fetch").execute(
+    "fetch-iana-exceptions",
+    { urls: requested },
+    new AbortController().signal,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.details.successCount, requested.length);
 });
 
 test("transport cancels rejected provider response bodies", async () => {

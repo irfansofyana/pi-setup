@@ -772,26 +772,28 @@ function ipv6Prefix(address: bigint, prefix: string, bits: number): boolean {
 function isPrivateIpv6(host: string): boolean {
   const address = ipv6Number(host);
   if (address === undefined) return true;
-  const specialRanges: Array<[string, number]> = [
-    ["::", 96],
-    ["::ffff:0:0", 96],
-    ["::ffff:0:0:0", 96],
-    ["64:ff9b::", 96],
-    ["64:ff9b:1::", 48],
-    ["100::", 64],
-    ["2001::", 32],
-    ["2001:2::", 48],
-    ["2001:10::", 28],
+
+  // Public provider targets must be globally routable unicast. Keep the
+  // 2001::/23 exceptions aligned with IANA's IPv6 special-purpose registry.
+  if (!ipv6Prefix(address, "2000::", 3)) return true;
+  const globallyReachableIetfExceptions: Array<[string, number]> = [
+    ["2001:1::1", 128],
+    ["2001:1::2", 128],
+    ["2001:1::3", 128],
+    ["2001:3::", 32],
+    ["2001:4:112::", 48],
     ["2001:20::", 28],
+    ["2001:30::", 28],
+  ];
+  if (globallyReachableIetfExceptions.some(([prefix, bits]) => ipv6Prefix(address, prefix, bits))) return false;
+  if (ipv6Prefix(address, "2001::", 23)) return true;
+
+  const nonGlobalRanges: Array<[string, number]> = [
     ["2001:db8::", 32],
     ["2002::", 16],
     ["3fff::", 20],
-    ["5f00::", 16],
-    ["fc00::", 7],
-    ["fe80::", 10],
-    ["ff00::", 8],
   ];
-  return specialRanges.some(([prefix, bits]) => ipv6Prefix(address, prefix, bits));
+  return nonGlobalRanges.some(([prefix, bits]) => ipv6Prefix(address, prefix, bits));
 }
 
 function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[] {

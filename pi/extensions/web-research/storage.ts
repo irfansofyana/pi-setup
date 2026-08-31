@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, link, lstat, mkdir, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export class TimedCache<T> {
@@ -156,6 +156,26 @@ export class ArtifactStore {
     }
   }
 
+  private async loadStoredArtifact(path: string, expectedId: string): Promise<StoredArtifact> {
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isFile() || info.size > this.options.maxBytes) {
+      throw new Error("Artifact is not a safe regular file.");
+    }
+    let record: Partial<StoredArtifact>;
+    try {
+      record = JSON.parse(await readFile(path, "utf8")) as Partial<StoredArtifact>;
+    } catch {
+      throw new Error("Artifact record is invalid.");
+    }
+    if (record.id !== expectedId || typeof record.content !== "string" || typeof record.expiresAt !== "string" || !Number.isFinite(Date.parse(record.expiresAt))) {
+      throw new Error("Artifact record is invalid.");
+    }
+    if (typeof record.url !== "string" || (record.canonicalUrl !== undefined && typeof record.canonicalUrl !== "string") || typeof record.title !== "string" || (record.provider !== "tavily" && record.provider !== "exa") || typeof record.contextKey !== "string") {
+      throw new Error("Artifact metadata is invalid.");
+    }
+    return { ...record, canonicalUrl: record.canonicalUrl ?? record.url } as StoredArtifact;
+  }
+
   private async cleanup(additionalEntries = 0, additionalBytes = 0): Promise<void> {
     const names = await readdir(this.options.root);
     for (const name of names.filter((candidate) => candidate.endsWith(".tmp"))) {
@@ -169,16 +189,15 @@ export class ArtifactStore {
     for (const name of names.filter((candidate) => candidate.endsWith(".json"))) {
       const path = join(this.options.root, name);
       try {
-        const info = await stat(path);
-        if (!info.isFile()) continue;
-        if (info.mtimeMs + this.options.ttlMs <= this.options.now()) {
+        const record = await this.loadStoredArtifact(path, name.slice(0, -5));
+        if (Date.parse(record.expiresAt) <= this.options.now()) {
           try { await unlink(path); } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
           }
           continue;
         }
         entries++;
-        bytes += info.size;
+        bytes += (await lstat(path)).size;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
@@ -266,18 +285,10 @@ export class ArtifactStore {
     }
     await this.ensureRoot();
     const path = join(this.options.root, `${id}.json`);
-    const info = await lstat(path);
-    if (info.isSymbolicLink() || !info.isFile() || info.size > this.options.maxBytes) throw new Error("Artifact is not a safe regular file.");
-    const record = JSON.parse(await readFile(path, "utf8")) as Partial<StoredArtifact>;
-    if (record.id !== id || typeof record.content !== "string" || typeof record.expiresAt !== "string") {
-      throw new Error("Artifact record is invalid.");
-    }
+    const record = await this.loadStoredArtifact(path, id);
     if (Date.parse(record.expiresAt) <= this.options.now()) {
       try { await unlink(path); } catch { /* already removed */ }
       throw new Error("Artifact has expired.");
-    }
-    if (typeof record.url !== "string" || (record.canonicalUrl !== undefined && typeof record.canonicalUrl !== "string") || typeof record.title !== "string" || (record.provider !== "tavily" && record.provider !== "exa") || typeof record.contextKey !== "string") {
-      throw new Error("Artifact metadata is invalid.");
     }
     const content = record.content.slice(offset, offset + maxCharacters);
     const nextOffset = offset + content.length;
