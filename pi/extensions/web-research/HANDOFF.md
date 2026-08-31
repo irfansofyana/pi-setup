@@ -1,7 +1,7 @@
 # Handoff: Native Web Research
 
 Date: 2026-08-31
-Status: implementation complete; independent review and PR delivery pending
+Status: implementation and accepted review fixes complete; independent re-review and PR delivery pending
 Spec: `REQUIREMENTS.md`
 
 ## Current state
@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 448 passed, 0 failed.
-- Focused web-research suite: 19 passed, 0 failed.
+- Full repository suite: 460 passed, 0 failed.
+- Focused web-research suite: 34 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -47,7 +47,26 @@ See `DECISIONS.md`.
 
 ## Review
 
-Pending independent Standards and Specification reviews against the current branch. Accepted and rejected findings will be recorded here before delivery.
+Initial independent Standards and Specification reviews inspected commit `8a43b0d0b8121e1ed417fd4f6e52c7de2a7fa83c` against `origin/main`.
+
+Accepted and fixed:
+
+- IPv4-compatible/mapped IPv6, 6to4, loopback, link-local, ULA, and documentation-address bypasses in public-URL validation.
+- Cancellation bypass on cached search results and post-response persistence boundaries.
+- Cross-instance artifact entry/byte-cap races.
+- Sensitive query values and fragments leaking into output or artifact metadata.
+- Unbounded provider JSON, result counts, metadata fields, request IDs, and formatted output.
+- Unclamped `Retry-After` values and per-attempt timeouts without one end-to-end deadline.
+- Permission/safety/policy extraction failures being eligible for fallback or lacking normalized classes.
+- Missing per-attempt latency, cache age/state, returned/stored sizes, cancellation state, and normalized error telemetry.
+- Artifact paths exposed without an opaque retrieval operation; default oversized evidence discarded before offload.
+- Missing canonical URL and per-document provider identity.
+
+Rejected:
+
+- None. Every blocking finding was reproduced against the reviewed commit and accepted.
+
+Verdict: accepted fixes are locally verified; fresh independent Standards and Specification reviews against the exact current commit remain mandatory before delivery.
 
 ## Known limitations and open gates
 
@@ -64,7 +83,7 @@ Reinstall the previously reviewed package tag and run `/reload` (or restart Pi a
 
 ## Next steps
 
-1. Complete independent Standards and Specification review loops.
-2. Re-run exact verification after accepted fixes.
+1. Commit the accepted review fixes and run fresh independent Standards and Specification reviews against that exact commit.
+2. Resolve any new validated blockers and repeat until clean.
 3. Rebase on `origin/main`, push, open the PR, and verify CI on the exact pushed commit.
 4. Run automated PR review and address validated findings until clean.

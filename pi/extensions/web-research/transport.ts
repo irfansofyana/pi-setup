@@ -4,6 +4,7 @@ export type ErrorKind =
   | "payment_or_quota"
   | "permission"
   | "validation"
+  | "safety-policy"
   | "rate_limit"
   | "timeout"
   | "not_found"
@@ -19,6 +20,7 @@ export class WebProviderError extends Error {
   readonly requestId?: string;
   readonly retryAfterMs?: number;
   readonly retryCount: number;
+  details: Record<string, unknown>;
 
   constructor(input: {
     provider: ProviderName;
@@ -29,6 +31,7 @@ export class WebProviderError extends Error {
     requestId?: string;
     retryAfterMs?: number;
     retryCount?: number;
+    details?: Record<string, unknown>;
   }) {
     super(input.message);
     this.name = "WebProviderError";
@@ -39,6 +42,7 @@ export class WebProviderError extends Error {
     this.requestId = input.requestId;
     this.retryAfterMs = input.retryAfterMs;
     this.retryCount = input.retryCount ?? 0;
+    this.details = input.details ?? {};
   }
 }
 
@@ -47,6 +51,9 @@ export interface TransportDependencies {
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   requestTimeoutMs: number;
   maxRetries: number;
+  maxResponseBytes: number;
+  maxRetryDelayMs: number;
+  totalRequestTimeoutMs: number;
 }
 
 export interface JsonTransportResponse<T> {
@@ -117,8 +124,54 @@ function upstream(provider: ProviderName, retryCount: number): WebProviderError 
   return new WebProviderError({ provider, kind: "upstream", message: `${providerLabel(provider)} network request failed.`, retryable: true, retryCount });
 }
 
-function delayFor(error: WebProviderError, attempt: number): number {
-  return error.retryAfterMs ?? Math.min(4_000, 250 * (2 ** attempt));
+async function boundedJson<T>(
+  provider: ProviderName,
+  response: Response,
+  maxBytes: number,
+  retryCount: number,
+): Promise<T> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new WebProviderError({
+      provider,
+      kind: "safety-policy",
+      message: `${providerLabel(provider)} response exceeded the byte safety limit.`,
+      status: response.status,
+      retryCount,
+    });
+  }
+  if (!response.body) return JSON.parse("") as T;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new WebProviderError({
+        provider,
+        kind: "safety-policy",
+        message: `${providerLabel(provider)} response exceeded the byte safety limit.`,
+        status: response.status,
+        retryCount,
+      });
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
+function delayFor(error: WebProviderError, attempt: number, maxDelayMs: number, remainingMs: number): number {
+  const requested = error.retryAfterMs ?? Math.min(4_000, 250 * (2 ** attempt));
+  return Math.max(0, Math.min(requested, maxDelayMs, remainingMs));
 }
 
 export async function requestJson<T>(
@@ -128,9 +181,19 @@ export async function requestJson<T>(
   dependencies: TransportDependencies,
   callerSignal?: AbortSignal,
 ): Promise<JsonTransportResponse<T>> {
+  const startedAt = Date.now();
+  const deadlineAt = dependencies.totalRequestTimeoutMs > 0
+    ? startedAt + dependencies.totalRequestTimeoutMs
+    : Number.POSITIVE_INFINITY;
+  const remainingMs = () => Math.max(0, deadlineAt - Date.now());
   for (let attempt = 0; ; attempt++) {
     if (callerSignal?.aborted) throw cancelled(provider, attempt);
-    const timeoutSignal = dependencies.requestTimeoutMs > 0 ? AbortSignal.timeout(dependencies.requestTimeoutMs) : undefined;
+    const remaining = remainingMs();
+    if (remaining <= 0) throw timeout(provider, attempt);
+    const attemptTimeout = dependencies.requestTimeoutMs > 0
+      ? Math.min(dependencies.requestTimeoutMs, remaining)
+      : remaining;
+    const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, attemptTimeout)) : undefined;
     const signal = callerSignal && timeoutSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : (callerSignal ?? timeoutSignal);
     let response: Response;
     try {
@@ -141,7 +204,7 @@ export async function requestJson<T>(
         : timeoutSignal?.aborted ? timeout(provider, attempt) : upstream(provider, attempt);
       if (!error.retryable || attempt >= dependencies.maxRetries) throw error;
       try {
-        await dependencies.sleep(delayFor(error, attempt), callerSignal);
+        await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
       } catch {
         throw cancelled(provider, attempt);
       }
@@ -154,7 +217,7 @@ export async function requestJson<T>(
       const error = responseError(provider, response, attempt);
       if (!error.retryable || attempt >= dependencies.maxRetries) throw error;
       try {
-        await dependencies.sleep(delayFor(error, attempt), callerSignal);
+        await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
       } catch {
         throw cancelled(provider, attempt);
       }
@@ -162,11 +225,12 @@ export async function requestJson<T>(
     }
 
     try {
-      const payload = await response.json() as T;
+      const payload = await boundedJson<T>(provider, response, dependencies.maxResponseBytes, attempt);
       if (callerSignal?.aborted) throw cancelled(provider, attempt);
       return { response, payload, retryCount: attempt };
-    } catch {
+    } catch (caught) {
       if (callerSignal?.aborted) throw cancelled(provider, attempt);
+      if (caught instanceof WebProviderError) throw caught;
       const error = new WebProviderError({
         provider,
         kind: "upstream",
@@ -177,7 +241,7 @@ export async function requestJson<T>(
       });
       if (attempt >= dependencies.maxRetries) throw error;
       try {
-        await dependencies.sleep(delayFor(error, attempt), callerSignal);
+        await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
       } catch {
         throw cancelled(provider, attempt);
       }

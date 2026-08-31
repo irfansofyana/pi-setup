@@ -74,6 +74,9 @@ const DEFAULT_DEPENDENCIES: WebResearchDependencies = {
   sleep: defaultSleep,
   requestTimeoutMs: 30_000,
   maxRetries: 2,
+  maxResponseBytes: 2 * 1024 * 1024,
+  maxRetryDelayMs: 4_000,
+  totalRequestTimeoutMs: 30_000,
   searchCacheTtlMs: 5 * 60_000,
   fetchCacheTtlMs: 60 * 60_000,
   maxCacheEntries: 128,
@@ -100,6 +103,8 @@ interface SearchInput {
 interface WebDocument {
   title: string;
   url: string;
+  canonicalUrl: string;
+  provider: ProviderName;
   snippets: string[];
   publishedAt?: string;
   author?: string;
@@ -113,6 +118,7 @@ interface ProviderSearchResponse {
   requestId?: string;
   documents: WebDocument[];
   retryCount: number;
+  truncated: boolean;
 }
 
 interface SearchAttempt {
@@ -120,7 +126,16 @@ interface SearchAttempt {
   outcome: "success" | "empty" | "error";
   status?: number;
   errorKind?: ErrorKind;
+  durationMs: number;
 }
+
+type FetchAttempt = {
+  provider: ProviderName;
+  outcome: string;
+  status?: number;
+  errorKind?: ErrorKind;
+  durationMs: number;
+};
 
 type ToolUpdate = {
   content: Array<{ type: "text"; text: string }>;
@@ -177,9 +192,34 @@ function numericValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function clippedText(value: unknown, maxCharacters: number): { value?: string; truncated: boolean } {
+  const text = textValue(value);
+  if (!text) return { truncated: false };
+  return text.length > maxCharacters
+    ? { value: text.slice(0, maxCharacters), truncated: true }
+    : { value: text, truncated: false };
+}
+
+function safeRequestId(value: unknown): string | undefined {
+  const text = textValue(value);
+  return text && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(text) ? text : undefined;
+}
+
 function safeFailureCode(value: unknown, fallback: string): string {
   const text = textValue(value);
   return text && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,79}$/.test(text) ? text : fallback;
+}
+
+function classifyFetchFailure(value: unknown, fallback: string): { error: string; kind: ErrorKind; retryable: boolean } {
+  const error = safeFailureCode(value, fallback);
+  const normalized = error.toLowerCase();
+  if (/permission|forbidden|denied/.test(normalized)) return { error, kind: "permission", retryable: false };
+  if (/safety|policy|blocked|private/.test(normalized)) return { error, kind: "safety-policy", retryable: false };
+  if (/auth|unauthori/.test(normalized)) return { error, kind: "authentication", retryable: false };
+  if (/quota|payment|credit/.test(normalized)) return { error, kind: "payment_or_quota", retryable: false };
+  if (/invalid|validation|bad_request/.test(normalized)) return { error, kind: "validation", retryable: false };
+  if (/timeout|temporar|network|rate_limit|upstream|crawl_timeout/.test(normalized)) return { error, kind: "upstream", retryable: true };
+  return { error, kind: "unknown", retryable: false };
 }
 
 function tavilyMode(profile: SearchProfile): "fast" | "basic" | "advanced" {
@@ -198,11 +238,28 @@ function providerLabel(provider: ProviderName): string {
   return provider === "tavily" ? "Tavily" : "Exa";
 }
 
+const SENSITIVE_QUERY_KEYS = new Set([
+  "accesskey", "accesstoken", "apikey", "auth", "authorization", "code", "credential",
+  "jwt", "key", "password", "passwd", "secret", "session", "sessionid", "sig", "signature",
+  "token", "xamzcredential", "xamzsecuritytoken", "xamzsignature", "xgoogcredential", "xgoogsignature",
+]);
+
+function redactUrlForDisplay(value: string): string {
+  const parsed = new URL(value);
+  parsed.hash = "";
+  for (const key of [...parsed.searchParams.keys()]) {
+    const normalized = key.toLowerCase().replace(/[-_.]/g, "");
+    if (SENSITIVE_QUERY_KEYS.has(normalized)) parsed.searchParams.set(key, "REDACTED");
+  }
+  return parsed.toString();
+}
+
 function publicProviderUrl(value: unknown): string | undefined {
   const url = textValue(value);
-  if (!url) return undefined;
+  if (!url || url.length > 4_096) return undefined;
   try {
-    return publicUrls([url])[0];
+    const publicUrl = publicUrls([url])[0];
+    return publicUrl ? redactUrlForDisplay(publicUrl) : undefined;
   } catch {
     return undefined;
   }
@@ -218,15 +275,21 @@ function ensureNotCancelled(signal: AbortSignal | undefined, provider: ProviderN
   }
 }
 
-function formatSearchResults(results: WebDocument[]): string {
-  if (results.length === 0) return "No web search results.";
-  return results.map((result, index) => [
+function formatSearchResults(results: WebDocument[]): { text: string; truncated: boolean } {
+  if (results.length === 0) return { text: "No web search results.", truncated: false };
+  const formatted = results.map((result, index) => [
     `${index + 1}. ${result.title}`,
     `   URL: ${result.url}`,
+    `   Canonical URL: ${result.canonicalUrl}`,
+    `   Provider: ${result.provider}`,
     ...(result.publishedAt ? [`   Published: ${result.publishedAt}`] : []),
     ...(result.author ? [`   Author: ${result.author}`] : []),
     `   Snippet (discovery only): ${result.snippets.length ? result.snippets.join(" […] ") : "No extractive snippet returned."}`,
   ].join("\n")).join("\n\n");
+  const maxCharacters = 20_000;
+  return formatted.length > maxCharacters
+    ? { text: `${formatted.slice(0, maxCharacters)}\n\n[Search output truncated at ${maxCharacters} characters.]`, truncated: true }
+    : { text: formatted, truncated: false };
 }
 
 async function searchTavily(input: SearchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderSearchResponse> {
@@ -247,23 +310,33 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
       ...(input.publishedBefore ? { end_date: input.publishedBefore.slice(0, 10) } : {}),
     }),
   }, dependencies, signal);
-  const documents = Array.isArray(payload.results)
-    ? payload.results.flatMap((value): WebDocument[] => {
-      if (!value || typeof value !== "object") return [];
-      const result = value as Record<string, unknown>;
-      const url = publicProviderUrl(result.url);
-      if (!url) return [];
-      const snippet = textValue(result.content);
-      return [{
-        title: textValue(result.title) ?? "Untitled result",
-        url,
-        snippets: snippet ? [snippet] : [],
-        publishedAt: textValue(result.published_date),
-        score: numericValue(result.score),
-      }];
-    })
-    : [];
-  return { provider: "tavily", resolvedMode, status: response.status, requestId: textValue(payload.request_id), documents, retryCount };
+  const rawResults = Array.isArray(payload.results) ? payload.results : [];
+  let truncated = rawResults.length > input.maxResults;
+  const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
+    if (!value || typeof value !== "object") return [];
+    const result = value as Record<string, unknown>;
+    const url = publicProviderUrl(result.url);
+    if (!url) {
+      truncated = true;
+      return [];
+    }
+    const title = clippedText(result.title, 300);
+    const snippet = clippedText(result.content, 1_000);
+    const publishedAt = clippedText(result.published_date, 64);
+    truncated ||= title.truncated || snippet.truncated || publishedAt.truncated;
+    return [{
+      title: title.value ?? "Untitled result",
+      url,
+      canonicalUrl: url,
+      provider: "tavily",
+      snippets: snippet.value ? [snippet.value] : [],
+      publishedAt: publishedAt.value,
+      score: numericValue(result.score),
+    }];
+  });
+  const requestId = safeRequestId(payload.request_id);
+  truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
+  return { provider: "tavily", resolvedMode, status: response.status, requestId, documents, retryCount, truncated };
 }
 
 async function searchExa(input: SearchInput, dependencies: WebResearchDependencies, signal?: AbortSignal): Promise<ProviderSearchResponse> {
@@ -284,25 +357,39 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
       ...(input.publishedBefore ? { endPublishedDate: input.publishedBefore } : {}),
     }),
   }, dependencies, signal);
-  const documents = Array.isArray(payload.results)
-    ? payload.results.flatMap((value): WebDocument[] => {
-      if (!value || typeof value !== "object") return [];
-      const result = value as Record<string, unknown>;
-      const url = publicProviderUrl(result.url);
-      if (!url) return [];
-      const snippets = Array.isArray(result.highlights)
-        ? result.highlights.flatMap((item) => textValue(item) ? [textValue(item)!] : [])
-        : [];
-      return [{
-        title: textValue(result.title) ?? "Untitled result",
-        url,
-        snippets,
-        publishedAt: textValue(result.publishedDate),
-        author: textValue(result.author),
-      }];
-    })
-    : [];
-  return { provider: "exa", resolvedMode, status: response.status, requestId: textValue(payload.requestId), documents, retryCount };
+  const rawResults = Array.isArray(payload.results) ? payload.results : [];
+  let truncated = rawResults.length > input.maxResults;
+  const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
+    if (!value || typeof value !== "object") return [];
+    const result = value as Record<string, unknown>;
+    const url = publicProviderUrl(result.url);
+    if (!url) {
+      truncated = true;
+      return [];
+    }
+    const title = clippedText(result.title, 300);
+    const publishedAt = clippedText(result.publishedDate, 64);
+    const author = clippedText(result.author, 200);
+    const rawHighlights = Array.isArray(result.highlights) ? result.highlights : [];
+    truncated ||= rawHighlights.length > 2 || title.truncated || publishedAt.truncated || author.truncated;
+    const snippets = rawHighlights.slice(0, 2).flatMap((item) => {
+      const snippet = clippedText(item, 1_000);
+      truncated ||= snippet.truncated;
+      return snippet.value ? [snippet.value] : [];
+    });
+    return [{
+      title: title.value ?? "Untitled result",
+      url,
+      canonicalUrl: url,
+      provider: "exa",
+      snippets,
+      publishedAt: publishedAt.value,
+      author: author.value,
+    }];
+  });
+  const requestId = safeRequestId(payload.requestId);
+  truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
+  return { provider: "exa", resolvedMode, status: response.status, requestId, documents, retryCount, truncated };
 }
 
 function initialProvider(input: SearchInput): ProviderName {
@@ -320,18 +407,41 @@ async function executeSearch(
   const attempts: SearchAttempt[] = [];
   let retryCount = 0;
   const run = async (provider: ProviderName): Promise<ProviderSearchResponse> => {
+    const attemptStartedAt = dependencies.now();
     onUpdate?.({ content: [{ type: "text", text: `Searching ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
         ? await searchTavily(input, dependencies, signal)
         : await searchExa(input, dependencies, signal);
       retryCount += response.retryCount;
-      attempts.push({ provider, outcome: response.documents.length ? "success" : "empty", status: response.status });
+      attempts.push({
+        provider,
+        outcome: response.documents.length ? "success" : "empty",
+        status: response.status,
+        durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+      });
       return response;
     } catch (error) {
       if (error instanceof WebProviderError) {
         retryCount += error.retryCount;
-        attempts.push({ provider, outcome: "error", status: error.status, errorKind: error.kind });
+        attempts.push({
+          provider,
+          outcome: "error",
+          status: error.status,
+          errorKind: error.kind,
+          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+        });
+        error.details = {
+          attempts: [...attempts],
+          retryCount,
+          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+          cacheState: "miss",
+          cacheAgeMs: 0,
+          returnedCharacters: 0,
+          storedCharacters: 0,
+          cancellationState: error.kind === "cancelled",
+          errorKind: error.kind,
+        };
       }
       throw error;
     }
@@ -365,6 +475,8 @@ interface FetchInput {
 interface FetchFailure {
   url: string;
   error: string;
+  kind: ErrorKind;
+  retryable: boolean;
 }
 
 interface ProviderFetchResponse {
@@ -375,6 +487,7 @@ interface ProviderFetchResponse {
   documents: Array<WebDocument & { content: string; providerTruncated: boolean }>;
   failures: FetchFailure[];
   retryCount: number;
+  truncated: boolean;
 }
 
 function isPrivateIpv4(host: string): boolean {
@@ -393,39 +506,80 @@ function isPrivateIpv4(host: string): boolean {
     || a >= 224;
 }
 
-function isPrivateIpv6(host: string): boolean {
+function ipv6Number(host: string): bigint | undefined {
   const value = host.replace(/^\[|\]$/g, "").toLowerCase();
-  if (value === "::" || value === "::1") return true;
-  if (/^(?:fc|fd|fe8|fe9|fea|feb)/.test(value)) return true;
-  if (value.startsWith("2001:db8:")) return true;
-  if (value.startsWith("::ffff:")) {
-    const mapped = value.slice("::ffff:".length);
-    return isIP(mapped) !== 4 || isPrivateIpv4(mapped);
-  }
-  return false;
+  const halves = value.split("::");
+  if (halves.length > 2) return undefined;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) return undefined;
+  const groups = [...left, ...Array.from({ length: missing }, () => "0"), ...right];
+  if (groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return undefined;
+  return groups.reduce((result, group) => (result << 16n) | BigInt(`0x${group}`), 0n);
 }
 
-function publicUrls(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 20) throw new Error("urls must contain between 1 and 20 public HTTP(S) URLs.");
-  const urls = value.map((item) => {
-    if (typeof item !== "string" || !item.trim()) throw new Error("urls must contain public HTTP(S) URLs.");
+function ipv6Prefix(address: bigint, prefix: string, bits: number): boolean {
+  const prefixValue = ipv6Number(prefix);
+  if (prefixValue === undefined) return true;
+  const shift = BigInt(128 - bits);
+  return (address >> shift) === (prefixValue >> shift);
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const address = ipv6Number(host);
+  if (address === undefined) return true;
+  const specialRanges: Array<[string, number]> = [
+    ["::", 96],
+    ["::ffff:0:0", 96],
+    ["64:ff9b::", 96],
+    ["64:ff9b:1::", 48],
+    ["100::", 64],
+    ["2001::", 32],
+    ["2001:2::", 48],
+    ["2001:10::", 28],
+    ["2001:20::", 28],
+    ["2001:db8::", 32],
+    ["2002::", 16],
+    ["3fff::", 20],
+    ["5f00::", 16],
+    ["fc00::", 7],
+    ["fe80::", 10],
+    ["ff00::", 8],
+  ];
+  return specialRanges.some(([prefix, bits]) => ipv6Prefix(address, prefix, bits));
+}
+
+function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[] {
+  const reject = (kind: "validation" | "safety-policy", message: string): never => {
+    throw new WebProviderError({ provider, kind, message });
+  };
+  if (!Array.isArray(value)) {
+    return reject("validation", "urls must contain between 1 and 20 public HTTP(S) URLs.");
+  }
+  if (value.length < 1 || value.length > 20) {
+    return reject("validation", "urls must contain between 1 and 20 public HTTP(S) URLs.");
+  }
+  const urls = value.map((item: unknown): string => {
+    if (typeof item !== "string" || !item.trim()) return reject("validation", "urls must contain public HTTP(S) URLs.");
     let parsed: URL;
     try {
       parsed = new URL(item.trim());
     } catch {
-      throw new Error("urls must contain public HTTP(S) URLs.");
+      return reject("validation", "urls must contain public HTTP(S) URLs.");
     }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Each URL must be a public HTTP(S) URL.");
-    if (parsed.username || parsed.password) throw new Error("URL credentials are not allowed.");
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") reject("safety-policy", "Each URL must be a public HTTP(S) URL.");
+    if (parsed.username || parsed.password) reject("safety-policy", "URL credentials are not allowed.");
     const hostname = parsed.hostname.toLowerCase();
     if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".home.arpa")) {
-      throw new Error("Each URL must use a public hostname.");
+      reject("safety-policy", "Each URL must use a public hostname.");
     }
     const ipVersion = isIP(hostname.replace(/^\[|\]$/g, ""));
     if ((ipVersion === 4 && isPrivateIpv4(hostname)) || (ipVersion === 6 && isPrivateIpv6(hostname))) {
-      throw new Error("Each URL must use a public hostname.");
+      reject("safety-policy", "Each URL must use a public hostname.");
     }
-    if (ipVersion === 0 && !hostname.includes(".")) throw new Error("Each URL must use a public hostname.");
+    if (ipVersion === 0 && !hostname.includes(".")) reject("safety-policy", "Each URL must use a public hostname.");
+    parsed.hash = "";
     return parsed.toString();
   });
   return [...new Set(urls)];
@@ -452,33 +606,46 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
       ...(input.focus ? { query: input.focus } : {}),
     }),
   }, dependencies, signal);
-  const documents = Array.isArray(payload.results)
-    ? payload.results.flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
-      if (!value || typeof value !== "object") return [];
-      const result = value as Record<string, unknown>;
-      const url = publicProviderUrl(result.url);
-      const rawContent = textValue(result.raw_content);
-      if (!url || !rawContent) return [];
-      const content = rawContent.slice(0, input.maxCharactersPerResult);
-      return [{
-        title: textValue(result.title) ?? url,
-        url,
-        snippets: [],
-        content,
-        providerTruncated: rawContent.length > content.length,
-      }];
-    })
-    : [];
-  const failures = Array.isArray(payload.failed_results)
-    ? payload.failed_results.flatMap((value): FetchFailure[] => {
-      if (!value || typeof value !== "object") return [];
-      const result = value as Record<string, unknown>;
-      const url = publicProviderUrl(result.url);
-      if (!url) return [];
-      return [{ url, error: safeFailureCode(result.error, "extract_failed") }];
-    })
-    : [];
-  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId: textValue(payload.request_id), documents, failures, retryCount };
+  const allowedUrls = new Set(input.urls.map(redactUrlForDisplay));
+  const rawResults = Array.isArray(payload.results) ? payload.results : [];
+  let truncated = rawResults.length > input.urls.length;
+  const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
+    if (!value || typeof value !== "object") return [];
+    const result = value as Record<string, unknown>;
+    const url = publicProviderUrl(result.url);
+    const rawContent = textValue(result.raw_content);
+    if (!url || !allowedUrls.has(url) || !rawContent) {
+      truncated = true;
+      return [];
+    }
+    const content = rawContent.slice(0, input.maxCharactersPerResult);
+    const title = clippedText(result.title, 500);
+    truncated ||= title.truncated;
+    return [{
+      title: title.value ?? url,
+      url,
+      canonicalUrl: url,
+      provider: "tavily",
+      snippets: [],
+      content,
+      providerTruncated: rawContent.length > content.length,
+    }];
+  });
+  const rawFailures = Array.isArray(payload.failed_results) ? payload.failed_results : [];
+  const failures = rawFailures.slice(0, input.urls.length).flatMap((value): FetchFailure[] => {
+    if (!value || typeof value !== "object") return [];
+    const result = value as Record<string, unknown>;
+    const url = publicProviderUrl(result.url);
+    if (!url || !allowedUrls.has(url)) {
+      truncated = true;
+      return [];
+    }
+    return [{ url, ...classifyFetchFailure(result.error, "extract_failed") }];
+  });
+  truncated ||= rawFailures.length > input.urls.length;
+  const requestId = safeRequestId(payload.request_id);
+  truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
+  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents, failures, retryCount, truncated };
 }
 
 function exaStatusFailure(value: unknown): FetchFailure | undefined {
@@ -488,9 +655,10 @@ function exaStatusFailure(value: unknown): FetchFailure | undefined {
   const url = publicProviderUrl(status.id) ?? publicProviderUrl(status.url);
   if (!url) return undefined;
   const error = status.error && typeof status.error === "object" ? status.error as Record<string, unknown> : {};
+  const rawError = error.tag ?? error.error ?? status.status;
   return {
     url,
-    error: safeFailureCode(error.tag, safeFailureCode(error.error, safeFailureCode(status.status, "contents_failed"))),
+    ...classifyFetchFailure(rawError, "contents_failed"),
   };
 }
 
@@ -506,35 +674,54 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
       ...(input.focus ? { highlights: { query: input.focus, maxCharacters: input.maxCharactersPerResult } } : {}),
     }),
   }, dependencies, signal);
-  const documents = Array.isArray(payload.results)
-    ? payload.results.flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
-      if (!value || typeof value !== "object") return [];
-      const result = value as Record<string, unknown>;
-      const url = publicProviderUrl(result.url);
-      const rawContent = textValue(result.text);
-      if (!url || !rawContent) return [];
-      const content = rawContent.slice(0, input.maxCharactersPerResult);
-      const snippets = Array.isArray(result.highlights)
-        ? result.highlights.flatMap((item) => textValue(item) ? [textValue(item)!] : [])
-        : [];
-      return [{
-        title: textValue(result.title) ?? url,
-        url,
-        snippets,
-        content,
-        providerTruncated: rawContent.length > content.length,
-        publishedAt: textValue(result.publishedDate),
-        author: textValue(result.author),
-      }];
-    })
-    : [];
-  const failures = Array.isArray(payload.statuses)
-    ? payload.statuses.flatMap((value) => {
-      const failure = exaStatusFailure(value);
-      return failure ? [failure] : [];
-    })
-    : [];
-  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId: textValue(payload.requestId), documents, failures, retryCount };
+  const allowedUrls = new Set(input.urls.map(redactUrlForDisplay));
+  const rawResults = Array.isArray(payload.results) ? payload.results : [];
+  let truncated = rawResults.length > input.urls.length;
+  const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
+    if (!value || typeof value !== "object") return [];
+    const result = value as Record<string, unknown>;
+    const url = publicProviderUrl(result.url);
+    const rawContent = textValue(result.text);
+    if (!url || !allowedUrls.has(url) || !rawContent) {
+      truncated = true;
+      return [];
+    }
+    const content = rawContent.slice(0, input.maxCharactersPerResult);
+    const title = clippedText(result.title, 500);
+    const publishedAt = clippedText(result.publishedDate, 64);
+    const author = clippedText(result.author, 200);
+    const rawHighlights = Array.isArray(result.highlights) ? result.highlights : [];
+    truncated ||= rawHighlights.length > 2 || title.truncated || publishedAt.truncated || author.truncated;
+    const snippets = rawHighlights.slice(0, 2).flatMap((item) => {
+      const snippet = clippedText(item, 1_000);
+      truncated ||= snippet.truncated;
+      return snippet.value ? [snippet.value] : [];
+    });
+    return [{
+      title: title.value ?? url,
+      url,
+      canonicalUrl: url,
+      provider: "exa",
+      snippets,
+      content,
+      providerTruncated: rawContent.length > content.length,
+      publishedAt: publishedAt.value,
+      author: author.value,
+    }];
+  });
+  const rawStatuses = Array.isArray(payload.statuses) ? payload.statuses : [];
+  const failures = rawStatuses.slice(0, input.urls.length).flatMap((value) => {
+    const failure = exaStatusFailure(value);
+    if (!failure || !allowedUrls.has(failure.url)) {
+      if (failure) truncated = true;
+      return [];
+    }
+    return [failure];
+  });
+  truncated ||= rawStatuses.length > input.urls.length;
+  const requestId = safeRequestId(payload.requestId);
+  truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
+  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents, failures, retryCount, truncated };
 }
 
 async function executeFetch(
@@ -544,13 +731,14 @@ async function executeFetch(
   onUpdate: ToolUpdateCallback,
 ): Promise<{
   response: ProviderFetchResponse;
-  attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }>;
+  attempts: FetchAttempt[];
   retryCount: number;
 }> {
   const selected: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
-  const attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }> = [];
+  const attempts: FetchAttempt[] = [];
   let retryCount = 0;
   const run = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
+    const attemptStartedAt = dependencies.now();
     onUpdate?.({ content: [{ type: "text", text: `Fetching with ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
@@ -560,12 +748,38 @@ async function executeFetch(
       const outcome = response.documents.length && response.failures.length
         ? "partial"
         : response.documents.length ? "success" : response.failures.length ? "error" : "empty";
-      attempts.push({ provider, outcome, status: response.status });
+      const errorKind = response.documents.length === 0 && response.failures.length
+        ? response.failures[0]?.kind
+        : undefined;
+      attempts.push({
+        provider,
+        outcome,
+        status: response.status,
+        ...(errorKind ? { errorKind } : {}),
+        durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+      });
       return response;
     } catch (error) {
       if (error instanceof WebProviderError) {
         retryCount += error.retryCount;
-        attempts.push({ provider, outcome: "error", status: error.status, errorKind: error.kind });
+        attempts.push({
+          provider,
+          outcome: "error",
+          status: error.status,
+          errorKind: error.kind,
+          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+        });
+        error.details = {
+          attempts: [...attempts],
+          retryCount,
+          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+          cacheState: "miss",
+          cacheAgeMs: 0,
+          returnedCharacters: 0,
+          storedCharacters: 0,
+          cancellationState: error.kind === "cancelled",
+          errorKind: error.kind,
+        };
       }
       throw error;
     }
@@ -586,6 +800,7 @@ async function executeFetch(
   const mayFallback = input.provider === "auto"
     && selected === "tavily"
     && first.documents.length === 0
+    && (first.failures.length === 0 || first.failures.every((failure) => failure.retryable))
     && Boolean(dependencies.env.EXA_API_KEY);
   if (mayFallback) return { response: await run("exa"), attempts, retryCount };
   return { response: first, attempts, retryCount };
@@ -595,11 +810,12 @@ async function prepareFetchResults(
   response: ProviderFetchResponse,
   artifacts: ArtifactStore,
   maxInlineChars: number,
+  artifactContext: { focus?: string; maxCharactersPerResult: number },
   signal?: AbortSignal,
-): Promise<{ text: string; truncated: boolean; artifacts: ArtifactRecord[] }> {
+): Promise<{ text: string; truncated: boolean; artifacts: Array<Omit<ArtifactRecord, "path">> }> {
   ensureNotCancelled(signal, response.provider);
-  const records: ArtifactRecord[] = [];
-  let truncated = response.documents.some((document) => document.providerTruncated);
+  const records: Array<Omit<ArtifactRecord, "path">> = [];
+  let truncated = response.truncated || response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
   for (let index = 0; index < response.documents.length; index++) {
     ensureNotCancelled(signal, response.provider);
@@ -614,11 +830,13 @@ async function prepareFetchResults(
         title: document.title,
         content: document.content,
         provider: response.provider,
+        context: artifactContext,
       });
       ensureNotCancelled(signal, response.provider);
-      records.push(artifact);
+      const { path: _path, ...handle } = artifact;
+      records.push(handle);
       truncated = true;
-      content = `${content.slice(0, maxInlineChars)}\n\n[Content truncated. Full owner-only artifact: ${artifact.id} at ${artifact.path}]${providerCapMarker}`;
+      content = `${content.slice(0, maxInlineChars)}\n\n[Content truncated. Retrieve owner-only artifact ${artifact.id} with web_fetch artifactId.]${providerCapMarker}`;
     } else {
       content = `${content}${providerCapMarker}`;
     }
@@ -633,7 +851,7 @@ async function prepareFetchResults(
     ].join("\n"));
   }
   const failed = response.failures.length
-    ? ["Failures:", ...response.failures.map((failure) => `- ${failure.url}: ${failure.error}`)].join("\n")
+    ? ["Failures:", ...response.failures.map((failure) => `- ${failure.url}: [${failure.kind}] ${failure.error}`)].join("\n")
     : "";
   return {
     text: [...successful, failed].filter(Boolean).join("\n\n") || "No page content was extracted.",
@@ -698,11 +916,16 @@ export default function webResearch(
         publishedBefore: publishedDate(raw.publishedBefore, "publishedBefore"),
       };
       const startedAt = dependencies.now();
+      const selectedProvider = initialProvider(input);
+      ensureNotCancelled(signal, selectedProvider);
       const cacheKey = JSON.stringify(input);
-      const cached = searchCache.get(cacheKey);
-      if (cached) {
+      const cachedEntry = searchCache.getWithAge(cacheKey);
+      if (cachedEntry) {
+        const cached = cachedEntry.value;
+        ensureNotCancelled(signal, selectedProvider);
+        const formatted = formatSearchResults(cached.documents);
         return {
-          content: [{ type: "text", text: formatSearchResults(cached.documents) }],
+          content: [{ type: "text", text: formatted.text }],
           details: {
             provider: cached.provider,
             resolvedMode: cached.resolvedMode,
@@ -711,15 +934,22 @@ export default function webResearch(
             requestId: cached.requestId,
             durationMs: Math.max(0, dependencies.now() - startedAt),
             cacheHit: true,
-            truncated: false,
+            cacheState: "hit",
+            cacheAgeMs: cachedEntry.ageMs,
+            returnedCharacters: formatted.text.length,
+            storedCharacters: 0,
+            cancellationState: false,
+            errorKind: null,
+            truncated: cached.truncated || formatted.truncated,
             retryCount: 0,
           },
         };
       }
       const { response, attempts, retryCount } = await executeSearch(input, dependencies, signal, onUpdate);
       searchCache.set(cacheKey, response);
+      const formatted = formatSearchResults(response.documents);
       return {
-        content: [{ type: "text", text: formatSearchResults(response.documents) }],
+        content: [{ type: "text", text: formatted.text }],
         details: {
           provider: response.provider,
           resolvedMode: response.resolvedMode,
@@ -728,7 +958,13 @@ export default function webResearch(
           requestId: response.requestId,
           durationMs: Math.max(0, dependencies.now() - startedAt),
           cacheHit: false,
-          truncated: false,
+          cacheState: "miss",
+          cacheAgeMs: 0,
+          returnedCharacters: formatted.text.length,
+          storedCharacters: 0,
+          cancellationState: false,
+          errorKind: null,
+          truncated: response.truncated || formatted.truncated,
           retryCount,
         },
       };
@@ -746,10 +982,13 @@ export default function webResearch(
     ],
     executionMode: "parallel",
     parameters: Schema.Object({
-      urls: Schema.Array(Schema.String(), { minItems: 1, maxItems: 20, description: "One to twenty public HTTP(S) URLs." }),
+      urls: Schema.Optional(Schema.Array(Schema.String(), { minItems: 1, maxItems: 20, description: "One to twenty public HTTP(S) URLs." })),
+      artifactId: Schema.Optional(Schema.String({ description: "Opaque artifact ID returned by an earlier web_fetch call." })),
+      artifactOffset: Schema.Optional(Schema.Number({ minimum: 0, description: "Character offset for artifact retrieval; defaults to 0." })),
+      artifactMaxCharacters: Schema.Optional(Schema.Number({ minimum: 1, maximum: 12_000, description: "Maximum artifact characters to return; defaults to 12000." })),
       provider: Schema.Optional(Schema.String({ enum: ["auto", "tavily", "exa"], description: "Extraction provider override; auto defaults to Tavily." })),
       focus: Schema.Optional(Schema.String({ maxLength: 1_000, description: "Optional question/topic for focused extraction." })),
-      maxCharactersPerResult: Schema.Optional(Schema.Number({ minimum: 1_000, maximum: 50_000, description: "Provider content bound per URL; defaults to 12000." })),
+      maxCharactersPerResult: Schema.Optional(Schema.Number({ minimum: 1_000, maximum: 50_000, description: "Provider content bound per URL; defaults to 50000 while inline output remains capped at 12000." })),
       noCache: Schema.Optional(Schema.Boolean({ description: "Bypass the in-memory fetch cache for this call." })),
     }) as any,
     async execute(
@@ -759,23 +998,55 @@ export default function webResearch(
       onUpdate: ToolUpdateCallback,
     ) {
       const raw = params;
+      if (raw.artifactId !== undefined) {
+        if (raw.urls !== undefined) throw new WebProviderError({ provider: "tavily", kind: "validation", message: "Use either urls or artifactId, not both." });
+        ensureNotCancelled(signal, "tavily");
+        if (typeof raw.artifactId !== "string") throw new WebProviderError({ provider: "tavily", kind: "validation", message: "artifactId must be a string." });
+        const offset = boundedInteger(raw.artifactOffset, 0, 0, Number.MAX_SAFE_INTEGER, "artifactOffset");
+        const maxCharacters = boundedInteger(raw.artifactMaxCharacters, 12_000, 1, 12_000, "artifactMaxCharacters");
+        const page = await artifactStore.read(raw.artifactId, offset, maxCharacters);
+        ensureNotCancelled(signal, "tavily");
+        return {
+          content: [{ type: "text", text: [`Artifact: ${page.id}`, `URL: ${page.url}`, `Provider: ${page.provider}`, "", page.content].join("\n") }],
+          details: {
+            artifactId: page.id,
+            contextKey: page.contextKey,
+            offset: page.offset,
+            nextOffset: page.nextOffset,
+            hasMore: page.hasMore,
+            returnedCharacters: page.content.length,
+            storedCharacters: 0,
+            cacheState: "artifact",
+            cacheAgeMs: 0,
+            cancellationState: false,
+            errorKind: null,
+          },
+        };
+      }
+      const provider = enumValue(raw.provider, "auto", ["auto", "tavily", "exa"] as const, "provider");
       const input: FetchInput = {
-        urls: publicUrls(raw.urls),
-        provider: enumValue(raw.provider, "auto", ["auto", "tavily", "exa"] as const, "provider"),
+        urls: publicUrls(raw.urls, provider === "exa" ? "exa" : "tavily"),
+        provider,
         focus: optionalFocus(raw.focus),
-        maxCharactersPerResult: boundedInteger(raw.maxCharactersPerResult, 12_000, 1_000, 50_000, "maxCharactersPerResult"),
+        maxCharactersPerResult: boundedInteger(raw.maxCharactersPerResult, 50_000, 1_000, 50_000, "maxCharactersPerResult"),
         noCache: raw.noCache === true,
       };
       const startedAt = dependencies.now();
+      const selectedProvider: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
+      ensureNotCancelled(signal, selectedProvider);
       const cacheKey = JSON.stringify({
         urls: input.urls,
         provider: input.provider,
         focus: input.focus,
         maxCharactersPerResult: input.maxCharactersPerResult,
       });
-      let response = input.noCache ? undefined : fetchCache.get(cacheKey);
-      const cacheHit = Boolean(response);
-      let attempts: Array<{ provider: ProviderName; outcome: string; status?: number; errorKind?: ErrorKind }> = [];
+      const cacheEntry = input.noCache ? undefined : fetchCache.getWithAge(cacheKey);
+      let response = cacheEntry?.value;
+      const cacheHit = Boolean(cacheEntry);
+      const cacheState = input.noCache ? "bypass" : cacheHit ? "hit" : "miss";
+      const cacheAgeMs = cacheEntry?.ageMs ?? 0;
+      if (cacheHit) ensureNotCancelled(signal, selectedProvider);
+      let attempts: FetchAttempt[] = [];
       let retryCount = 0;
       if (!response) {
         const executed = await executeFetch(input, dependencies, signal, onUpdate);
@@ -784,7 +1055,10 @@ export default function webResearch(
         retryCount = executed.retryCount;
         if (!input.noCache) fetchCache.set(cacheKey, response);
       }
-      const prepared = await prepareFetchResults(response, artifactStore, dependencies.maxInlineChars, signal);
+      const prepared = await prepareFetchResults(response, artifactStore, dependencies.maxInlineChars, {
+        ...(input.focus ? { focus: input.focus } : {}),
+        maxCharactersPerResult: input.maxCharactersPerResult,
+      }, signal);
       return {
         content: [{ type: "text", text: prepared.text }],
         details: {
@@ -793,9 +1067,16 @@ export default function webResearch(
           attempts,
           successCount: response.documents.length,
           failureCount: response.failures.length,
+          failureKinds: [...new Set(response.failures.map((failure) => failure.kind))],
           requestId: response.requestId,
           durationMs: Math.max(0, dependencies.now() - startedAt),
           cacheHit,
+          cacheState,
+          cacheAgeMs,
+          returnedCharacters: prepared.text.length,
+          storedCharacters: prepared.artifacts.reduce((total, artifact) => total + artifact.chars, 0),
+          cancellationState: false,
+          errorKind: null,
           truncated: prepared.truncated,
           retryCount,
           artifacts: prepared.artifacts,

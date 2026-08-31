@@ -14,7 +14,7 @@ Both tools accept `provider: "auto" | "tavily" | "exa"`. Explicit overrides win.
 - `TAVILY_API_KEY` is required for ordinary `auto`; `EXA_API_KEY` is required only when Exa is selected or used as an allowed fallback.
 - Retryable 429/timeout/network/transient-5xx failures retry twice before policy allows fallback. Auth, quota/payment, permission, validation, cancellation, and safety failures never switch providers.
 - Search and fetch caches are bounded and live only for the loaded extension instance.
-- Oversized content is atomically offloaded to owner-only, TTL-pruned artifacts under `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/` and returned with an opaque ID and exact path.
+- Fetch content is capped at 50,000 characters per source by default and 12,000 characters inline. Oversized content is atomically offloaded to owner-only, TTL-pruned artifacts under `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/`; `web_fetch` pages it by opaque `artifactId` without exposing filesystem paths.
 - Search snippets are candidate-discovery material, not confirmation; fetch important sources before making material claims.
 
 ## Delivery boundary

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -56,4 +56,74 @@ test("ArtifactStore refuses an ID collision without overwriting the existing art
   const stored = JSON.parse(await readFile(first.path, "utf8"));
   assert.equal(stored.content, "original");
   assert.equal(stored.url, "https://example.test/one");
+});
+
+test("ArtifactStore serializes concurrent entry-cap reservations across store instances", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-concurrent-entries-"));
+  const options = {
+    root,
+    now: () => 1_725_000_000_000,
+    ttlMs: 60_000,
+    maxEntries: 1,
+    maxBytes: 10_000,
+  };
+  const first = new ArtifactStore({ ...options, randomId: () => "concurrent-one" });
+  const second = new ArtifactStore({ ...options, randomId: () => "concurrent-two" });
+
+  await Promise.all([
+    first.save({ url: "https://example.test/one", title: "One", content: "one", provider: "tavily" }),
+    second.save({ url: "https://example.test/two", title: "Two", content: "two", provider: "exa" }),
+  ]);
+
+  assert.equal((await readdir(root)).filter((name) => name.endsWith(".json")).length, 1);
+});
+
+test("ArtifactStore serializes concurrent byte-cap reservations across store instances", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-concurrent-bytes-"));
+  const maxBytes = 2_000;
+  const options = {
+    root,
+    now: () => 1_725_000_000_000,
+    ttlMs: 60_000,
+    maxEntries: 10,
+    maxBytes,
+  };
+  const first = new ArtifactStore({ ...options, randomId: () => "bytes-one" });
+  const second = new ArtifactStore({ ...options, randomId: () => "bytes-two" });
+  await Promise.all([
+    first.save({ url: "https://example.test/one", title: "One", content: "a".repeat(1_200), provider: "tavily" }),
+    second.save({ url: "https://example.test/two", title: "Two", content: "b".repeat(1_200), provider: "exa" }),
+  ]);
+
+  const files = (await readdir(root)).filter((name) => name.endsWith(".json"));
+  const totalBytes = (await Promise.all(files.map(async (name) => (await stat(join(root, name))).size)))
+    .reduce((sum, size) => sum + size, 0);
+  assert.ok(totalBytes <= maxBytes, `${totalBytes} exceeds ${maxBytes}`);
+});
+
+test("ArtifactStore retrieves bounded content by opaque ID and rejects unsafe IDs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-read-"));
+  const store = new ArtifactStore({
+    root,
+    now: () => 1_725_000_000_000,
+    randomId: () => "readable-artifact",
+    ttlMs: 60_000,
+    maxEntries: 10,
+    maxBytes: 10_000,
+  });
+  await store.save({
+    url: "https://example.test/page",
+    title: "Page",
+    content: "0123456789",
+    provider: "tavily",
+    context: { focus: "claim", maxCharactersPerResult: 50_000 },
+  });
+
+  const page = await store.read("readable-artifact", 3, 4);
+  assert.equal(page.content, "3456");
+  assert.equal(page.offset, 3);
+  assert.equal(page.nextOffset, 7);
+  assert.equal(page.hasMore, true);
+  assert.match(page.contextKey, /^[a-f0-9]{64}$/);
+  await assert.rejects(store.read("../escape", 0, 10), /unsafe artifact ID/i);
 });
