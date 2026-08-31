@@ -193,6 +193,7 @@ Accepted:
 - Batch commit checks cancellation before publication and immediately after the unlink while still holding the capacity lock; cancellation restores the marker before rollback can release the lock.
 - A timeout owned by the shared operation deadline is terminal even if timer granularity fires slightly before the monotonic deadline; shorter per-attempt timeouts remain retryable.
 - The frozen evaluation corpus enumerates every E-1 benchmark dimension and E-2 quality metric for both direct-native and Ciung comparison modes; package-contract coverage prevents silent omissions.
+- Similar-page evaluation uses the supported provider-neutral sequence—fetch the seed, derive concepts, run observable Exa semantic discovery, then fetch candidates—rather than claiming an unimplemented dedicated route.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
 Rejected as a current PR blocker:

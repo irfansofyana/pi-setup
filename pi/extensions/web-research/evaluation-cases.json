@@ -66,7 +66,7 @@
       "id": "similar-page-discovery",
       "goal": "Find pages materially similar to a known public technical page.",
       "fixture": "One seed URL, one known similar page, and one topically adjacent but structurally unrelated page.",
-      "mustShow": ["observable Exa similar-page route", "seed identity", "selected source fetch", "adjacent false positive rejected"]
+      "mustShow": ["seed page fetched", "observable Exa semantic route using seed concepts", "selected candidate fetched", "adjacent false positive rejected"]
     },
     {
       "id": "news-freshness",
