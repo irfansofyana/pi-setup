@@ -128,6 +128,7 @@ interface SearchAttempt {
   outcome: "success" | "empty" | "error";
   status?: number;
   errorKind?: ErrorKind;
+  requestId?: string;
   durationMs: number;
 }
 
@@ -136,6 +137,7 @@ type FetchAttempt = {
   outcome: string;
   status?: number;
   errorKind?: ErrorKind;
+  requestId?: string;
   durationMs: number;
 };
 
@@ -296,11 +298,24 @@ function sensitiveUrlValues(urls: string[]): string[] {
   const values = new Set<string>();
   for (const url of urls) {
     const parsed = new URL(url);
-    for (const [key, value] of parsed.searchParams) {
-      if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) && value.length >= 3) {
-        values.add(value);
-        values.add(encodeURIComponent(value));
+    const rawQuery = url.split("#", 1)[0]?.split("?", 2)[1] ?? "";
+    for (const pair of rawQuery.split("&")) {
+      const separator = pair.indexOf("=");
+      const rawKey = separator >= 0 ? pair.slice(0, separator) : pair;
+      const rawValue = separator >= 0 ? pair.slice(separator + 1) : "";
+      let key: string;
+      let value: string;
+      try {
+        key = decodeURIComponent(rawKey.replace(/\+/g, " "));
+        value = decodeURIComponent(rawValue.replace(/\+/g, " "));
+      } catch {
+        continue;
       }
+      if (!SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) || value.length < 3) continue;
+      values.add(rawValue);
+      values.add(value);
+      values.add(encodeURIComponent(value));
+      values.add(encodeURIComponent(value).replace(/%20/g, "+"));
     }
   }
   return [...values].sort((a, b) => b.length - a.length);
@@ -308,7 +323,10 @@ function sensitiveUrlValues(urls: string[]): string[] {
 
 function redactValues(text: string | undefined, values: string[]): string | undefined {
   if (text === undefined) return undefined;
-  return values.reduce((result, value) => result.split(value).join("[REDACTED]"), text);
+  return values.reduce((result, value) => {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return result.replace(new RegExp(escaped, "gi"), "[REDACTED]");
+  }, text);
 }
 
 function redactFetchResponse(response: ProviderFetchResponse, values: string[]): ProviderFetchResponse {
@@ -327,6 +345,30 @@ function redactFetchResponse(response: ProviderFetchResponse, values: string[]):
     failures: response.failures.map((failure) => ({
       ...failure,
       error: redactValues(failure.error, values) ?? "provider_failure",
+    })),
+  };
+}
+
+function sensitiveValuesFromQuery(query: string): string[] {
+  const urls = query.match(/https?:\/\/[^\s<>"']+/gi) ?? [];
+  const validUrls = urls.flatMap((value) => {
+    const candidate = value.replace(/[),.;!?]+$/, "");
+    try { return [new URL(candidate).toString()]; } catch { return []; }
+  });
+  return sensitiveUrlValues(validUrls);
+}
+
+function redactSearchResponse(response: ProviderSearchResponse, values: string[]): ProviderSearchResponse {
+  if (values.length === 0) return response;
+  return {
+    ...response,
+    requestId: redactValues(response.requestId, values),
+    documents: response.documents.map((document) => ({
+      ...document,
+      title: redactValues(document.title, values) ?? "Untitled result",
+      snippets: document.snippets.map((snippet) => redactValues(snippet, values) ?? ""),
+      publishedAt: redactValues(document.publishedAt, values),
+      author: redactValues(document.author, values),
     })),
   };
 }
@@ -509,6 +551,7 @@ async function executeSearch(
           outcome: "error",
           status: error.status,
           errorKind: error.kind,
+          ...(error.requestId ? { requestId: error.requestId } : {}),
           durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
         });
         error.details = {
@@ -521,6 +564,7 @@ async function executeSearch(
           storedCharacters: 0,
           cancellationState: error.kind === "cancelled",
           errorKind: error.kind,
+          ...(error.requestId ? { requestId: error.requestId } : {}),
         };
       }
       throw error;
@@ -652,6 +696,7 @@ function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[]
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") reject("safety-policy", "Each URL must be a public HTTP(S) URL.");
     if (parsed.username || parsed.password) reject("safety-policy", "URL credentials are not allowed.");
     const hostname = parsed.hostname.toLowerCase();
+    if (hostname.endsWith(".")) reject("safety-policy", "Each URL must use a public hostname.");
     if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".home.arpa")) {
       reject("safety-policy", "Each URL must use a public hostname.");
     }
@@ -726,7 +771,8 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   truncated ||= rawFailures.length > input.urls.length;
   const requestId = safeRequestId(payload.request_id);
   truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
-  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents, failures, retryCount, truncated };
+  const reconciledFailures = reconcileFetchFailures(input.urls, documents, failures);
+  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents, failures: reconciledFailures, retryCount, truncated };
 }
 
 function exaStatusFailure(value: unknown): FetchFailure | undefined {
@@ -741,6 +787,25 @@ function exaStatusFailure(value: unknown): FetchFailure | undefined {
     url,
     ...classifyFetchFailure(rawError, "contents_failed"),
   };
+}
+
+function reconcileFetchFailures(
+  requestedUrls: string[],
+  documents: Array<WebDocument & { content: string; providerTruncated: boolean }>,
+  failures: FetchFailure[],
+): FetchFailure[] {
+  const seen = new Set([...documents.map((document) => document.url), ...failures.map((failure) => failure.url)]);
+  return [
+    ...failures,
+    ...requestedUrls.map(redactUrlForDisplay)
+      .filter((url) => !seen.has(url))
+      .map((url): FetchFailure => ({
+        url,
+        error: "missing_provider_outcome",
+        kind: "upstream",
+        retryable: true,
+      })),
+  ];
 }
 
 async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
@@ -802,7 +867,8 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
   truncated ||= rawStatuses.length > input.urls.length;
   const requestId = safeRequestId(payload.requestId);
   truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
-  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents, failures, retryCount, truncated };
+  const reconciledFailures = reconcileFetchFailures(input.urls, documents, failures);
+  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents, failures: reconciledFailures, retryCount, truncated };
 }
 
 async function executeFetch(
@@ -851,6 +917,7 @@ async function executeFetch(
           outcome: "error",
           status: error.status,
           errorKind: error.kind,
+          ...(error.requestId ? { requestId: error.requestId } : {}),
           durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
         });
         error.details = {
@@ -863,6 +930,7 @@ async function executeFetch(
           storedCharacters: 0,
           cancellationState: error.kind === "cancelled",
           errorKind: error.kind,
+          ...(error.requestId ? { requestId: error.requestId } : {}),
         };
       }
       throw error;
@@ -901,7 +969,8 @@ async function prepareFetchResults(
   const records: Array<Omit<ArtifactRecord, "path">> = [];
   let truncated = response.truncated || response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
-  for (let index = 0; index < response.documents.length; index++) {
+  try {
+    for (let index = 0; index < response.documents.length; index++) {
     ensureNotCancelled(signal, response.provider);
     const document = response.documents[index]!;
     let content = document.content;
@@ -929,7 +998,7 @@ async function prepareFetchResults(
     } else {
       content = `${content}${providerCapMarker}`;
     }
-    successful.push([
+      successful.push([
       `${index + 1}. ${document.title}`,
       `   URL: ${document.url}`,
       ...(document.publishedAt ? [`   Published: ${document.publishedAt}`] : []),
@@ -937,7 +1006,11 @@ async function prepareFetchResults(
       ...(document.snippets.length ? [`   Evidence: ${document.snippets.join(" […] ")}`] : []),
       "",
       content,
-    ].join("\n"));
+      ].join("\n"));
+    }
+  } catch (error) {
+    await Promise.allSettled(records.map((record) => artifacts.discard(record.id)));
+    throw error;
   }
   const failed = response.failures.length
     ? ["Failures:", ...response.failures.map((failure) => `- ${failure.url}: [${failure.kind}] ${failure.error}`)].join("\n")
@@ -1034,7 +1107,9 @@ export default function webResearch(
           },
         };
       }
-      const { response, attempts, retryCount } = await executeSearch(input, dependencies, signal, onUpdate);
+      const executed = await executeSearch(input, dependencies, signal, onUpdate);
+      const response = redactSearchResponse(executed.response, sensitiveValuesFromQuery(input.query));
+      const { attempts, retryCount } = executed;
       searchCache.set(cacheKey, response);
       const formatted = formatSearchResults(response.documents);
       return {

@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 466 passed, 0 failed.
-- Focused web-research suite: 40 passed, 0 failed.
+- Full repository suite: 471 passed, 0 failed.
+- Focused web-research suite: 45 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -76,7 +76,17 @@ The second independent review inspected `d8e90ac045b75e3b5432b10c7298854b534b051
 - Safe structured validation/artifact errors without local-path disclosure.
 - Branch-wide trailing-whitespace cleanup.
 
-Verdict: both review rounds' accepted fixes are locally verified; one final independent review against the exact current commit remains mandatory before delivery.
+The third independent review inspected `2741db9910b032870dbbf98622fce2ffb8c7f1c6`. Every finding reproduced and was accepted. Fixes added:
+
+- Rejection of trailing-dot local/reserved hostnames.
+- Raw, decoded, percent-encoded, and form-encoded sensitive-value redaction for fetch and search-query URL echoes.
+- First-abort-cause preservation when transport rejection is delayed.
+- A deadline and backoff for ownerless artifact-lock publication crashes.
+- Transactional rollback of artifacts created earlier in a failed or cancelled multi-document preparation.
+- Explicit missing-provider outcomes for every unmatched Tavily or Exa batch URL.
+- Bounded allowlisted HTTP request-ID extraction and terminal-error telemetry.
+
+Verdict: all three review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 

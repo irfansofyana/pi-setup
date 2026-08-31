@@ -76,15 +76,24 @@ function retryAfterMs(response: Response): number | undefined {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
+function responseRequestId(response: Response): string | undefined {
+  for (const header of ["x-request-id", "request-id", "x-correlation-id"]) {
+    const value = response.headers.get(header)?.trim();
+    if (value && /^[A-Za-z0-9._:-]{1,200}$/.test(value)) return value;
+  }
+  return undefined;
+}
+
 function responseError(provider: ProviderName, response: Response, retryCount: number): WebProviderError {
   const status = response.status;
   const label = providerLabel(provider);
-  if (status === 401) return new WebProviderError({ provider, kind: "authentication", message: `${label} authentication failed.`, status, retryCount });
-  if (status === 402) return new WebProviderError({ provider, kind: "payment_or_quota", message: `${label} payment or quota check failed.`, status, retryCount });
-  if (status === 403) return new WebProviderError({ provider, kind: "permission", message: `${label} permission was denied.`, status, retryCount });
-  if (status === 404) return new WebProviderError({ provider, kind: "not_found", message: `${label} endpoint was not found.`, status, retryCount });
+  const requestId = responseRequestId(response);
+  if (status === 401) return new WebProviderError({ provider, kind: "authentication", message: `${label} authentication failed.`, status, requestId, retryCount });
+  if (status === 402) return new WebProviderError({ provider, kind: "payment_or_quota", message: `${label} payment or quota check failed.`, status, requestId, retryCount });
+  if (status === 403) return new WebProviderError({ provider, kind: "permission", message: `${label} permission was denied.`, status, requestId, retryCount });
+  if (status === 404) return new WebProviderError({ provider, kind: "not_found", message: `${label} endpoint was not found.`, status, requestId, retryCount });
   if (status === 400 || status === 409 || status === 422) {
-    return new WebProviderError({ provider, kind: "validation", message: `${label} rejected the request.`, status, retryCount });
+    return new WebProviderError({ provider, kind: "validation", message: `${label} rejected the request.`, status, requestId, retryCount });
   }
   if (status === 429) {
     return new WebProviderError({
@@ -94,11 +103,12 @@ function responseError(provider: ProviderName, response: Response, retryCount: n
       status,
       retryable: true,
       retryAfterMs: retryAfterMs(response),
+      requestId,
       retryCount,
     });
   }
-  if (status >= 500) return new WebProviderError({ provider, kind: "upstream", message: `${label} upstream service failed.`, status, retryable: true, retryCount });
-  return new WebProviderError({ provider, kind: "unknown", message: `${label} request failed with HTTP ${status}.`, status, retryCount });
+  if (status >= 500) return new WebProviderError({ provider, kind: "upstream", message: `${label} upstream service failed.`, status, requestId, retryable: true, retryCount });
+  return new WebProviderError({ provider, kind: "unknown", message: `${label} request failed with HTTP ${status}.`, status, requestId, retryCount });
 }
 
 export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -197,13 +207,17 @@ export async function requestJson<T>(
       : remaining;
     const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, Math.floor(attemptTimeout))) : undefined;
     const signal = callerSignal && timeoutSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : (callerSignal ?? timeoutSignal);
+    let firstAbortKind: "cancelled" | "timeout" | undefined;
+    callerSignal?.addEventListener("abort", () => { firstAbortKind ??= "cancelled"; }, { once: true });
+    timeoutSignal?.addEventListener("abort", () => { firstAbortKind ??= "timeout"; }, { once: true });
+    const abortError = () => firstAbortKind === "cancelled"
+      ? cancelled(provider, attempt)
+      : firstAbortKind === "timeout" ? timeout(provider, attempt) : upstream(provider, attempt);
     let response: Response;
     try {
       response = await dependencies.fetch(url, { ...init, signal });
     } catch {
-      const error = callerSignal?.aborted
-        ? cancelled(provider, attempt)
-        : timeoutSignal?.aborted ? timeout(provider, attempt) : upstream(provider, attempt);
+      const error = abortError();
       if (!error.retryable || attempt >= dependencies.maxRetries) throw error;
       try {
         await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
@@ -213,8 +227,8 @@ export async function requestJson<T>(
       continue;
     }
 
-    if (callerSignal?.aborted) throw cancelled(provider, attempt);
-    if (timeoutSignal?.aborted || remainingMs() <= 0) throw timeout(provider, attempt);
+    if (firstAbortKind) throw abortError();
+    if (remainingMs() <= 0) throw timeout(provider, attempt);
 
     if (!response.ok) {
       const error = responseError(provider, response, attempt);
@@ -229,11 +243,11 @@ export async function requestJson<T>(
 
     try {
       const payload = await boundedJson<T>(provider, response, dependencies.maxResponseBytes, attempt);
-      if (callerSignal?.aborted) throw cancelled(provider, attempt);
-      if (timeoutSignal?.aborted || remainingMs() <= 0) throw timeout(provider, attempt);
+      if (firstAbortKind) throw abortError();
+      if (remainingMs() <= 0) throw timeout(provider, attempt);
       return { response, payload, retryCount: attempt };
     } catch (caught) {
-      if (callerSignal?.aborted) throw cancelled(provider, attempt);
+      if (firstAbortKind) throw abortError();
       if (caught instanceof WebProviderError) throw caught;
       const error = new WebProviderError({
         provider,

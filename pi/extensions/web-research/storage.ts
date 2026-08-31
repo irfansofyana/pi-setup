@@ -59,6 +59,7 @@ export interface ArtifactStoreOptions {
   ttlMs: number;
   maxEntries: number;
   maxBytes: number;
+  lockTimeoutMs?: number;
 }
 
 interface StoredArtifact {
@@ -104,7 +105,7 @@ export class ArtifactStore {
     const lockPath = join(this.options.root, ".capacity.lock");
     const ownerPath = join(lockPath, "owner.json");
     const ownerToken = randomUUID();
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + (this.options.lockTimeoutMs ?? 5_000);
     while (true) {
       ArtifactStore.throwIfAborted(signal);
       try {
@@ -124,7 +125,7 @@ export class ArtifactStore {
             }
           }
         } catch (lockError) {
-          if ((lockError as NodeJS.ErrnoException).code === "ENOENT") continue;
+          if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError;
         }
         if (Date.now() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
         await new Promise<void>((resolve, reject) => {
@@ -219,6 +220,13 @@ export class ArtifactStore {
       }
       return { id, path: target, url: input.url, chars: input.content.length, createdAt, expiresAt };
     }, signal);
+  }
+
+  async discard(id: string): Promise<void> {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) return;
+    try { await unlink(join(this.options.root, `${id}.json`)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 
   async read(id: string, offset: number, maxCharacters: number): Promise<{

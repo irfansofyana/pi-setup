@@ -151,6 +151,26 @@ test("ArtifactStore cancellation while waiting for a stale lock never publishes"
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
 
+test("ArtifactStore times out when a crashed owner leaves the lock unpublished", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-ownerless-lock-"));
+  await mkdir(join(root, ".capacity.lock"));
+  const store = new ArtifactStore({
+    root,
+    now: () => 1_725_000_000_000,
+    randomId: () => "must-not-publish",
+    ttlMs: 60_000,
+    maxEntries: 1,
+    maxBytes: 10_000,
+    lockTimeoutMs: 30,
+  });
+  const started = Date.now();
+  await assert.rejects(
+    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
+    /timed out/i,
+  );
+  assert.ok(Date.now() - started < 500);
+});
+
 test("ArtifactStore never reclaims a stale-looking lock owned by a live process", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-live-owner-"));
   const lock = join(root, ".capacity.lock");
