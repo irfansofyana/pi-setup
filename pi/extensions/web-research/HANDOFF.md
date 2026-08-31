@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 502 passed, 0 failed.
-- Focused web-research suite: 76 passed, 0 failed.
+- Full repository suite: 503 passed, 0 failed.
+- Focused web-research suite: 77 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -162,6 +162,7 @@ Accepted:
 - Artifact cleanup now validates bounded persisted records and uses each record's `expiresAt`, so process restarts or TTL configuration changes cannot delete valid evidence or retain expired evidence.
 - IPv6 target validation now requires globally routable unicast, blocks the current IANA non-global ranges including `100:0:0:1::/64` and the unassigned remainder of `2001::/23`, and explicitly permits its globally reachable registered exceptions.
 - Search and fetch cache TTLs now use the monotonic clock, so a backward wall-clock adjustment cannot extend retention or idle expiry.
+- Per-attempt and end-to-end search/fetch latency telemetry now uses the same monotonic clock; wall time remains limited to persisted artifact timestamps.
 
 Rejected as a current PR blocker:
 

@@ -640,7 +640,7 @@ async function executeSearch(
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
     : Number.POSITIVE_INFINITY;
   const run = async (provider: ProviderName): Promise<ProviderSearchResponse> => {
-    const attemptStartedAt = dependencies.now();
+    const attemptStartedAt = dependencies.monotonicNow();
     onUpdate?.({ content: [{ type: "text", text: `Searching ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
@@ -653,7 +653,7 @@ async function executeSearch(
         outcome: response.documents.length ? "success" : "empty",
         status: response.status,
         ...(attemptRequestId ? { requestId: attemptRequestId } : {}),
-        durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+        durationMs: Math.max(0, dependencies.monotonicNow() - attemptStartedAt),
       });
       return response;
     } catch (error) {
@@ -666,12 +666,12 @@ async function executeSearch(
           status: redactedError.status,
           errorKind: redactedError.kind,
           ...(redactedError.requestId ? { requestId: redactedError.requestId } : {}),
-          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+          durationMs: Math.max(0, dependencies.monotonicNow() - attemptStartedAt),
         });
         redactedError.details = {
           attempts: [...attempts],
           retryCount,
-          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+          durationMs: Math.max(0, dependencies.monotonicNow() - attemptStartedAt),
           cacheState: "miss",
           cacheAgeMs: 0,
           returnedCharacters: 0,
@@ -1064,7 +1064,7 @@ async function executeFetch(
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
     : Number.POSITIVE_INFINITY;
   const run = async (provider: ProviderName): Promise<ProviderFetchResponse> => {
-    const attemptStartedAt = dependencies.now();
+    const attemptStartedAt = dependencies.monotonicNow();
     onUpdate?.({ content: [{ type: "text", text: `Fetching with ${providerLabel(provider)}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
@@ -1084,7 +1084,7 @@ async function executeFetch(
         status: response.status,
         ...(errorKind ? { errorKind } : {}),
         ...(attemptRequestId ? { requestId: attemptRequestId } : {}),
-        durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+        durationMs: Math.max(0, dependencies.monotonicNow() - attemptStartedAt),
       });
       return response;
     } catch (error) {
@@ -1097,12 +1097,12 @@ async function executeFetch(
           status: redactedError.status,
           errorKind: redactedError.kind,
           ...(redactedError.requestId ? { requestId: redactedError.requestId } : {}),
-          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+          durationMs: Math.max(0, dependencies.monotonicNow() - attemptStartedAt),
         });
         redactedError.details = {
           attempts: [...attempts],
           retryCount,
-          durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
+          durationMs: Math.max(0, dependencies.monotonicNow() - attemptStartedAt),
           cacheState: "miss",
           cacheAgeMs: 0,
           returnedCharacters: 0,
@@ -1291,7 +1291,7 @@ export default function webResearch(
       if (input.publishedAfter && input.publishedBefore && Date.parse(input.publishedAfter) > Date.parse(input.publishedBefore)) {
         validationError("publishedAfter must not be later than publishedBefore.");
       }
-      const startedAt = dependencies.now();
+      const startedAt = dependencies.monotonicNow();
       const selectedProvider = initialProvider(input);
       ensureNotCancelled(signal, selectedProvider);
       const cacheKey = createOpaqueCacheKey(cacheKeySecret, input);
@@ -1308,7 +1308,7 @@ export default function webResearch(
             attempts: [],
             resultCount: cached.documents.length,
             requestId: cached.requestId,
-            durationMs: Math.max(0, dependencies.now() - startedAt),
+            durationMs: Math.max(0, dependencies.monotonicNow() - startedAt),
             cacheHit: true,
             cacheState: "hit",
             cacheAgeMs: cachedEntry.ageMs,
@@ -1334,7 +1334,7 @@ export default function webResearch(
           attempts,
           resultCount: response.documents.length,
           requestId: response.requestId,
-          durationMs: Math.max(0, dependencies.now() - startedAt),
+          durationMs: Math.max(0, dependencies.monotonicNow() - startedAt),
           cacheHit: false,
           cacheState: "miss",
           cacheAgeMs: 0,
@@ -1376,7 +1376,7 @@ export default function webResearch(
       onUpdate: ToolUpdateCallback,
     ) {
       const raw = params;
-      const startedAt = dependencies.now();
+      const startedAt = dependencies.monotonicNow();
       if (raw.artifactId !== undefined) {
         if (raw.urls !== undefined) throw localWebError("validation", "Use either urls or artifactId, not both.");
         ensureNotCancelled(signal, "tavily");
@@ -1396,7 +1396,7 @@ export default function webResearch(
             provider: page.provider,
             resolvedMode: "artifact",
             attempts: [],
-            durationMs: Math.max(0, dependencies.now() - startedAt),
+            durationMs: Math.max(0, dependencies.monotonicNow() - startedAt),
             resultCount: 1,
             retryCount: 0,
             truncated: page.hasMore,
@@ -1462,7 +1462,7 @@ export default function webResearch(
           failureCount: response.failures.length,
           failureKinds: [...new Set(response.failures.map((failure) => failure.kind))],
           requestId: response.requestId,
-          durationMs: Math.max(0, dependencies.now() - startedAt),
+          durationMs: Math.max(0, dependencies.monotonicNow() - startedAt),
           cacheHit,
           cacheState,
           cacheAgeMs,

@@ -13,10 +13,14 @@ function harness(
   overrides: Record<string, unknown> = {},
 ) {
   const tools = new Map<string, any>();
+  const fixedNow = () => 1_725_000_000_000;
+  const now = (overrides.now as (() => number) | undefined) ?? fixedNow;
+  const monotonicNow = (overrides.monotonicNow as (() => number) | undefined) ?? now;
   webResearch({ registerTool(tool: any) { tools.set(tool.name, tool); } } as any, {
     fetch: fetchImpl,
     env,
-    now: () => 1_725_000_000_000,
+    now,
+    monotonicNow,
     ...overrides,
   });
   return tools;
@@ -1178,6 +1182,7 @@ test("transport applies one end-to-end deadline across provider attempts", async
       signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
     });
   }, { TAVILY_API_KEY: "test-tavily" }, {
+    monotonicNow: () => performance.now(),
     requestTimeoutMs: 60_000,
     totalRequestTimeoutMs: 20,
     maxRetries: 2,
@@ -1201,6 +1206,7 @@ test("transport keeps one end-to-end deadline across provider fallback", async (
       headers: { "content-type": "application/json" },
     });
   }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, {
+    monotonicNow: () => performance.now(),
     maxRetries: 0,
     totalRequestTimeoutMs: 20,
     requestTimeoutMs: 100,
@@ -1313,6 +1319,7 @@ test("cache TTL uses monotonic time across wall-clock rollback", async () => {
     }), { status: 200, headers: { "content-type": "application/json" } });
   }, { TAVILY_API_KEY: "test-tavily" }, {
     now: () => wallClock,
+    monotonicNow: () => performance.now(),
     searchCacheTtlMs: 10,
   });
   const params = { query: "monotonic cache", provider: "tavily" };
@@ -1322,6 +1329,48 @@ test("cache TTL uses monotonic time across wall-clock rollback", async () => {
   const second = await tools.get("web_search").execute("rollback-2", params, undefined, undefined, { cwd: "/tmp/project" });
   assert.equal(calls, 2);
   assert.equal(second.details.cacheHit, false);
+});
+
+test("search and fetch latency telemetry uses monotonic time across wall-clock rollback", async () => {
+  let wallClock = 10_000;
+  let monotonicClock = 0;
+  const tools = harness(async (url) => {
+    wallClock -= 1_000;
+    if (String(url).endsWith("/search")) {
+      return new Response(JSON.stringify({
+        request_id: "monotonic-search",
+        results: [{ title: "Result", url: "https://example.com/result", content: "Evidence." }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      request_id: "monotonic-fetch",
+      results: [{ url: "https://example.com/article", title: "Article", raw_content: "Fetched evidence." }],
+      failed_results: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily" }, {
+    now: () => wallClock,
+    monotonicNow: () => ++monotonicClock,
+  });
+
+  const search = await tools.get("web_search").execute(
+    "monotonic-search",
+    { query: "telemetry clock", provider: "tavily", noCache: true },
+    undefined,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+  const fetch = await tools.get("web_fetch").execute(
+    "monotonic-fetch",
+    { urls: ["https://example.com/article"], provider: "tavily", noCache: true },
+    undefined,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  assert.ok(search.details.durationMs > 0);
+  assert.ok(search.details.attempts[0].durationMs > 0);
+  assert.ok(fetch.details.durationMs > 0);
+  assert.ok(fetch.details.attempts[0].durationMs > 0);
 });
 
 test("an aborted web_search rejects instead of returning a cached result", async () => {
