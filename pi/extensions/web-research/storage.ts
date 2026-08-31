@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, link, lstat, mkdir, readFile, readdir, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export class TimedCache<T> {
@@ -104,52 +104,77 @@ export class ArtifactStore {
   private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     await this.ensureRoot();
     const lockPath = join(this.options.root, ".capacity.lock");
-    const ownerPath = join(lockPath, "owner.json");
     const ownerToken = randomUUID();
+    const ownerData = `${JSON.stringify({ pid: process.pid, token: ownerToken })}\n`;
     const monotonicNow = this.options.monotonicNow ?? (() => performance.now());
     const deadline = monotonicNow() + (this.options.lockTimeoutMs ?? 5_000);
     while (true) {
       ArtifactStore.throwIfAborted(signal);
+      const candidatePath = join(this.options.root, `.capacity-owner.${process.pid}.${ownerToken}.tmp`);
       try {
-        await mkdir(lockPath, { mode: 0o700 });
-        await writeFile(ownerPath, `${JSON.stringify({ pid: process.pid, token: ownerToken })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        await writeFile(candidatePath, ownerData, { encoding: "utf8", flag: "wx", mode: 0o600 });
         try {
-          const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { pid?: unknown; token?: unknown };
-          if (Number.isInteger(owner.pid) && typeof owner.token === "string" && !ArtifactStore.processIsAlive(owner.pid as number)) {
-            const current = JSON.parse(await readFile(ownerPath, "utf8")) as { token?: unknown };
-            if (current.token === owner.token) {
-              await unlink(ownerPath);
-              await rmdir(lockPath);
-              continue;
-            }
+          await link(candidatePath, lockPath);
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+        try {
+          const info = await lstat(lockPath);
+          if (info.isDirectory()) {
+            await rm(lockPath, { recursive: true, force: true });
+            continue;
+          }
+          if (info.isSymbolicLink() || !info.isFile()) {
+            await unlink(lockPath);
+            continue;
+          }
+          let owner: { pid?: unknown; token?: unknown };
+          try {
+            owner = JSON.parse(await readFile(lockPath, "utf8")) as { pid?: unknown; token?: unknown };
+          } catch (lockError) {
+            if ((lockError as NodeJS.ErrnoException).code === "ENOENT") continue;
+            if (!(lockError instanceof SyntaxError)) throw lockError;
+            await unlink(lockPath);
+            continue;
+          }
+          const validOwner = Number.isInteger(owner.pid) && typeof owner.token === "string";
+          if (!validOwner || !ArtifactStore.processIsAlive(owner.pid as number)) {
+            const current = JSON.parse(await readFile(lockPath, "utf8")) as { token?: unknown };
+            if (!validOwner || current.token === owner.token) await unlink(lockPath);
+            continue;
           }
         } catch (lockError) {
-          const code = (lockError as NodeJS.ErrnoException).code;
-          if (code !== "ENOENT" && !(lockError instanceof SyntaxError)) throw lockError;
+          if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError;
+          continue;
         }
-        if (monotonicNow() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 10);
-          signal?.addEventListener("abort", () => {
-            clearTimeout(timer);
-            reject(new Error("Artifact operation cancelled."));
-          }, { once: true });
-        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      } finally {
+        try { await unlink(candidatePath); } catch { /* candidate may already be absent */ }
       }
+      if (monotonicNow() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          reject(new Error("Artifact operation cancelled."));
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, 10);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
+      });
     }
     try {
       ArtifactStore.throwIfAborted(signal);
       return await operation();
     } finally {
       try {
-        const owner = JSON.parse(await readFile(ownerPath, "utf8")) as { token?: unknown };
-        if (owner.token === ownerToken) {
-          await unlink(ownerPath);
-          await rmdir(lockPath);
-        }
+        const owner = JSON.parse(await readFile(lockPath, "utf8")) as { token?: unknown };
+        if (owner.token === ownerToken) await unlink(lockPath);
       } catch { /* a lost lock must not remove a replacement owner's lock */ }
     }
   }
@@ -260,7 +285,7 @@ export class ArtifactStore {
       try { await unlink(path); } catch { /* already removed */ }
       throw new Error("Artifact has expired.");
     }
-    if (typeof record.url !== "string" || typeof record.title !== "string" || typeof record.provider !== "string" || typeof record.contextKey !== "string") {
+    if (typeof record.url !== "string" || typeof record.title !== "string" || (record.provider !== "tavily" && record.provider !== "exa") || typeof record.contextKey !== "string") {
       throw new Error("Artifact metadata is invalid.");
     }
     const content = record.content.slice(offset, offset + maxCharacters);

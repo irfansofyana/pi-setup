@@ -201,6 +201,11 @@ function requiredQuery(value: unknown): string {
   return query;
 }
 
+function isSpecialUseHostname(hostname: string): boolean {
+  return ["localhost", "local", "internal", "test", "example", "invalid", "onion", "home.arpa"]
+    .some((suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`));
+}
+
 function domainList(value: unknown, field: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 20) validationError(`${field} must be an array of at most 20 domains.`);
@@ -211,8 +216,7 @@ function domainList(value: unknown, field: string): string[] {
     try { canonicalHost = new URL(`http://${domain}/`).hostname.toLowerCase(); } catch { validationError(`${field} contains an invalid public domain.`); }
     if (canonicalHost !== domain) validationError(`${field} contains an invalid public domain.`);
     const ipVersion = isIP(domain);
-    const blockedName = domain === "localhost" || domain.endsWith(".localhost") || domain.endsWith(".local")
-      || domain.endsWith(".internal") || domain.endsWith(".home.arpa");
+    const blockedName = isSpecialUseHostname(domain);
     const canonicalName = domain.length <= 253 && domain.includes(".") && !domain.endsWith(".")
       && domain.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
     const publicIp = (ipVersion === 4 && !isPrivateIpv4(domain)) || (ipVersion === 6 && !isPrivateIpv6(domain));
@@ -298,8 +302,8 @@ function providerLabel(provider: ProviderName): string {
 }
 
 const SENSITIVE_QUERY_KEYS = new Set([
-  "accesskey", "accesstoken", "apikey", "auth", "authorization", "code", "credential",
-  "jwt", "key", "password", "passwd", "secret", "session", "sessionid", "sig", "signature",
+  "accesskey", "accesstoken", "apikey", "auth", "authorization", "clientsecret", "code", "credential",
+  "idtoken", "jwt", "key", "oauthtoken", "password", "passwd", "refreshtoken", "secret", "session", "sessionid", "sig", "signature",
   "token", "xamzcredential", "xamzsecuritytoken", "xamzsignature", "xgoogcredential", "xgoogsignature",
 ]);
 
@@ -350,7 +354,8 @@ function sensitiveUrlValues(urls: string[]): string[] {
     }
   };
   for (const url of urls) {
-    const parsed = new URL(url);
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { continue; }
     addPairs(url.split("#", 1)[0]?.split("?", 2)[1] ?? "");
     addPairs(url.split("#", 2)[1] ?? "");
     if (parsed.username) addValue(parsed.username);
@@ -394,6 +399,27 @@ function sensitiveValuesFromQuery(query: string): string[] {
     try { return [new URL(candidate).toString()]; } catch { return []; }
   });
   return sensitiveUrlValues(validUrls);
+}
+
+function literalSecretValues(values: Array<string | undefined>): string[] {
+  const secrets = new Set<string>();
+  for (const raw of values) {
+    if (!raw) continue;
+    for (const value of tolerantDecodeStages(raw)) {
+      if (!value) continue;
+      secrets.add(value);
+      secrets.add(encodeURIComponent(value));
+      secrets.add(encodeURIComponent(value).replace(/%20/g, "+"));
+    }
+  }
+  return [...secrets].sort((a, b) => b.length - a.length);
+}
+
+function requestRedactionValues(dependencies: WebResearchDependencies, contextual: string[]): string[] {
+  return [...new Set([
+    ...contextual,
+    ...literalSecretValues([dependencies.env.TAVILY_API_KEY, dependencies.env.EXA_API_KEY]),
+  ])].sort((a, b) => b.length - a.length);
 }
 
 function redactSearchResponse(response: ProviderSearchResponse, values: string[]): ProviderSearchResponse {
@@ -594,6 +620,7 @@ async function executeSearch(
 ): Promise<{ response: ProviderSearchResponse; attempts: SearchAttempt[]; retryCount: number }> {
   const selected = initialProvider(input);
   const attempts: SearchAttempt[] = [];
+  const redactionValues = requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query));
   let retryCount = 0;
   const deadlineAt = dependencies.totalRequestTimeoutMs > 0
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
@@ -606,7 +633,7 @@ async function executeSearch(
         ? await searchTavily(input, dependencies, signal, deadlineAt)
         : await searchExa(input, dependencies, signal, deadlineAt);
       retryCount += response.retryCount;
-      const attemptRequestId = redactValues(response.requestId, sensitiveValuesFromQuery(input.query));
+      const attemptRequestId = redactValues(response.requestId, redactionValues);
       attempts.push({
         provider,
         outcome: response.documents.length ? "success" : "empty",
@@ -617,7 +644,7 @@ async function executeSearch(
       return response;
     } catch (error) {
       if (error instanceof WebProviderError) {
-        const redactedError = redactProviderError(error, sensitiveValuesFromQuery(input.query));
+        const redactedError = redactProviderError(error, redactionValues);
         retryCount += redactedError.retryCount;
         attempts.push({
           provider,
@@ -700,8 +727,11 @@ function isPrivateIpv4(host: string): boolean {
     || (a === 169 && b === 254)
     || (a === 172 && b >= 16 && b <= 31)
     || (a === 192 && b === 0)
+    || (a === 192 && b === 88 && parts[2] === 99)
     || (a === 192 && b === 168)
     || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && parts[2] === 100)
+    || (a === 203 && b === 0 && parts[2] === 113)
     || a >= 224;
 }
 
@@ -772,7 +802,7 @@ function publicUrls(value: unknown, provider: ProviderName = "tavily"): string[]
     if (parsed.username || parsed.password) reject("safety-policy", "URL credentials are not allowed.");
     const hostname = parsed.hostname.toLowerCase();
     if (hostname.endsWith(".")) reject("safety-policy", "Each URL must use a public hostname.");
-    if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".home.arpa")) {
+    if (!hostname || isSpecialUseHostname(hostname)) {
       reject("safety-policy", "Each URL must use a public hostname.");
     }
     const ipVersion = isIP(hostname.replace(/^\[|\]$/g, ""));
@@ -794,6 +824,27 @@ function optionalFocus(value: unknown): string | undefined {
   return focus;
 }
 
+function canonicalResourceKey(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    let path = parsed.pathname.replace(/\/+$/, "").replace(/\.pdf$/i, "");
+    path = path.replace(/^\/(?:abs|pdf)\//i, "/");
+    return `${parsed.origin.toLowerCase()}${path || "/"}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function matchRequestedUrl(returnedUrl: string, requestedUrls: string[]): string | undefined {
+  const displayed = redactUrlForDisplay(returnedUrl);
+  const requested = requestedUrls.map(redactUrlForDisplay);
+  if (requested.includes(displayed)) return displayed;
+  const key = canonicalResourceKey(displayed);
+  if (!key) return undefined;
+  const matches = requested.filter((value) => canonicalResourceKey(value) === key);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 async function fetchTavily(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
   const apiKey = dependencies.env.TAVILY_API_KEY;
   if (!apiKey) throw new WebProviderError({ provider: "tavily", kind: "authentication", message: "Tavily authentication is not configured (set TAVILY_API_KEY)." });
@@ -807,15 +858,15 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
       ...(input.focus ? { query: input.focus } : {}),
     }),
   }, dependencies, signal, deadlineAt);
-  const allowedUrls = new Set(input.urls.map(redactUrlForDisplay));
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
     if (!value || typeof value !== "object") return [];
     const result = value as Record<string, unknown>;
-    const url = publicProviderUrl(result.url);
+    const canonicalUrl = publicProviderUrl(result.url);
+    const url = canonicalUrl ? matchRequestedUrl(canonicalUrl, input.urls) : undefined;
     const rawContent = textValue(result.raw_content);
-    if (!url || !allowedUrls.has(url) || !rawContent) {
+    if (!url || !canonicalUrl || !rawContent) {
       truncated = true;
       return [];
     }
@@ -825,7 +876,7 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
     return [{
       title: title.value ?? url,
       url,
-      canonicalUrl: url,
+      canonicalUrl,
       provider: "tavily",
       snippets: [],
       content,
@@ -836,8 +887,9 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   const failures = rawFailures.slice(0, input.urls.length).flatMap((value): FetchFailure[] => {
     if (!value || typeof value !== "object") return [];
     const result = value as Record<string, unknown>;
-    const url = publicProviderUrl(result.url);
-    if (!url || !allowedUrls.has(url)) {
+    const canonicalUrl = publicProviderUrl(result.url);
+    const url = canonicalUrl ? matchRequestedUrl(canonicalUrl, input.urls) : undefined;
+    if (!url) {
       truncated = true;
       return [];
     }
@@ -903,15 +955,15 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
       ...(input.focus ? { highlights: { query: input.focus, maxCharacters: input.maxCharactersPerResult } } : {}),
     }),
   }, dependencies, signal, deadlineAt);
-  const allowedUrls = new Set(input.urls.map(redactUrlForDisplay));
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
     if (!value || typeof value !== "object") return [];
     const result = value as Record<string, unknown>;
-    const url = publicProviderUrl(result.url);
+    const canonicalUrl = publicProviderUrl(result.url);
+    const url = canonicalUrl ? matchRequestedUrl(canonicalUrl, input.urls) : undefined;
     const rawContent = textValue(result.text);
-    if (!url || !allowedUrls.has(url) || !rawContent) {
+    if (!url || !canonicalUrl || !rawContent) {
       truncated = true;
       return [];
     }
@@ -929,7 +981,7 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
     return [{
       title: title.value ?? url,
       url,
-      canonicalUrl: url,
+      canonicalUrl,
       provider: "exa",
       snippets,
       content,
@@ -941,11 +993,12 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
   const rawStatuses = Array.isArray(payload.statuses) ? payload.statuses : [];
   const failures = rawStatuses.slice(0, input.urls.length).flatMap((value) => {
     const failure = exaStatusFailure(value);
-    if (!failure || !allowedUrls.has(failure.url)) {
+    const requestedUrl = failure ? matchRequestedUrl(failure.url, input.urls) : undefined;
+    if (!failure || !requestedUrl) {
       if (failure) truncated = true;
       return [];
     }
-    return [failure];
+    return [{ ...failure, url: requestedUrl }];
   });
   truncated ||= rawStatuses.length > input.urls.length;
   const requestId = safeRequestId(payload.requestId);
@@ -966,6 +1019,10 @@ async function executeFetch(
 }> {
   const selected: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
   const attempts: FetchAttempt[] = [];
+  const redactionValues = requestRedactionValues(dependencies, [
+    ...sensitiveUrlValues(input.urls),
+    ...sensitiveValuesFromQuery(input.focus ?? ""),
+  ]);
   let retryCount = 0;
   const deadlineAt = dependencies.totalRequestTimeoutMs > 0
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
@@ -984,7 +1041,7 @@ async function executeFetch(
       const errorKind = response.documents.length === 0 && response.failures.length
         ? response.failures[0]?.kind
         : undefined;
-      const attemptRequestId = redactValues(response.requestId, sensitiveUrlValues(input.urls));
+      const attemptRequestId = redactValues(response.requestId, redactionValues);
       attempts.push({
         provider,
         outcome,
@@ -996,7 +1053,7 @@ async function executeFetch(
       return response;
     } catch (error) {
       if (error instanceof WebProviderError) {
-        const redactedError = redactProviderError(error, sensitiveUrlValues(input.urls));
+        const redactedError = redactProviderError(error, redactionValues);
         retryCount += redactedError.retryCount;
         attempts.push({
           provider,
@@ -1226,7 +1283,7 @@ export default function webResearch(
         };
       }
       const executed = await executeSearch(input, dependencies, signal, onUpdate);
-      const response = redactSearchResponse(executed.response, sensitiveValuesFromQuery(input.query));
+      const response = redactSearchResponse(executed.response, requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query)));
       const { attempts, retryCount } = executed;
       searchCache.set(cacheKey, response);
       const formatted = formatSearchResults(response.documents);
@@ -1280,6 +1337,7 @@ export default function webResearch(
       onUpdate: ToolUpdateCallback,
     ) {
       const raw = params;
+      const startedAt = dependencies.now();
       if (raw.artifactId !== undefined) {
         if (raw.urls !== undefined) throw localWebError("validation", "Use either urls or artifactId, not both.");
         ensureNotCancelled(signal, "tavily");
@@ -1296,6 +1354,13 @@ export default function webResearch(
         return {
           content: [{ type: "text", text: [`Artifact: ${page.id}`, `URL: ${page.url}`, `Provider: ${page.provider}`, "", page.content].join("\n") }],
           details: {
+            provider: page.provider,
+            resolvedMode: "artifact",
+            attempts: [],
+            durationMs: Math.max(0, dependencies.now() - startedAt),
+            resultCount: 1,
+            retryCount: 0,
+            truncated: page.hasMore,
             artifactId: page.id,
             contextKey: page.contextKey,
             offset: page.offset,
@@ -1318,7 +1383,6 @@ export default function webResearch(
         maxCharactersPerResult: boundedInteger(raw.maxCharactersPerResult, 50_000, 1_000, 50_000, "maxCharactersPerResult"),
         noCache: raw.noCache === true,
       };
-      const startedAt = dependencies.now();
       const selectedProvider: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
       ensureNotCancelled(signal, selectedProvider);
       const cacheKey = JSON.stringify({
@@ -1337,7 +1401,10 @@ export default function webResearch(
       let retryCount = 0;
       if (!response) {
         const executed = await executeFetch(input, dependencies, signal, onUpdate);
-        response = redactFetchResponse(executed.response, sensitiveUrlValues(input.urls));
+        response = redactFetchResponse(executed.response, requestRedactionValues(dependencies, [
+          ...sensitiveUrlValues(input.urls),
+          ...sensitiveValuesFromQuery(input.focus ?? ""),
+        ]));
         attempts = executed.attempts;
         retryCount = executed.retryCount;
         if (!input.noCache) fetchCache.set(cacheKey, response);

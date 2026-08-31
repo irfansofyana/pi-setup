@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 481 passed, 0 failed.
-- Focused web-research suite: 55 passed, 0 failed.
+- Full repository suite: 486 passed, 0 failed.
+- Focused web-research suite: 60 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -106,7 +106,17 @@ The fifth independent review inspected `be25e853f889df9073f54697ea74776c772bd135
 - Cleanup failures cannot mask response-byte safety-policy failures or enable fallback.
 - Auto/Tavily publication bounds accept calendar dates only; explicit Exa preserves supported ISO timestamp precision.
 
-Verdict: all five review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
+The sixth independent review inspected `fdbeb3688446ccfd4e38041b408c411d961441bc`. Every finding reproduced and was accepted. Fixes added:
+
+- Best-effort response-body cleanup that cannot delay authoritative timeout, cancellation, HTTP, or byte-safety failures.
+- Compound OAuth key, configured provider credential, and focus-URL secret redaction across output, telemetry, cache, errors, and artifacts.
+- Per-entry defensive handling for malformed provider URLs.
+- Atomic artifact-lock owner publication, recovery from legacy/partial crashes, monotonic deadlines, and leak-free abort-aware polling.
+- Rejection of special-use IPv4 literals and reserved hostname suffixes at public boundaries.
+- Fail-closed canonical resource correlation that preserves requested and provider-canonical URL identity.
+- Complete artifact-retrieval observability with validated provider identity and retrieval truncation state.
+
+Verdict: all six review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 

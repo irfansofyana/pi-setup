@@ -151,7 +151,7 @@ test("ArtifactStore cancellation while waiting for a stale lock never publishes"
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
 
-test("ArtifactStore times out when a crashed owner leaves the lock unpublished", async () => {
+test("ArtifactStore recovers when a crashed owner leaves a legacy lock unpublished", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-ownerless-lock-"));
   await mkdir(join(root, ".capacity.lock"));
   const store = new ArtifactStore({
@@ -163,15 +163,11 @@ test("ArtifactStore times out when a crashed owner leaves the lock unpublished",
     maxBytes: 10_000,
     lockTimeoutMs: 30,
   });
-  const started = Date.now();
-  await assert.rejects(
-    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
-    /timed out/i,
-  );
-  assert.ok(Date.now() - started < 500);
+  const record = await store.save({ url: "https://example.test", title: "recovered", content: "recovered", provider: "tavily" });
+  assert.equal(record.id, "must-not-publish");
 });
 
-test("ArtifactStore treats a partial owner record as an in-progress lock", async () => {
+test("ArtifactStore recovers a crashed partial owner publication", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-partial-owner-"));
   const lock = join(root, ".capacity.lock");
   await mkdir(lock);
@@ -185,15 +181,13 @@ test("ArtifactStore treats a partial owner record as an in-progress lock", async
     maxBytes: 10_000,
     lockTimeoutMs: 30,
   });
-  await assert.rejects(
-    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
-    /timed out/i,
-  );
+  const record = await store.save({ url: "https://example.test", title: "recovered", content: "recovered", provider: "tavily" });
+  assert.equal(record.id, "must-not-publish");
 });
 
 test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-monotonic-lock-"));
-  await mkdir(join(root, ".capacity.lock"));
+  await writeFile(join(root, ".capacity.lock"), `${JSON.stringify({ pid: process.pid, token: "live-monotonic-owner" })}\n`);
   let monotonic = 0;
   const controller = new AbortController();
   const safetyTimer = setTimeout(() => controller.abort(), 100);
@@ -223,8 +217,7 @@ test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
 test("ArtifactStore never reclaims a stale-looking lock owned by a live process", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-live-owner-"));
   const lock = join(root, ".capacity.lock");
-  await mkdir(lock);
-  await writeFile(join(lock, "owner.json"), `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
+  await writeFile(lock, `${JSON.stringify({ pid: process.pid, token: "live-owner" })}\n`);
   await utimes(lock, new Date(0), new Date(0));
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 30);
@@ -242,5 +235,5 @@ test("ArtifactStore never reclaims a stale-looking lock owned by a live process"
     /cancelled/i,
   );
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
-  assert.equal((await readFile(join(lock, "owner.json"), "utf8")).includes("live-owner"), true);
+  assert.equal((await readFile(lock, "utf8")).includes("live-owner"), true);
 });

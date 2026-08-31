@@ -135,8 +135,8 @@ function upstream(provider: ProviderName, retryCount: number): WebProviderError 
   return new WebProviderError({ provider, kind: "upstream", message: `${providerLabel(provider)} network request failed.`, retryable: true, retryCount });
 }
 
-async function cancelResponseBody(response: Response): Promise<void> {
-  try { await response.body?.cancel(); } catch { /* cancellation must not mask the normalized failure */ }
+function cancelResponseBody(response: Response): void {
+  try { void response.body?.cancel().catch(() => {}); } catch { /* cancellation must not mask or delay the normalized failure */ }
 }
 
 async function boundedJson<T>(
@@ -165,7 +165,7 @@ async function boundedJson<T>(
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      try { await reader.cancel(); } catch { /* cleanup must not mask the safety-policy failure */ }
+      try { void reader.cancel().catch(() => {}); } catch { /* cleanup must not mask or delay the safety-policy failure */ }
       throw new WebProviderError({
         provider,
         kind: "safety-policy",
