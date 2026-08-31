@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 519 passed, 0 failed.
-- Focused web-research suite: 93 passed, 0 failed.
+- Full repository suite: 522 passed, 0 failed.
+- Focused web-research suite: 96 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -178,6 +178,8 @@ Accepted:
 - Retryable validation failures from successful HTTP responses preserve the available HTTP status and safely validated response-header request ID through retries and terminal telemetry.
 - Terminal invalid-JSON failures also preserve safely validated response-header request IDs.
 - Documented Exa per-URL status tags and HTTP status codes map to normalized permission, validation, upstream, authentication, quota, not-found, and rate-limit classes before generic string classification.
+- Provider-controlled text is sanitized before bounding, caching, rendering, or persistence: terminal/C0/C1 and bidi controls are removed, metadata is normalized to one line, and intended page-content line breaks are retained.
+- A newly published artifact enters the rollback set before the post-save cancellation check, closing the cancellation window that could leave a successful publication behind.
 
 Rejected as a current PR blocker:
 

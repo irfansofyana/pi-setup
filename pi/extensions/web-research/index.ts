@@ -253,8 +253,20 @@ function publishedDate(value: unknown, field: string): string | undefined {
   return date;
 }
 
+function sanitizeProviderText(value: unknown, singleLine = false): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let sanitized = value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "")
+    .replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
+  if (singleLine) sanitized = sanitized.replace(/[\n\t\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ");
+  else sanitized = sanitized.replace(/[\u2028\u2029]/g, "\n");
+  sanitized = sanitized.trim();
+  return sanitized || undefined;
+}
+
 function textValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return sanitizeProviderText(value);
 }
 
 function providerPayload(
@@ -290,7 +302,7 @@ function numericValue(value: unknown): number | undefined {
 }
 
 function clippedText(value: unknown, maxCharacters: number): { value?: string; truncated: boolean } {
-  const text = textValue(value);
+  const text = sanitizeProviderText(value, true);
   if (!text) return { truncated: false };
   return text.length > maxCharacters
     ? { value: text.slice(0, maxCharacters), truncated: true }
@@ -1280,10 +1292,10 @@ async function prepareFetchResults(
         } catch (error) {
           throw normalizeArtifactError(error, response.provider);
         }
-        ensureNotCancelled(signal, response.provider);
         const { path: _path, ...handle } = artifact;
         records.push(handle);
         artifactIds[index] = artifact.id;
+        ensureNotCancelled(signal, response.provider);
         truncated = true;
         const marker = `\n\n[Content truncated; see artifact in outcome index.]${providerCapMarker}`;
         const available = Math.max(0, initialBodyBudget - usedCharacters - separatorLength - header.length - marker.length);
