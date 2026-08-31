@@ -1241,8 +1241,8 @@ export default function webResearch(
 ): void {
   const dependencies = { ...DEFAULT_DEPENDENCIES, ...overrides };
   const cacheKeySecret = randomUUID();
-  const searchCache = new TimedCache<ProviderSearchResponse>(dependencies.monotonicNow, dependencies.searchCacheTtlMs, dependencies.maxCacheEntries);
-  const fetchCache = new TimedCache<ProviderFetchResponse>(dependencies.monotonicNow, dependencies.fetchCacheTtlMs, dependencies.maxCacheEntries);
+  const searchCache = new TimedCache<ProviderSearchResponse>(dependencies.monotonicNow, dependencies.searchCacheTtlMs, dependencies.maxCacheEntries, dependencies.now);
+  const fetchCache = new TimedCache<ProviderFetchResponse>(dependencies.monotonicNow, dependencies.fetchCacheTtlMs, dependencies.maxCacheEntries, dependencies.now);
   const artifactStore = new ArtifactStore({
     root: dependencies.artifactRoot,
     now: dependencies.now,

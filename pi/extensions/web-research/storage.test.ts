@@ -39,6 +39,16 @@ test("TimedCache expires idle entries without later cache access", async () => {
   assert.equal((cache as any).entries.has("idle-sensitive-key"), false);
 });
 
+test("TimedCache expires idle entries when wall time advances across suspend", async () => {
+  let monotonicNow = 100;
+  let wallNow = 1_000;
+  const cache = new TimedCache<string>(() => monotonicNow, 10, 10, () => wallNow, 5);
+  cache.set("suspend-sensitive-key", "secret");
+  wallNow = 2_000;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal((cache as any).entries.has("suspend-sensitive-key"), false);
+});
+
 test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-capacity-"));
   let id = 0;
@@ -80,6 +90,37 @@ test("ArtifactStore honors persisted expiresAt across process TTL changes", asyn
   const longerConfig = new ArtifactStore({ root: expiredRoot, now: () => base + 1_000, randomId: () => "replacement", ttlMs: 86_400_000, maxEntries: 1, maxBytes: 10_000 });
   await longerConfig.save({ url: "https://example.test/replacement", title: "replacement", content: "replacement", provider: "exa" });
   assert.deepEqual((await readdir(expiredRoot)).filter((name) => name.endsWith(".json")), ["replacement.json"]);
+});
+
+test("ArtifactStore prunes expired records admitted under a larger byte cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-lowered-byte-cap-"));
+  const base = 1_725_000_000_000;
+  const original = new ArtifactStore({
+    root,
+    now: () => base,
+    randomId: () => "large-expiring",
+    ttlMs: 1_000,
+    maxEntries: 2,
+    maxBytes: 10_000,
+  });
+  await original.save({
+    url: "https://example.test/large",
+    title: "large",
+    content: "x".repeat(1_000),
+    provider: "tavily",
+  });
+
+  const lowered = new ArtifactStore({
+    root,
+    now: () => base + 2_000,
+    randomId: () => "small-new",
+    ttlMs: 1_000,
+    maxEntries: 2,
+    maxBytes: 600,
+  });
+  await lowered.save({ url: "https://example.test/new", title: "new", content: "new", provider: "tavily" });
+
+  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), ["small-new.json"]);
 });
 
 test("ArtifactStore fails closed on ambiguous artifact expiry metadata", async () => {

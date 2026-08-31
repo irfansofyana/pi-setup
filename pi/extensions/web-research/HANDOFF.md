@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 503 passed, 0 failed.
-- Focused web-research suite: 77 passed, 0 failed.
+- Full repository suite: 505 passed, 0 failed.
+- Focused web-research suite: 79 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -165,6 +165,8 @@ Accepted:
 - Per-attempt and end-to-end search/fetch latency telemetry now uses the same monotonic clock; wall time remains limited to persisted artifact timestamps.
 - Configured provider credentials are now literally redacted after structural URL sanitization, including URL paths, ordinary query parameters, normalized search/fetch output, failure indexes, artifact handles, and stored metadata.
 - Once the provider byte ceiling is observed, a later timeout or caller abort caused by best-effort stream cleanup cannot replace the authoritative non-retryable safety-policy failure.
+- Artifact parsing uses a stable 4 MiB per-record safety ceiling rather than the mutable aggregate capacity, so expired records remain inspectable and prunable after a configured byte-cap reduction.
+- Cache expiry uses both monotonic and nonnegative wall-clock elapsed time, with an unref'd one-second recheck bound while entries exist; rollback cannot extend TTL and suspend time still counts toward retention.
 
 Rejected as a current PR blocker:
 

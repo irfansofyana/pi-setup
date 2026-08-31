@@ -2,23 +2,44 @@ import { createHash } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+// Stable per-record parsing ceiling. Aggregate capacity is configurable and
+// may shrink across upgrades, but must not make older expired records unreadable.
+const MAX_STORED_ARTIFACT_BYTES = 4 * 1024 * 1024;
+
 export class TimedCache<T> {
-  private readonly entries = new Map<string, { value: T; createdAt: number; expiresAt: number }>();
+  private readonly entries = new Map<string, {
+    value: T;
+    createdAt: number;
+    expiresAt: number;
+    wallCreatedAt: number;
+    wallExpiresAt: number;
+  }>();
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
+  private readonly wallNow: () => number;
   private readonly ttlMs: number;
   private readonly maxEntries: number;
+  private readonly maxExpiryRecheckMs: number;
 
-  constructor(now: () => number, ttlMs: number, maxEntries: number) {
+  constructor(
+    now: () => number,
+    ttlMs: number,
+    maxEntries: number,
+    wallNow: () => number = now,
+    maxExpiryRecheckMs = 1_000,
+  ) {
     this.now = now;
+    this.wallNow = wallNow;
     this.ttlMs = ttlMs;
     this.maxEntries = maxEntries;
+    this.maxExpiryRecheckMs = Math.max(1, maxExpiryRecheckMs);
   }
 
   private sweepExpired(): void {
     const now = this.now();
+    const wallNow = this.wallNow();
     for (const [key, entry] of this.entries) {
-      if (entry.expiresAt <= now) this.entries.delete(key);
+      if (entry.expiresAt <= now || entry.wallExpiresAt <= wallNow) this.entries.delete(key);
     }
   }
 
@@ -31,7 +52,7 @@ export class TimedCache<T> {
       this.expiryTimer = undefined;
       this.sweepExpired();
       this.scheduleExpirySweep();
-    }, Math.max(0, earliest - this.now()));
+    }, Math.min(this.maxExpiryRecheckMs, Math.max(0, earliest - this.now())));
     this.expiryTimer.unref?.();
   }
 
@@ -49,7 +70,10 @@ export class TimedCache<T> {
     this.entries.delete(key);
     this.entries.set(key, entry);
     this.scheduleExpirySweep();
-    return { value: entry.value, ageMs: Math.max(0, this.now() - entry.createdAt) };
+    return {
+      value: entry.value,
+      ageMs: Math.max(0, this.now() - entry.createdAt, this.wallNow() - entry.wallCreatedAt),
+    };
   }
 
   set(key: string, value: T): void {
@@ -62,7 +86,14 @@ export class TimedCache<T> {
       this.entries.delete(oldest);
     }
     const createdAt = this.now();
-    this.entries.set(key, { value, createdAt, expiresAt: createdAt + this.ttlMs });
+    const wallCreatedAt = this.wallNow();
+    this.entries.set(key, {
+      value,
+      createdAt,
+      expiresAt: createdAt + this.ttlMs,
+      wallCreatedAt,
+      wallExpiresAt: wallCreatedAt + this.ttlMs,
+    });
     this.scheduleExpirySweep();
   }
 }
@@ -158,7 +189,7 @@ export class ArtifactStore {
 
   private async loadStoredArtifact(path: string, expectedId: string): Promise<StoredArtifact> {
     const info = await lstat(path);
-    if (info.isSymbolicLink() || !info.isFile() || info.size > this.options.maxBytes) {
+    if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_STORED_ARTIFACT_BYTES) {
       throw new Error("Artifact is not a safe regular file.");
     }
     let record: Partial<StoredArtifact>;
@@ -229,8 +260,9 @@ export class ArtifactStore {
       const { context: _context, ...storedInput } = input;
       const record: StoredArtifact = { id, ...storedInput, canonicalUrl: input.canonicalUrl ?? input.url, contextKey, createdAt, expiresAt };
       const data = `${JSON.stringify(record)}\n`;
-      if (Buffer.byteLength(data) > this.options.maxBytes) throw new Error("Fetched content exceeds the artifact store byte limit.");
-      await this.cleanup(1, Buffer.byteLength(data));
+      const dataBytes = Buffer.byteLength(data);
+      if (dataBytes > Math.min(this.options.maxBytes, MAX_STORED_ARTIFACT_BYTES)) throw new Error("Fetched content exceeds the artifact store byte limit.");
+      await this.cleanup(1, dataBytes);
       ArtifactStore.throwIfAborted(signal);
       const target = join(this.options.root, `${id}.json`);
       const temporary = join(this.options.root, `.${id}.${process.pid}.tmp`);
