@@ -7,6 +7,7 @@ import { ArtifactStore, TimedCache, type ArtifactRecord } from "./storage.ts";
 import {
   defaultSleep,
   requestJson,
+  responseRequestId,
   WebProviderError,
   type ErrorKind,
   type ProviderName,
@@ -577,7 +578,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
       score: numericValue(result.score),
     }];
   });
-  const requestId = safeRequestId(payload.request_id);
+  const requestId = safeRequestId(payload.request_id) ?? responseRequestId(response);
   truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
   const providerValues = sensitiveUrlValues(rawResults.flatMap((value) => {
     if (!value || typeof value !== "object") return [];
@@ -638,7 +639,7 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
       author: author.value,
     }];
   });
-  const requestId = safeRequestId(payload.requestId);
+  const requestId = safeRequestId(payload.requestId) ?? responseRequestId(response);
   truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
   const providerValues = sensitiveUrlValues(rawResults.flatMap((value) => {
     if (!value || typeof value !== "object") return [];
@@ -945,7 +946,7 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
     return [{ url, ...classifyFetchFailure(result.error, "extract_failed") }];
   });
   truncated ||= rawFailures.length > input.urls.length;
-  const requestId = safeRequestId(payload.request_id);
+  const requestId = safeRequestId(payload.request_id) ?? responseRequestId(response);
   truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
   const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
   const providerSecrets = sensitiveUrlValues([
@@ -1058,7 +1059,7 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
     return [{ ...failure, url: requestedUrl }];
   });
   truncated ||= rawStatuses.length > input.urls.length;
-  const requestId = safeRequestId(payload.requestId);
+  const requestId = safeRequestId(payload.requestId) ?? responseRequestId(response);
   truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
   const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
   const providerSecrets = sensitiveUrlValues([

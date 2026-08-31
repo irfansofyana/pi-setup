@@ -76,7 +76,7 @@ function retryAfterMs(response: Response): number | undefined {
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
-function responseRequestId(response: Response): string | undefined {
+export function responseRequestId(response: Response): string | undefined {
   for (const header of ["x-request-id", "request-id", "x-correlation-id"]) {
     const value = response.headers.get(header)?.trim();
     if (value && /^[A-Za-z0-9._:-]{1,200}$/.test(value)) return value;

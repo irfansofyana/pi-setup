@@ -121,6 +121,25 @@ test("web_search uses Tavily by default and labels compact snippets as discovery
   assert.ok(updates.length >= 1);
 });
 
+test("successful search adapters preserve safe header-only request IDs", async () => {
+  for (const provider of ["tavily", "exa"] as const) {
+    const headerId = `${provider}-search-header`;
+    const tools = harness(async () => new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-request-id": headerId },
+    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+    const result = await tools.get("web_search").execute(
+      `header-${provider}`,
+      { query: "header request id", provider },
+      undefined,
+      undefined,
+      { cwd: "/tmp/project" },
+    );
+    assert.equal(result.details.requestId, headerId);
+    assert.equal(result.details.attempts[0].requestId, headerId);
+  }
+});
+
 test("web_search redacts sensitive values from URLs embedded in the query", async () => {
   const query = "find https://queryuser:querypass@docs.example.com/signed?token=%73ecret&password=space+value&client_secret=oauthclient&refresh_token=oauthrefresh&secret=secret%ZZvalue&code=secret%252Fvalue&key=ab#id_token=oauthid&access_token=fragmentsecret";
   const tools = harness(async () => new Response(JSON.stringify({
@@ -615,6 +634,29 @@ test("web_fetch uses Tavily Extract by default and reports independent URL failu
     retryCount: 0,
     artifacts: [],
   });
+});
+
+test("successful fetch adapters preserve safe header-only request IDs", async () => {
+  const requested = "https://docs.example.com/header-id";
+  for (const provider of ["tavily", "exa"] as const) {
+    const headerId = `${provider}-fetch-header`;
+    const payload = provider === "tavily"
+      ? { results: [{ url: requested, raw_content: "body" }], failed_results: [] }
+      : { results: [{ url: requested, text: "body" }] };
+    const tools = harness(async () => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-correlation-id": headerId },
+    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+    const result = await tools.get("web_fetch").execute(
+      `header-${provider}`,
+      { urls: [requested], provider },
+      undefined,
+      undefined,
+      { cwd: "/tmp/project" },
+    );
+    assert.equal(result.details.requestId, headerId);
+    assert.equal(result.details.attempts[0].requestId, headerId);
+  }
 });
 
 test("web_fetch drops provider-returned content attached to a non-public URL", async () => {

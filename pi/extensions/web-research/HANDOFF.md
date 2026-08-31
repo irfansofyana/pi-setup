@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 508 passed, 0 failed.
-- Focused web-research suite: 82 passed, 0 failed.
+- Full repository suite: 510 passed, 0 failed.
+- Focused web-research suite: 84 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -170,6 +170,7 @@ Accepted:
 - Configured Tavily/Exa credential literals are rejected in search queries, fetch URLs, and focus text before cache construction or provider calls.
 - Successful-HTTP response-body timeouts now consume same-provider retries within the shared operation deadline before fallback is considered.
 - Sensitive URL redaction is capped at 64 distinct patterns and 32 KiB aggregate; oversized redaction work fails closed before provider work or persistence.
+- All Tavily/Exa search and fetch success adapters preserve safely validated header-only request IDs when the payload omits one.
 
 Rejected as a current PR blocker:
 
