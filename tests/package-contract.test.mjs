@@ -47,6 +47,41 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(manifest.files.includes("skills"));
 });
 
+test("web-research evaluation corpus freezes every required benchmark dimension", async () => {
+  const corpus = await readJson("pi/extensions/web-research/evaluation-cases.json");
+  const caseIds = new Set(corpus.cases.map((entry) => entry.id));
+  for (const id of [
+    "current-official-fact",
+    "official-documentation-lookup",
+    "release-versus-main",
+    "conflicting-sources",
+    "obscure-technical-error",
+    "semantic-discovery",
+    "similar-page-discovery",
+    "news-freshness",
+    "domain-restrictions",
+    "partial-batch-fetch",
+    "oversized-content",
+    "cancel-during-provider-work",
+    "operation-timeout",
+    "rate-limit-transient-retry",
+    "auth-failure-no-fallback",
+    "provider-validation-failure",
+    "unsafe-url-preflight",
+    "ciung-context-isolation",
+  ]) assert.ok(caseIds.has(id), `missing frozen evaluation case: ${id}`);
+
+  const metrics = new Set(corpus.metrics);
+  for (const metric of [
+    "correctness", "primarySourceShare", "claimLevelEvidence", "citationValidity",
+    "contradictionCoverage", "unsupportedClaims", "unresolvedClaimsLabeledHonestly",
+    "relevance", "providerCost", "latencyMs", "parentVisibleCharacters", "fallbackCount",
+    "cancellationStoppedWork", "scopeDiscipline", "toolEfficiency",
+  ]) assert.ok(metrics.has(metric), `missing evaluation metric: ${metric}`);
+  assert.ok(corpus.comparisonModes.some((mode) => mode.includes("native tools")));
+  assert.ok(corpus.comparisonModes.some((mode) => mode.includes("Ciung")));
+});
+
 test("irfan-sumi ships its theme and editor together without mutating settings on install", async () => {
   const manifest = await readJson("package.json");
 

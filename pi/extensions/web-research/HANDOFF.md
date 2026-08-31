@@ -31,11 +31,11 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 531 passed, 0 failed.
+- Full repository suite: 532 passed, 0 failed.
 - Focused web-research suite: 105 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
-- Package contract: 7 passed, 0 failed.
+- Package contract: 8 passed, 0 failed.
 - Agent templates: 12 passed, 0 failed.
 - Pi strict-tool-allowlist load smoke: passed.
 - README invariant: 201 lines, within the required 180–250 range.
@@ -192,6 +192,7 @@ Accepted:
 - A fetch set shares one batch marker, so one filesystem-atomic unlink publishes every member together; a partial per-artifact commit is impossible.
 - Batch commit checks cancellation before publication and immediately after the unlink while still holding the capacity lock; cancellation restores the marker before rollback can release the lock.
 - A timeout owned by the shared operation deadline is terminal even if timer granularity fires slightly before the monotonic deadline; shorter per-attempt timeouts remain retryable.
+- The frozen evaluation corpus enumerates every E-1 benchmark dimension and E-2 quality metric for both direct-native and Ciung comparison modes; package-contract coverage prevents silent omissions.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
 Rejected as a current PR blocker:

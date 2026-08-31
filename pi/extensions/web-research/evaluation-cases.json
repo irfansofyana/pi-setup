@@ -14,12 +14,16 @@
     "citationValidity",
     "contradictionCoverage",
     "unsupportedClaims",
+    "unresolvedClaimsLabeledHonestly",
+    "relevance",
     "latencyMs",
     "providerCost",
     "parentVisibleCharacters",
     "fallbackCount",
     "retryCount",
-    "cancellationStoppedWork"
+    "cancellationStoppedWork",
+    "scopeDiscipline",
+    "toolEfficiency"
   ],
   "cases": [
     {
@@ -35,6 +39,18 @@
       "mustShow": ["released artifact distinction", "version", "primary source", "explicit unknowns"]
     },
     {
+      "id": "official-documentation-lookup",
+      "goal": "Answer a product behavior question from the owning project's current official documentation.",
+      "fixture": "Public first-party documentation and one non-authoritative secondary explanation.",
+      "mustShow": ["official source selected", "fetched evidence", "secondary source not treated as authority", "retrieval date"]
+    },
+    {
+      "id": "obscure-technical-error",
+      "goal": "Resolve an uncommon exact error using primary technical evidence.",
+      "fixture": "Public issue or source history containing the exact error and a nearby irrelevant keyword match.",
+      "mustShow": ["exact error preserved", "source or issue evidence", "irrelevant match rejected", "uncertainty labeled"]
+    },
+    {
       "id": "semantic-discovery",
       "goal": "Find conceptually related technical material where keyword matching is weak.",
       "fixture": "Public technical corpus with one known relevant semantic neighbor.",
@@ -45,6 +61,24 @@
       "goal": "Represent a conflict between current official documentation and an older article.",
       "fixture": "Two public dated URLs with materially different claims.",
       "mustShow": ["both dates", "support and contradiction", "confirmed/inferred/unknown state", "stopping reason"]
+    },
+    {
+      "id": "similar-page-discovery",
+      "goal": "Find pages materially similar to a known public technical page.",
+      "fixture": "One seed URL, one known similar page, and one topically adjacent but structurally unrelated page.",
+      "mustShow": ["observable Exa similar-page route", "seed identity", "selected source fetch", "adjacent false positive rejected"]
+    },
+    {
+      "id": "news-freshness",
+      "goal": "Identify the newest material update on a public topic within a stated date window.",
+      "fixture": "Dated official announcement, newer low-authority repost, and older official documentation.",
+      "mustShow": ["date window applied", "publication dates", "authority and freshness distinguished", "latest material claim fetched"]
+    },
+    {
+      "id": "domain-restrictions",
+      "goal": "Research only within an explicit allowlist of public domains.",
+      "fixture": "Relevant results inside and outside two allowed domains.",
+      "mustShow": ["domain filter sent", "all returned evidence in scope", "out-of-scope result excluded", "no silent filter widening"]
     },
     {
       "id": "partial-batch-fetch",
@@ -65,10 +99,34 @@
       "mustShow": ["underlying signal aborted", "no fallback", "no artifact write", "cancelled classification"]
     },
     {
+      "id": "operation-timeout",
+      "goal": "Stop provider work when the shared operation deadline expires.",
+      "fixture": "Deterministic provider response delayed beyond the operation deadline.",
+      "mustShow": ["timeout classification", "bounded attempts", "underlying signal aborted", "no post-deadline fallback"]
+    },
+    {
+      "id": "rate-limit-transient-retry",
+      "goal": "Retry bounded transient failures and expose the consumed retry budget.",
+      "fixture": "Synthetic 429 with Retry-After, synthetic 503, then a successful response within the deadline.",
+      "mustShow": ["retryable classification", "bounded Retry-After", "retry count", "shared deadline preserved"]
+    },
+    {
       "id": "auth-failure-no-fallback",
       "goal": "Handle a Tavily authentication failure while Exa is configured.",
       "fixture": "Synthetic 401 response containing an unsafe upstream body.",
       "mustShow": ["no provider switch", "redacted error", "one provider attempt", "no credential value"]
+    },
+    {
+      "id": "provider-validation-failure",
+      "goal": "Fail closed on a provider validation or malformed-payload response.",
+      "fixture": "Synthetic HTTP 400 validation response and malformed HTTP 200 collection payload.",
+      "mustShow": ["normalized validation or upstream class", "same-provider retry policy", "safe request metadata", "no raw provider exception"]
+    },
+    {
+      "id": "unsafe-url-preflight",
+      "goal": "Reject private, special-use, credential-bearing, and malformed target URLs before provider work.",
+      "fixture": "Synthetic loopback, private IPv4, special-use IPv6, URL userinfo, and malformed host inputs.",
+      "mustShow": ["zero provider calls", "safety-policy classification", "no DNS or target fetch", "no sensitive URL echo"]
     },
     {
       "id": "ciung-context-isolation",
