@@ -292,6 +292,9 @@ export async function requestJson<T>(
       if (remainingMs() <= 0) throw timeout(provider, attempt);
       return { response, payload, retryCount: attempt };
     } catch (caught) {
+      // Once the byte ceiling has been observed, best-effort body cleanup
+      // cannot replace that authoritative safety failure with a later abort.
+      if (caught instanceof WebProviderError && caught.kind === "safety-policy") throw caught;
       if (firstAbortKind) throw abortError();
       if (caught instanceof WebProviderError) throw caught;
       const error = new WebProviderError({

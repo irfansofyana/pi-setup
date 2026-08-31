@@ -380,14 +380,18 @@ function redactValues(text: string | undefined, values: string[]): string | unde
   }, text);
 }
 
+function redactDisplayedUrl(url: string, values: string[]): string {
+  return redactValues(redactUrlForDisplay(url), values) ?? "[REDACTED]";
+}
+
 function redactFetchResponse(response: ProviderFetchResponse, values: string[]): ProviderFetchResponse {
   return {
     ...response,
     requestId: redactValues(response.requestId, values),
     documents: response.documents.map((document) => ({
       ...document,
-      url: redactUrlForDisplay(document.url),
-      canonicalUrl: redactUrlForDisplay(document.canonicalUrl),
+      url: redactDisplayedUrl(document.url, values),
+      canonicalUrl: redactDisplayedUrl(document.canonicalUrl, values),
       title: redactValues(document.title, values) ?? "Untitled result",
       snippets: document.snippets.map((snippet) => redactValues(snippet, values) ?? ""),
       content: redactValues(document.content, values) ?? "",
@@ -396,7 +400,7 @@ function redactFetchResponse(response: ProviderFetchResponse, values: string[]):
     })),
     failures: response.failures.map((failure) => ({
       ...failure,
-      url: redactUrlForDisplay(failure.url),
+      url: redactDisplayedUrl(failure.url, values),
       error: redactValues(failure.error, values) ?? "provider_failure",
     })),
   };
@@ -439,6 +443,8 @@ function redactSearchResponse(response: ProviderSearchResponse, values: string[]
     requestId: redactValues(response.requestId, values),
     documents: response.documents.map((document) => ({
       ...document,
+      url: redactDisplayedUrl(document.url, values),
+      canonicalUrl: redactDisplayedUrl(document.canonicalUrl, values),
       title: redactValues(document.title, values) ?? "Untitled result",
       snippets: document.snippets.map((snippet) => redactValues(snippet, values) ?? ""),
       publishedAt: redactValues(document.publishedAt, values),

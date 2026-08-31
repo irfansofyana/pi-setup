@@ -163,6 +163,8 @@ Accepted:
 - IPv6 target validation now requires globally routable unicast, blocks the current IANA non-global ranges including `100:0:0:1::/64` and the unassigned remainder of `2001::/23`, and explicitly permits its globally reachable registered exceptions.
 - Search and fetch cache TTLs now use the monotonic clock, so a backward wall-clock adjustment cannot extend retention or idle expiry.
 - Per-attempt and end-to-end search/fetch latency telemetry now uses the same monotonic clock; wall time remains limited to persisted artifact timestamps.
+- Configured provider credentials are now literally redacted after structural URL sanitization, including URL paths, ordinary query parameters, normalized search/fetch output, failure indexes, artifact handles, and stored metadata.
+- Once the provider byte ceiling is observed, a later timeout or caller abort caused by best-effort stream cleanup cannot replace the authoritative non-retryable safety-policy failure.
 
 Rejected as a current PR blocker:
 

@@ -153,7 +153,7 @@ test("web_search redacts configured provider credentials from output and telemet
   const apiKey = "tavily-configured-secret";
   const tools = harness(async () => new Response(JSON.stringify({
     request_id: apiKey,
-    results: [{ url: "https://docs.example.com/page", title: `echo ${apiKey}`, content: `body ${apiKey}` }],
+    results: [{ url: `https://docs.example.com/${apiKey}?ordinary=${apiKey}`, title: `echo ${apiKey}`, content: `body ${apiKey}` }],
   }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: apiKey });
   const result = await tools.get("web_search").execute("configured-secret", { query: "ordinary query" }, undefined, undefined, { cwd: "/tmp/project" });
   assert.doesNotMatch(JSON.stringify(result), new RegExp(apiKey, "i"));
@@ -641,10 +641,11 @@ test("web_fetch redacts configured credentials and focus URL secrets from output
   const root = await mkdtemp(join(tmpdir(), "pi-web-research-focus-redaction-"));
   const apiKey = "tavily-fetch-secret";
   const focusSecret = "focus-oauth-secret";
+  const requestedUrl = `https://docs.example.com/${apiKey}?ordinary=${apiKey}`;
   const tools = harness(async () => new Response(JSON.stringify({
     request_id: apiKey,
     results: [{
-      url: "https://docs.example.com/page",
+      url: requestedUrl,
       title: `echo ${apiKey} ${focusSecret}`,
       raw_content: `body ${apiKey} ${focusSecret} `.repeat(100),
     }],
@@ -655,7 +656,7 @@ test("web_fetch redacts configured credentials and focus URL secrets from output
     randomId: () => "focus-redaction-artifact",
   });
   const result = await tools.get("web_fetch").execute("focus-redaction", {
-    urls: ["https://docs.example.com/page"],
+    urls: [requestedUrl],
     focus: `inspect https://focus.example.com/callback#client_secret=${focusSecret}`,
   }, undefined, undefined, { cwd: "/tmp/project" });
   assert.doesNotMatch(JSON.stringify(result), new RegExp(`${apiKey}|${focusSecret}`, "i"));
@@ -1033,19 +1034,23 @@ test("stream cleanup failure preserves safety-policy and prevents fallback", asy
 
 test("never-settling stream cleanup cannot delay the authoritative safety failure", async () => {
   let calls = 0;
+  const controller = new AbortController();
   const tools = harness(async () => {
     calls++;
     return new Response(new ReadableStream({
       start(controller) { controller.enqueue(new Uint8Array(101)); },
-      cancel() { return new Promise<void>(() => {}); },
+      cancel() {
+        controller.abort();
+        return new Promise<void>(() => {});
+      },
     }), { status: 200, headers: { "content-type": "application/json" } });
   }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, {
     maxRetries: 2,
     maxResponseBytes: 100,
-    totalRequestTimeoutMs: 20,
+    totalRequestTimeoutMs: 1,
   });
   const outcome = await Promise.race([
-    tools.get("web_search").execute("never-settling-cleanup", { query: "bounded body" }, undefined, undefined, { cwd: "/tmp/project" })
+    tools.get("web_search").execute("never-settling-cleanup", { query: "bounded body" }, controller.signal, undefined, { cwd: "/tmp/project" })
       .then(() => "resolved", (error: unknown) => error),
     new Promise((resolve) => setTimeout(() => resolve("hung"), 100)),
   ]);
