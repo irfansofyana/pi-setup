@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 528 passed, 0 failed.
-- Focused web-research suite: 102 passed, 0 failed.
+- Full repository suite: 529 passed, 0 failed.
+- Focused web-research suite: 103 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -186,6 +186,8 @@ Accepted:
 - Transport, payload-shape, and HTTP-200 batch retries share one per-provider retry budget; retry transitions no longer reset the provider allowance.
 - Cancellation during batch backoff retains accumulated attempts and retry counts in normalized terminal telemetry.
 - Running processes periodically discover artifacts created by peer processes, so retention does not depend on the writer staying alive.
+- Oversized fetch preparation reuses an unexpired exact-match artifact under the filesystem lock; the opaque key covers normalized URL, canonical URL, title, provider, options, and content, allowing cache hits to succeed at capacity without duplicate files.
+- Reused artifacts are not rollback-owned by the current call, so cancellation cannot delete an artifact created by an earlier request or peer.
 
 Rejected as a current PR blocker:
 

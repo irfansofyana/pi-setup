@@ -1292,6 +1292,7 @@ async function prepareFetchResults(
 ): Promise<{ text: string; truncated: boolean; artifacts: Array<Omit<ArtifactRecord, "path">> }> {
   ensureNotCancelled(signal, response.provider);
   const records: Array<Omit<ArtifactRecord, "path">> = [];
+  const rollbackIds: string[] = [];
   const artifactIds: Array<string | undefined> = [];
   let truncated = response.truncated || response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
@@ -1339,7 +1340,8 @@ async function prepareFetchResults(
         } catch (error) {
           throw normalizeArtifactError(error, response.provider);
         }
-        const { path: _path, ...handle } = artifact;
+        const { path: _path, reused, ...handle } = artifact;
+        if (!reused) rollbackIds.push(artifact.id);
         records.push(handle);
         artifactIds[index] = artifact.id;
         ensureNotCancelled(signal, response.provider);
@@ -1356,7 +1358,7 @@ async function prepareFetchResults(
       }
     }
   } catch (error) {
-    await Promise.allSettled(records.map((record) => artifacts.discard(record.id)));
+    await Promise.allSettled(rollbackIds.map((id) => artifacts.discard(id)));
     throw error;
   }
   const index = outcomeIndex();

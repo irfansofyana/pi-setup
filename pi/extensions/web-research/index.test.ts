@@ -1781,6 +1781,32 @@ test("an aborted web_search rejects instead of returning a cached result", async
   assert.equal(calls, 1);
 });
 
+test("identical oversized fetch cache hits reuse one artifact at capacity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-research-artifact-reuse-"));
+  let calls = 0;
+  let ids = 0;
+  const tools = harness(async () => {
+    calls++;
+    return new Response(JSON.stringify({
+      request_id: "artifact-reuse",
+      results: [{ url: "https://example.com/reuse", title: "Reuse", raw_content: "x".repeat(20_000) }],
+      failed_results: [],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }, { TAVILY_API_KEY: "test-tavily" }, {
+    artifactRoot: root,
+    artifactMaxEntries: 1,
+    maxInlineChars: 1_000,
+    randomId: () => `artifact-${++ids}`,
+  });
+  const params = { urls: ["https://example.com/reuse"], maxCharactersPerResult: 20_000 };
+  const first = await tools.get("web_fetch").execute("artifact-reuse-1", params, undefined, undefined, { cwd: "/tmp/project" });
+  const second = await tools.get("web_fetch").execute("artifact-reuse-2", params, undefined, undefined, { cwd: "/tmp/project" });
+  assert.equal(calls, 1);
+  assert.equal(first.details.artifacts[0].id, "artifact-1");
+  assert.equal(second.details.artifacts[0].id, "artifact-1");
+  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), ["artifact-1.json"]);
+});
+
 test("oversized fetched content is truncated inline and stored in an owner-only artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-research-artifacts-"));
   const fullContent = `# Large source\n${"x".repeat(20_000)}\nEND-SENTINEL`;

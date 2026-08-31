@@ -105,6 +105,7 @@ export interface ArtifactRecord {
   chars: number;
   createdAt: string;
   expiresAt: string;
+  reused?: boolean;
 }
 
 export interface ArtifactStoreOptions {
@@ -276,6 +277,27 @@ export class ArtifactStore {
     }
   }
 
+  private async reusableArtifact(contextKey: string): Promise<ArtifactRecord | undefined> {
+    const names = await readdir(this.options.root);
+    for (const name of names.filter((candidate) => candidate.endsWith(".json")).sort()) {
+      const path = join(this.options.root, name);
+      const record = await this.loadStoredArtifact(path, name.slice(0, -5));
+      const expiresAt = Date.parse(record.expiresAt);
+      if (expiresAt <= this.options.now() || record.contextKey !== contextKey) continue;
+      this.scheduleExpirySweep(expiresAt);
+      return {
+        id: record.id,
+        path,
+        url: record.url,
+        chars: record.content.length,
+        createdAt: record.createdAt,
+        expiresAt: record.expiresAt,
+        reused: true,
+      };
+    }
+    return undefined;
+  }
+
   async save(input: { url: string; canonicalUrl?: string; title: string; content: string; provider: string; context?: Record<string, unknown> }, signal?: AbortSignal): Promise<ArtifactRecord> {
     let publishedTarget: string | undefined;
     const compensate = async () => {
@@ -288,13 +310,22 @@ export class ArtifactStore {
     };
     return this.withCapacityLock(async () => {
       ArtifactStore.throwIfAborted(signal);
+      const contextKey = createHash("sha256")
+        .update(JSON.stringify({
+          url: input.url,
+          canonicalUrl: input.canonicalUrl ?? input.url,
+          title: input.title,
+          content: input.content,
+          provider: input.provider,
+          context: input.context ?? {},
+        }))
+        .digest("hex");
+      const reusable = await this.reusableArtifact(contextKey);
+      if (reusable) return reusable;
       const id = this.options.randomId();
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new Error("Artifact ID generator returned an unsafe value.");
       const createdAt = new Date(this.options.now()).toISOString();
       const expiresAt = new Date(this.options.now() + this.options.ttlMs).toISOString();
-      const contextKey = createHash("sha256")
-        .update(JSON.stringify({ url: input.url, provider: input.provider, ...(input.context ?? {}) }))
-        .digest("hex");
       const { context: _context, ...storedInput } = input;
       const record: StoredArtifact = { id, ...storedInput, canonicalUrl: input.canonicalUrl ?? input.url, contextKey, createdAt, expiresAt };
       const data = `${JSON.stringify(record)}\n`;
