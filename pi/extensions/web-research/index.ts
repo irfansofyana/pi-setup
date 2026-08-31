@@ -257,16 +257,32 @@ function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function providerPayload(value: unknown, provider: ProviderName): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function providerPayload(
+  value: unknown,
+  provider: ProviderName,
+  retryCount: number,
+  requiredCollections: string[],
+  optionalCollections: string[] = [],
+): Record<string, unknown> {
+  const invalid = (): never => {
     throw new WebProviderError({
       provider,
       kind: "upstream",
       message: `${providerLabel(provider)} returned an invalid payload shape.`,
       retryable: true,
+      retryCount,
     });
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+  const payload = value as Record<string, unknown>;
+  for (const field of [...requiredCollections, ...optionalCollections]) {
+    const collection = payload[field];
+    if (collection === undefined && optionalCollections.includes(field)) continue;
+    if (!Array.isArray(collection)) invalid();
+    const entries = collection as unknown[];
+    if (entries.some((entry: unknown) => !entry || typeof entry !== "object" || Array.isArray(entry))) invalid();
   }
-  return value as Record<string, unknown>;
+  return payload;
 }
 
 function numericValue(value: unknown): number | undefined {
@@ -325,7 +341,7 @@ function providerLabel(provider: ProviderName): string {
 const SENSITIVE_QUERY_KEYS = new Set([
   "accesskey", "accesstoken", "apikey", "auth", "authorization", "clientsecret", "code", "credential",
   "idtoken", "jwt", "key", "oauthtoken", "password", "passwd", "refreshtoken", "secret", "session", "sessionid", "sig", "signature",
-  "token", "xamzcredential", "xamzsecuritytoken", "xamzsignature", "xgoogcredential", "xgoogsignature",
+  "token", "xapikey", "xamzcredential", "xamzsecuritytoken", "xamzsignature", "xgoogcredential", "xgoogsignature",
 ]);
 
 function redactUrlForDisplay(value: string): string {
@@ -565,8 +581,8 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
       ...(input.publishedAfter ? { start_date: input.publishedAfter.slice(0, 10) } : {}),
       ...(input.publishedBefore ? { end_date: input.publishedBefore.slice(0, 10) } : {}),
     }),
-  }, dependencies, signal, deadlineAt);
-  const payload = providerPayload(rawPayload, "tavily");
+  }, dependencies, signal, deadlineAt, (value, retryCount) => providerPayload(value, "tavily", retryCount, ["results"]));
+  const payload = rawPayload;
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.maxResults;
   const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
@@ -623,8 +639,8 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
       ...(input.publishedAfter ? { startPublishedDate: input.publishedAfter } : {}),
       ...(input.publishedBefore ? { endPublishedDate: input.publishedBefore } : {}),
     }),
-  }, dependencies, signal, deadlineAt);
-  const payload = providerPayload(rawPayload, "exa");
+  }, dependencies, signal, deadlineAt, (value, retryCount) => providerPayload(value, "exa", retryCount, ["results"]));
+  const payload = rawPayload;
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.maxResults;
   const documents = rawResults.slice(0, input.maxResults).flatMap((value): WebDocument[] => {
@@ -923,8 +939,8 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
       format: "markdown",
       ...(input.focus ? { query: input.focus } : {}),
     }),
-  }, dependencies, signal, deadlineAt);
-  const payload = providerPayload(rawPayload, "tavily");
+  }, dependencies, signal, deadlineAt, (value, retryCount) => providerPayload(value, "tavily", retryCount, ["results"], ["failed_results"]));
+  const payload = rawPayload;
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {
@@ -1032,8 +1048,8 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
       text: { maxCharacters: input.maxCharactersPerResult },
       ...(input.focus ? { highlights: { query: input.focus, maxCharacters: input.maxCharactersPerResult } } : {}),
     }),
-  }, dependencies, signal, deadlineAt);
-  const payload = providerPayload(rawPayload, "exa");
+  }, dependencies, signal, deadlineAt, (value, retryCount) => providerPayload(value, "exa", retryCount, ["results"], ["statuses"]));
+  const payload = rawPayload;
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let truncated = rawResults.length > input.urls.length;
   const documents = rawResults.slice(0, input.urls.length).flatMap((value): Array<WebDocument & { content: string; providerTruncated: boolean }> => {

@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 514 passed, 0 failed.
-- Focused web-research suite: 88 passed, 0 failed.
+- Full repository suite: 516 passed, 0 failed.
+- Focused web-research suite: 90 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -173,6 +173,8 @@ Accepted:
 - All Tavily/Exa search and fetch success adapters preserve safely validated header-only request IDs when the payload omits one.
 - All four adapters reject non-object JSON payloads as normalized retryable upstream failures before dereferencing provider fields.
 - Unsafe payload request IDs still set truncation even when a safe response-header fallback is available.
+- Required provider result collections and optional failure/status collections are validated inside the transport retry boundary; missing, wrong-typed, or malformed collections exhaust same-provider retries before fallback.
+- `x-api-key`/`xapikey` URL parameters are classified and redacted as sensitive across output, telemetry, cache, and artifacts.
 
 Rejected as a current PR blocker:
 

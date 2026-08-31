@@ -218,6 +218,7 @@ export async function requestJson<T>(
   dependencies: TransportDependencies,
   callerSignal?: AbortSignal,
   operationDeadlineAt?: number,
+  validatePayload?: (payload: unknown, retryCount: number) => unknown,
 ): Promise<JsonTransportResponse<T>> {
   const startedAt = dependencies.monotonicNow();
   const deadlineAt = operationDeadlineAt ?? (dependencies.totalRequestTimeoutMs > 0
@@ -287,7 +288,8 @@ export async function requestJson<T>(
     }
 
     try {
-      const payload = await boundedJson<T>(provider, response, dependencies.maxResponseBytes, attempt, signal, abortError);
+      const decoded = await boundedJson<unknown>(provider, response, dependencies.maxResponseBytes, attempt, signal, abortError);
+      const payload = (validatePayload ? validatePayload(decoded, attempt) : decoded) as T;
       if (firstAbortKind) throw abortError();
       if (remainingMs() <= 0) throw timeout(provider, attempt);
       return { response, payload, retryCount: attempt };

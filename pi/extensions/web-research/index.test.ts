@@ -140,16 +140,33 @@ test("successful search adapters preserve safe header-only request IDs", async (
   }
 });
 
-test("search adapters normalize null provider payloads", async () => {
+test("search adapters normalize null provider payloads and exhaust same-provider retries", async () => {
   for (const provider of ["tavily", "exa"] as const) {
-    const tools = harness(async () => new Response("null", {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
+    let calls = 0;
+    const tools = harness(async () => {
+      calls++;
+      return new Response("null", { status: 200, headers: { "content-type": "application/json" } });
+    }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
     await assert.rejects(
       tools.get("web_search").execute("null-search", { query: "null payload", provider }, undefined, undefined, { cwd: "/tmp/project" }),
       (error: unknown) => error instanceof WebProviderError && error.kind === "upstream" && error.retryable,
     );
+    assert.equal(calls, 3);
+  }
+});
+
+test("search adapters reject missing wrong-typed and malformed result collections", async () => {
+  for (const provider of ["tavily", "exa"] as const) {
+    for (const payload of [{}, { results: "invalid" }, { results: [null] }]) {
+      const tools = harness(async () => new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
+      await assert.rejects(
+        tools.get("web_search").execute("invalid-search", { query: "invalid collection", provider }, undefined, undefined, { cwd: "/tmp/project" }),
+        (error: unknown) => error instanceof WebProviderError && error.kind === "upstream" && error.retryable,
+      );
+    }
   }
 });
 
@@ -682,17 +699,36 @@ test("successful fetch adapters preserve safe header-only request IDs", async ()
   }
 });
 
-test("fetch adapters normalize null provider payloads", async () => {
+test("fetch adapters normalize null provider payloads and exhaust same-provider retries", async () => {
   const requested = "https://docs.example.com/null-payload";
   for (const provider of ["tavily", "exa"] as const) {
-    const tools = harness(async () => new Response("null", {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
+    let calls = 0;
+    const tools = harness(async () => {
+      calls++;
+      return new Response("null", { status: 200, headers: { "content-type": "application/json" } });
+    }, { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
     await assert.rejects(
       tools.get("web_fetch").execute("null-fetch", { urls: [requested], provider }, undefined, undefined, { cwd: "/tmp/project" }),
       (error: unknown) => error instanceof WebProviderError && error.kind === "upstream" && error.retryable,
     );
+    assert.equal(calls, 3);
+  }
+});
+
+test("fetch adapters reject missing wrong-typed and malformed provider collections", async () => {
+  const requested = "https://docs.example.com/invalid-collection";
+  for (const provider of ["tavily", "exa"] as const) {
+    const optionalField = provider === "tavily" ? "failed_results" : "statuses";
+    for (const payload of [{}, { results: "invalid" }, { results: [null] }, { results: [], [optionalField]: "invalid" }]) {
+      const tools = harness(async () => new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" }, { maxRetries: 0 });
+      await assert.rejects(
+        tools.get("web_fetch").execute("invalid-fetch", { urls: [requested], provider }, undefined, undefined, { cwd: "/tmp/project" }),
+        (error: unknown) => error instanceof WebProviderError && error.kind === "upstream" && error.retryable,
+      );
+    }
   }
 });
 
@@ -732,7 +768,7 @@ test("web_fetch drops provider-returned content attached to a non-public URL", a
 
 test("web_fetch redacts sensitive query values from output and artifact metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-research-redacted-url-"));
-  const signedUrl = "https://docs.example.com/signed?token=%73ecret&token=Second%2BValue&password=space+value&secret=secret%ZZvalue&code=secret%252Fvalue&key=ab&x=1#access_token=fragment-secret";
+  const signedUrl = "https://docs.example.com/signed?token=%73ecret&token=Second%2BValue&password=space+value&secret=secret%ZZvalue&code=secret%252Fvalue&key=ab&x-api-key=xapi-secret&x=1#access_token=fragment-secret";
   let requestBody: Record<string, unknown> | undefined;
   const tools = harness(async (_input, init = {}) => {
     requestBody = JSON.parse(String(init.body));
@@ -758,13 +794,13 @@ test("web_fetch redacts sensitive query values from output and artifact metadata
   assert.match(JSON.stringify(requestBody), /token=%73ecret/);
   assert.doesNotMatch(JSON.stringify(requestBody), /fragment-secret/);
   const visible = result.content[0]?.text ?? "";
-  assert.doesNotMatch(visible, /%73ecret|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret/i);
+  assert.doesNotMatch(visible, /%73ecret|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret|xapi-secret/i);
   assert.doesNotMatch(visible, /(?:echo|provider echoed)[^\n]*\bab\b/i);
   assert.doesNotMatch(JSON.stringify(result.details), /%73ecret|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret/i);
   assert.match(visible, /token=REDACTED/);
   assert.match(visible, /x=1/);
   const stored = await readFile(join(root, `${result.details.artifacts[0].id}.json`), "utf8");
-  assert.doesNotMatch(stored, /%73ecret|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret/i);
+  assert.doesNotMatch(stored, /%73ecret|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret|xapi-secret/i);
   assert.doesNotMatch(stored, /provider echoed[^\n]*\bab\b/i);
   assert.match(stored, /token=REDACTED/);
 });
