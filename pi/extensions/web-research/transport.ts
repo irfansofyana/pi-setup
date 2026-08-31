@@ -71,7 +71,10 @@ function retryAfterMs(response: Response): number | undefined {
   const raw = response.headers.get("retry-after");
   if (!raw) return undefined;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1_000);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    const milliseconds = seconds * 1_000;
+    return Number.isSafeInteger(Math.round(milliseconds)) ? Math.round(milliseconds) : undefined;
+  }
   const date = Date.parse(raw);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
@@ -106,6 +109,7 @@ function responseError(provider: ProviderName, response: Response, retryCount: n
   if (status === 402) return new WebProviderError({ provider, kind: "payment_or_quota", message: `${label} payment or quota check failed.`, status, requestId, retryCount });
   if (status === 403) return new WebProviderError({ provider, kind: "permission", message: `${label} permission was denied.`, status, requestId, retryCount });
   if (status === 404) return new WebProviderError({ provider, kind: "not_found", message: `${label} endpoint was not found.`, status, requestId, retryCount });
+  if (status === 408) return new WebProviderError({ provider, kind: "timeout", message: `${label} request timed out.`, status, requestId, retryable: true, retryCount });
   if (status === 400 || status === 409 || status === 422) {
     return new WebProviderError({ provider, kind: "validation", message: `${label} rejected the request.`, status, requestId, retryCount });
   }

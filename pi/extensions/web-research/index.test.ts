@@ -1660,6 +1660,51 @@ test("transport clamps numeric and date Retry-After values", async () => {
   }
 });
 
+test("HTTP 408 retries as a normalized timeout", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    if (calls === 1) return new Response("request timeout", { status: 408 });
+    return new Response(JSON.stringify({ request_id: "after-408", results: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, { TAVILY_API_KEY: "test-tavily" }, {
+    maxRetries: 1,
+    sleep: async () => undefined,
+  });
+
+  const result = await tools.get("web_search").execute(
+    "retry-408",
+    { query: "request timeout", provider: "tavily" },
+    undefined,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+  assert.equal(calls, 2);
+  assert.equal(result.details.retryCount, 1);
+  assert.equal(result.details.attempts[0]?.outcome, "empty");
+});
+
+test("oversized numeric Retry-After never exposes non-finite telemetry", async () => {
+  const retryAfter = "9".repeat(308);
+  const tools = harness(async () => new Response("rate limited", {
+    status: 429,
+    headers: { "retry-after": retryAfter },
+  }), { TAVILY_API_KEY: "test-tavily" }, { maxRetries: 0 });
+
+  await assert.rejects(
+    tools.get("web_search").execute("oversized-retry-after", { query: "rate limit" }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebProviderError);
+      assert.equal(error.kind, "rate_limit");
+      assert.equal(error.details.retryAfterMs, undefined);
+      assert.doesNotMatch(JSON.stringify(error.details), /null/);
+      return true;
+    },
+  );
+});
+
 test("transport applies one end-to-end deadline across provider attempts", async () => {
   let calls = 0;
   const tools = harness(async (_input, init = {}) => {
