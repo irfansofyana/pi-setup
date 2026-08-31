@@ -257,6 +257,7 @@ export async function requestJson<T>(
     const attemptTimeout = dependencies.requestTimeoutMs > 0
       ? Math.min(dependencies.requestTimeoutMs, remaining)
       : remaining;
+    const operationDeadlineOwnsTimeout = dependencies.requestTimeoutMs <= 0 || remaining <= dependencies.requestTimeoutMs;
     const timeoutSignal = Number.isFinite(attemptTimeout) ? AbortSignal.timeout(Math.max(1, Math.floor(attemptTimeout))) : undefined;
     const signal = callerSignal && timeoutSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : (callerSignal ?? timeoutSignal);
     const onTimeoutAbort = () => { firstAbortKind ??= "timeout"; };
@@ -271,7 +272,7 @@ export async function requestJson<T>(
       response = await dependencies.fetch(url, { ...init, signal });
     } catch {
       const error = abortError();
-      if (!error.retryable || attempt >= dependencies.maxRetries) throw error;
+      if (!error.retryable || attempt >= dependencies.maxRetries || (error.kind === "timeout" && operationDeadlineOwnsTimeout)) throw error;
       try {
         await dependencies.sleep(delayFor(error, attempt, dependencies.maxRetryDelayMs, remainingMs()), callerSignal);
       } catch {

@@ -191,6 +191,7 @@ Accepted:
 - Newly published artifacts carry owner-only pending markers and are ineligible for exact-match reuse until the creating call atomically commits its whole artifact set after every rollback point.
 - A fetch set shares one batch marker, so one filesystem-atomic unlink publishes every member together; a partial per-artifact commit is impossible.
 - Batch commit checks cancellation before publication and immediately after the unlink while still holding the capacity lock; cancellation restores the marker before rollback can release the lock.
+- A timeout owned by the shared operation deadline is terminal even if timer granularity fires slightly before the monotonic deadline; shorter per-attempt timeouts remain retryable.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
 Rejected as a current PR blocker:
