@@ -377,12 +377,13 @@ function redactValues(text: string | undefined, values: string[]): string | unde
 }
 
 function redactFetchResponse(response: ProviderFetchResponse, values: string[]): ProviderFetchResponse {
-  if (values.length === 0) return response;
   return {
     ...response,
     requestId: redactValues(response.requestId, values),
     documents: response.documents.map((document) => ({
       ...document,
+      url: redactUrlForDisplay(document.url),
+      canonicalUrl: redactUrlForDisplay(document.canonicalUrl),
       title: redactValues(document.title, values) ?? "Untitled result",
       snippets: document.snippets.map((snippet) => redactValues(snippet, values) ?? ""),
       content: redactValues(document.content, values) ?? "",
@@ -391,6 +392,7 @@ function redactFetchResponse(response: ProviderFetchResponse, values: string[]):
     })),
     failures: response.failures.map((failure) => ({
       ...failure,
+      url: redactUrlForDisplay(failure.url),
       error: redactValues(failure.error, values) ?? "provider_failure",
     })),
   };
@@ -850,7 +852,7 @@ function matchRequestedUrl(returnedUrl: string, requestedUrls: string[]): string
   const key = canonicalResourceKey(returnedUrl);
   if (!key) return undefined;
   const matches = requestedUrls.filter((value) => canonicalResourceKey(value) === key);
-  return matches.length === 1 ? redactUrlForDisplay(matches[0]!) : undefined;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 async function fetchTavily(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
@@ -944,7 +946,7 @@ function reconcileFetchOutcomes(
   for (const failure of failures) if (!firstFailure.has(failure.url)) firstFailure.set(failure.url, failure);
   const normalizedDocuments: Array<WebDocument & { content: string; providerTruncated: boolean }> = [];
   const normalizedFailures: FetchFailure[] = [];
-  for (const url of requestedUrls.map(redactUrlForDisplay)) {
+  for (const url of requestedUrls) {
     const document = firstDocument.get(url);
     if (document) {
       normalizedDocuments.push(document);
@@ -1139,14 +1141,14 @@ async function prepareFetchResults(
 ): Promise<{ text: string; truncated: boolean; artifacts: Array<Omit<ArtifactRecord, "path">> }> {
   ensureNotCancelled(signal, response.provider);
   const records: Array<Omit<ArtifactRecord, "path">> = [];
-  const artifactByUrl = new Map<string, string>();
+  const artifactIds: Array<string | undefined> = [];
   let truncated = response.truncated || response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
   const compact = (value: string, limit: number): string => value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
   const outcomeIndex = (): string => [
     "Outcome index:",
-    ...response.documents.map((document) => {
-      const artifactId = artifactByUrl.get(document.url);
+    ...response.documents.map((document, index) => {
+      const artifactId = artifactIds[index];
       return `- [success] ${compact(document.url, 320)}${artifactId ? ` artifact=${artifactId}` : ""}`;
     }),
     ...response.failures.map((failure) => `- [${failure.kind}] ${compact(failure.url, 320)}: ${compact(failure.error, 80)}`),
@@ -1189,7 +1191,7 @@ async function prepareFetchResults(
         ensureNotCancelled(signal, response.provider);
         const { path: _path, ...handle } = artifact;
         records.push(handle);
-        artifactByUrl.set(document.url, artifact.id);
+        artifactIds[index] = artifact.id;
         truncated = true;
         const marker = `\n\n[Content truncated; see artifact in outcome index.]${providerCapMarker}`;
         const available = Math.max(0, initialBodyBudget - usedCharacters - separatorLength - header.length - marker.length);

@@ -767,6 +767,32 @@ test("web_fetch renders and stores requested and provider-canonical URL identiti
   assert.equal(artifact.canonicalUrl, canonical);
 });
 
+test("web_fetch keeps distinct sensitive request identities and artifact handles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-research-distinct-sensitive-"));
+  const urls = [
+    "https://docs.example.com/private?token=first-secret",
+    "https://docs.example.com/private?token=second-secret",
+  ];
+  let artifact = 0;
+  const tools = harness(async () => new Response(JSON.stringify({
+    results: [
+      { url: urls[0], title: "First", raw_content: `FIRST-BODY-${"a".repeat(13_000)}` },
+      { url: urls[1], title: "Second", raw_content: `SECOND-BODY-${"b".repeat(13_000)}` },
+    ],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" }, {
+    artifactRoot: root,
+    randomId: () => `sensitive-${++artifact}`,
+  });
+  const result = await tools.get("web_fetch").execute("distinct-sensitive", { urls, provider: "tavily" }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.equal(result.details.successCount, 2);
+  assert.equal(result.details.artifacts.length, 2);
+  assert.notEqual(result.details.artifacts[0].id, result.details.artifacts[1].id);
+  const stored = await Promise.all(result.details.artifacts.map((item: { id: string }) => readFile(join(root, `${item.id}.json`), "utf8")));
+  assert.equal(stored.filter((text) => text.includes("FIRST-BODY")).length, 1);
+  assert.equal(stored.filter((text) => text.includes("SECOND-BODY")).length, 1);
+  assert.doesNotMatch(JSON.stringify(result), /first-secret|second-secret/);
+});
+
 test("web_fetch emits an outcome for every requested URL when providers omit entries", async () => {
   for (const provider of ["tavily", "exa"] as const) {
     const payload = provider === "tavily"

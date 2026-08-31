@@ -95,7 +95,7 @@ export class ArtifactStore {
     if (signal?.aborted) throw new Error("Artifact operation cancelled.");
   }
 
-  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal, compensate?: () => Promise<void>): Promise<T> {
     await this.ensureRoot();
     const monotonicNow = this.options.monotonicNow ?? (() => performance.now());
     const deadline = monotonicNow() + (this.options.lockTimeoutMs ?? 5_000);
@@ -123,8 +123,22 @@ export class ArtifactStore {
       throw error;
     }
     const databasePath = join(this.options.root, ".capacity.sqlite");
-    const lockDatabase = new DatabaseSync(databasePath, { timeout: 0 });
+    let lockDatabase: DatabaseSync | undefined;
     try {
+      try {
+        await writeFile(databasePath, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const before = await lstat(databasePath);
+      if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1) {
+        throw new Error("Web research capacity control file must be a private regular file without links.");
+      }
+      lockDatabase = new DatabaseSync(databasePath, { timeout: 0 });
+      const after = await lstat(databasePath);
+      if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || before.dev !== after.dev || before.ino !== after.ino) {
+        throw new Error("Web research capacity control file changed during validation.");
+      }
       await chmod(databasePath, 0o600);
       while (true) {
         ArtifactStore.throwIfAborted(signal);
@@ -145,41 +159,31 @@ export class ArtifactStore {
       }
       ArtifactStore.throwIfAborted(signal);
       const result = await operation();
-      lockDatabase.exec("COMMIT");
+      try {
+        lockDatabase.exec("COMMIT");
+      } catch (error) {
+        await compensate?.();
+        throw error;
+      }
       return result;
     } catch (error) {
-      try { lockDatabase.exec("ROLLBACK"); } catch { /* transaction may not have started */ }
+      try { lockDatabase?.exec("ROLLBACK"); } catch { /* transaction may not have started */ }
       throw error;
     } finally {
-      lockDatabase.close();
-      releaseLocal();
-      if (ArtifactStore.localQueues.get(this.options.root) === queued) ArtifactStore.localQueues.delete(this.options.root);
+      try { lockDatabase?.close(); } finally {
+        releaseLocal();
+        if (ArtifactStore.localQueues.get(this.options.root) === queued) ArtifactStore.localQueues.delete(this.options.root);
+      }
     }
   }
 
   private async cleanup(additionalEntries = 0, additionalBytes = 0): Promise<void> {
     const names = await readdir(this.options.root);
     const rows: Array<{ name: string; path: string; size: number; mtimeMs: number }> = [];
-    let protectedTemporaryBytes = 0;
     for (const name of names.filter((candidate) => candidate.endsWith(".tmp"))) {
       const path = join(this.options.root, name);
-      const pidMatch = /\.(\d+)\.tmp$/.exec(name);
-      let info;
-      try { info = await stat(path); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
-      }
-      const pid = pidMatch ? Number(pidMatch[1]) : undefined;
-      let live = false;
-      if (Number.isInteger(pid)) {
-        try { process.kill(pid!, 0); live = true; } catch (error) { live = (error as NodeJS.ErrnoException).code === "EPERM"; }
-      }
-      if (live) {
-        protectedTemporaryBytes += info.size;
-      } else {
-        try { await rm(path, { recursive: true }); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
+      try { await rm(path, { recursive: true }); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
     for (const name of names.filter((candidate) => candidate.endsWith(".json"))) {
@@ -199,7 +203,7 @@ export class ArtifactStore {
       }
     }
     rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
-    let bytes = additionalBytes + protectedTemporaryBytes;
+    let bytes = additionalBytes;
     let entries = additionalEntries;
     const existingEntryLimit = Math.max(0, this.options.maxEntries - additionalEntries);
     for (let index = 0; index < rows.length; index++) {
@@ -219,6 +223,15 @@ export class ArtifactStore {
   }
 
   async save(input: { url: string; canonicalUrl?: string; title: string; content: string; provider: string; context?: Record<string, unknown> }, signal?: AbortSignal): Promise<ArtifactRecord> {
+    let publishedTarget: string | undefined;
+    const compensate = async () => {
+      if (!publishedTarget) return;
+      try { await unlink(publishedTarget); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      } finally {
+        publishedTarget = undefined;
+      }
+    };
     return this.withCapacityLock(async () => {
       ArtifactStore.throwIfAborted(signal);
       const id = this.options.randomId();
@@ -241,22 +254,24 @@ export class ArtifactStore {
         await chmod(temporary, 0o600);
         ArtifactStore.throwIfAborted(signal);
         await link(temporary, target);
+        publishedTarget = target;
         if (signal?.aborted) {
-          await unlink(target);
+          await compensate();
           throw new Error("Artifact operation cancelled.");
         }
         await unlink(temporary);
         await chmod(target, 0o600);
         if (signal?.aborted) {
-          await unlink(target);
+          await compensate();
           throw new Error("Artifact operation cancelled.");
         }
       } catch (error) {
         try { await unlink(temporary); } catch { /* nothing to clean */ }
+        await compensate();
         throw error;
       }
       return { id, path: target, url: input.url, chars: input.content.length, createdAt, expiresAt };
-    }, signal);
+    }, signal, compensate);
   }
 
   async discard(id: string): Promise<void> {

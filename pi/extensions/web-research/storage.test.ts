@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -262,13 +262,14 @@ test("ArtifactStore never reclaims a stale-looking lock owned by a live process"
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
 
-test("ArtifactStore removes dead-owner temporaries and counts live-owner temporaries", async () => {
+test("ArtifactStore removes every pre-existing artifact temporary while holding capacity", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-orphan-temp-"));
   await writeFile(join(root, ".orphan.999999.tmp"), "x".repeat(2_000));
+  let id = 0;
   const store = new ArtifactStore({
     root,
     now: () => 1_725_000_000_000,
-    randomId: () => "after-orphan",
+    randomId: () => `after-orphan-${++id}`,
     ttlMs: 60_000,
     maxEntries: 2,
     maxBytes: 1_000,
@@ -276,11 +277,35 @@ test("ArtifactStore removes dead-owner temporaries and counts live-owner tempora
   await store.save({ url: "https://example.test", title: "saved", content: "small", provider: "tavily" });
   assert.equal((await readdir(root)).includes(".orphan.999999.tmp"), false);
 
-  const live = join(root, `.live.${process.pid}.tmp`);
-  await writeFile(live, "x".repeat(2_000));
-  await assert.rejects(
-    store.save({ url: "https://example.test/two", title: "blocked", content: "small", provider: "tavily" }),
-    /capacity/i,
-  );
-  assert.equal((await stat(live)).isFile(), true);
+  const reusedPid = join(root, `.live.${process.pid}.tmp`);
+  await writeFile(reusedPid, "x".repeat(2_000));
+  await store.save({ url: "https://example.test/two", title: "saved", content: "small", provider: "tavily" });
+  assert.equal((await readdir(root)).includes(`.live.${process.pid}.tmp`), false);
+});
+
+test("ArtifactStore releases its local queue after SQLite open failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-open-failure-"));
+  await mkdir(join(root, ".capacity.sqlite"));
+  let id = 0;
+  const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => `after-open-${++id}`, ttlMs: 60_000, maxEntries: 2, maxBytes: 10_000, lockTimeoutMs: 50 });
+  await assert.rejects(store.save({ url: "https://example.test/one", title: "one", content: "one", provider: "tavily" }));
+  await rm(join(root, ".capacity.sqlite"), { recursive: true });
+  const record = await store.save({ url: "https://example.test/two", title: "two", content: "two", provider: "tavily" });
+  assert.equal(record.id, "after-open-1");
+});
+
+test("ArtifactStore rejects linked SQLite control paths", async () => {
+  for (const kind of ["symlink", "hardlink"] as const) {
+    const root = await mkdtemp(join(tmpdir(), `pi-web-artifact-${kind}-control-`));
+    const target = join(root, "target");
+    await writeFile(target, "not a database", { mode: 0o600 });
+    if (kind === "symlink") await symlink(target, join(root, ".capacity.sqlite"));
+    else await link(target, join(root, ".capacity.sqlite"));
+    const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => "must-not-publish", ttlMs: 60_000, maxEntries: 2, maxBytes: 10_000 });
+    await assert.rejects(
+      store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
+      /control file|regular file|link/i,
+    );
+    assert.equal(await readFile(target, "utf8"), "not a database");
+  }
 });

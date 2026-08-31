@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 493 passed, 0 failed.
-- Focused web-research suite: 67 passed, 0 failed.
+- Full repository suite: 496 passed, 0 failed.
+- Focused web-research suite: 70 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -128,6 +128,16 @@ The seventh independent review inspected `2f7d8d6902ae13463c7c4961228dd87d809fbf
 - Shared strict DNS-label validation and RFC 9476 `.alt` rejection at domain and URL boundaries.
 
 Verdict: all seven review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
+
+The eighth independent review inspected `8e734b6da3affe09d2fe7f00b011aee50978083f`. Every finding reproduced and was accepted. Fixes added:
+
+- Raw request identity retained through batch reconciliation so redacted display collisions cannot duplicate evidence or artifact handles.
+- Same-process capacity gates released independently of SQLite construction and close failures.
+- Every pre-existing artifact temporary removed while the exclusive capacity transaction is held, avoiding PID-reuse ambiguity.
+- Post-publication compensation for target cleanup after post-link or transaction-commit failures.
+- Private regular single-link SQLite control-file validation before and after open.
+
+Verdict: all eight review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 
