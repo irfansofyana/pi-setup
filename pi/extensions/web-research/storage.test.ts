@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { ArtifactStore, TimedCache } from "./storage.ts";
 
@@ -172,44 +171,33 @@ test("ArtifactStore cancellation while waiting for a stale lock never publishes"
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
 
-test("ArtifactStore recovers when a crashed owner leaves a legacy lock unpublished", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-ownerless-lock-"));
-  await mkdir(join(root, ".capacity.lock"));
-  const store = new ArtifactStore({
-    root,
-    now: () => 1_725_000_000_000,
-    randomId: () => "must-not-publish",
-    ttlMs: 60_000,
-    maxEntries: 1,
-    maxBytes: 10_000,
-    lockTimeoutMs: 30,
-  });
-  const record = await store.save({ url: "https://example.test", title: "recovered", content: "recovered", provider: "tavily" });
-  assert.equal(record.id, "must-not-publish");
+test("ArtifactStore uses no SQLite runtime or control file", async () => {
+  const source = await readFile(new URL("./storage.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /node:sqlite|DatabaseSync|\.capacity\.sqlite/);
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-no-sqlite-"));
+  const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => "filesystem-only", ttlMs: 60_000, maxEntries: 2, maxBytes: 10_000 });
+  await store.save({ url: "https://example.test", title: "saved", content: "saved", provider: "tavily" });
+  assert.equal((await readdir(root)).some((name) => name.includes("sqlite")), false);
 });
 
-test("ArtifactStore recovers a crashed partial owner publication", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-partial-owner-"));
+test("ArtifactStore fails closed instead of reclaiming an uncertain filesystem lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-uncertain-lock-"));
   const lock = join(root, ".capacity.lock");
   await mkdir(lock);
-  await writeFile(join(lock, "owner.json"), "");
-  const store = new ArtifactStore({
-    root,
-    now: () => 1_725_000_000_000,
-    randomId: () => "must-not-publish",
-    ttlMs: 60_000,
-    maxEntries: 1,
-    maxBytes: 10_000,
-    lockTimeoutMs: 30,
-  });
-  const record = await store.save({ url: "https://example.test", title: "recovered", content: "recovered", provider: "tavily" });
-  assert.equal(record.id, "must-not-publish");
+  let monotonic = 0;
+  const store = new ArtifactStore({ root, now: () => Date.now(), monotonicNow: () => (monotonic += 10), randomId: () => "must-not-publish", ttlMs: 60_000, maxEntries: 1, maxBytes: 10_000, lockTimeoutMs: 30 });
+  await assert.rejects(
+    store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
+    /timed out/i,
+  );
+  assert.equal((await stat(lock)).isDirectory(), true);
+  assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
 
 test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-monotonic-lock-"));
-  const lock = new DatabaseSync(join(root, ".capacity.sqlite"));
-  lock.exec("CREATE TABLE IF NOT EXISTS capacity_lock (id INTEGER PRIMARY KEY); BEGIN IMMEDIATE");
+  const lockPath = join(root, ".capacity.lock");
+  await mkdir(lockPath);
   let monotonic = 0;
   const controller = new AbortController();
   const safetyTimer = setTimeout(() => controller.abort(), 100);
@@ -231,8 +219,6 @@ test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
       /timed out/i,
     );
   } finally {
-    lock.exec("ROLLBACK");
-    lock.close();
     clearTimeout(safetyTimer);
     Date.now = originalDateNow;
   }
@@ -240,8 +226,8 @@ test("ArtifactStore lock timeout uses monotonic elapsed time", async () => {
 
 test("ArtifactStore never reclaims a stale-looking lock owned by a live process", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-live-owner-"));
-  const lock = new DatabaseSync(join(root, ".capacity.sqlite"));
-  lock.exec("CREATE TABLE IF NOT EXISTS capacity_lock (id INTEGER PRIMARY KEY); BEGIN IMMEDIATE");
+  const lockPath = join(root, ".capacity.lock");
+  await mkdir(lockPath);
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 30);
   const store = new ArtifactStore({
@@ -257,8 +243,6 @@ test("ArtifactStore never reclaims a stale-looking lock owned by a live process"
     store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }, controller.signal),
     /cancelled/i,
   );
-  lock.exec("ROLLBACK");
-  lock.close();
   assert.deepEqual((await readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
 
@@ -281,31 +265,4 @@ test("ArtifactStore removes every pre-existing artifact temporary while holding 
   await writeFile(reusedPid, "x".repeat(2_000));
   await store.save({ url: "https://example.test/two", title: "saved", content: "small", provider: "tavily" });
   assert.equal((await readdir(root)).includes(`.live.${process.pid}.tmp`), false);
-});
-
-test("ArtifactStore releases its local queue after SQLite open failure", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-open-failure-"));
-  await mkdir(join(root, ".capacity.sqlite"));
-  let id = 0;
-  const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => `after-open-${++id}`, ttlMs: 60_000, maxEntries: 2, maxBytes: 10_000, lockTimeoutMs: 50 });
-  await assert.rejects(store.save({ url: "https://example.test/one", title: "one", content: "one", provider: "tavily" }));
-  await rm(join(root, ".capacity.sqlite"), { recursive: true });
-  const record = await store.save({ url: "https://example.test/two", title: "two", content: "two", provider: "tavily" });
-  assert.equal(record.id, "after-open-1");
-});
-
-test("ArtifactStore rejects linked SQLite control paths", async () => {
-  for (const kind of ["symlink", "hardlink"] as const) {
-    const root = await mkdtemp(join(tmpdir(), `pi-web-artifact-${kind}-control-`));
-    const target = join(root, "target");
-    await writeFile(target, "not a database", { mode: 0o600 });
-    if (kind === "symlink") await symlink(target, join(root, ".capacity.sqlite"));
-    else await link(target, join(root, ".capacity.sqlite"));
-    const store = new ArtifactStore({ root, now: () => Date.now(), randomId: () => "must-not-publish", ttlMs: 60_000, maxEntries: 2, maxBytes: 10_000 });
-    await assert.rejects(
-      store.save({ url: "https://example.test", title: "blocked", content: "blocked", provider: "tavily" }),
-      /control file|regular file|link/i,
-    );
-    assert.equal(await readFile(target, "utf8"), "not a database");
-  }
 });

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmod, link, lstat, mkdir, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 export class TimedCache<T> {
   private readonly entries = new Map<string, { value: T; createdAt: number; expiresAt: number }>();
@@ -77,7 +76,6 @@ interface StoredArtifact {
 }
 
 export class ArtifactStore {
-  private static readonly localQueues = new Map<string, Promise<void>>();
   private readonly options: ArtifactStoreOptions;
 
   constructor(options: ArtifactStoreOptions) {
@@ -95,85 +93,42 @@ export class ArtifactStore {
     if (signal?.aborted) throw new Error("Artifact operation cancelled.");
   }
 
-  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal, compensate?: () => Promise<void>): Promise<T> {
+  private async withCapacityLock<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     await this.ensureRoot();
     const monotonicNow = this.options.monotonicNow ?? (() => performance.now());
     const deadline = monotonicNow() + (this.options.lockTimeoutMs ?? 5_000);
-    const previous = ArtifactStore.localQueues.get(this.options.root) ?? Promise.resolve();
-    let releaseLocal!: () => void;
-    const gate = new Promise<void>((resolve) => { releaseLocal = resolve; });
-    const queued = previous.then(() => gate);
-    ArtifactStore.localQueues.set(this.options.root, queued);
-    let localReady = false;
-    void previous.then(() => { localReady = true; });
-    try {
-      while (!localReady) {
-        ArtifactStore.throwIfAborted(signal);
-        if (monotonicNow() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
-        await new Promise<void>((resolve, reject) => {
-          const onAbort = () => { clearTimeout(timer); cleanup(); reject(new Error("Artifact operation cancelled.")); };
-          const cleanup = () => signal?.removeEventListener("abort", onAbort);
-          const timer = setTimeout(() => { cleanup(); resolve(); }, 10);
-          if (signal?.aborted) onAbort();
-          else signal?.addEventListener("abort", onAbort, { once: true });
-        });
-      }
-    } catch (error) {
-      void previous.then(releaseLocal, releaseLocal);
-      throw error;
-    }
-    const databasePath = join(this.options.root, ".capacity.sqlite");
-    let lockDatabase: DatabaseSync | undefined;
-    try {
+    const lockPath = join(this.options.root, ".capacity.lock");
+    let lockIdentity: { dev: bigint | number; ino: bigint | number } | undefined;
+    while (!lockIdentity) {
+      ArtifactStore.throwIfAborted(signal);
       try {
-        await writeFile(databasePath, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+        await mkdir(lockPath, { mode: 0o700 });
+        const info = await lstat(lockPath, { bigint: true });
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Web research artifact capacity lock must be a real directory.");
+        lockIdentity = { dev: info.dev, ino: info.ino };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
-      const before = await lstat(databasePath);
-      if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1) {
-        throw new Error("Web research capacity control file must be a private regular file without links.");
-      }
-      lockDatabase = new DatabaseSync(databasePath, { timeout: 0 });
-      const after = await lstat(databasePath);
-      if (after.isSymbolicLink() || !after.isFile() || after.nlink !== 1 || before.dev !== after.dev || before.ino !== after.ino) {
-        throw new Error("Web research capacity control file changed during validation.");
-      }
-      await chmod(databasePath, 0o600);
-      while (true) {
-        ArtifactStore.throwIfAborted(signal);
-        try {
-          lockDatabase.exec("BEGIN IMMEDIATE");
-          break;
-        } catch (error) {
-          if ((error as { code?: string }).code !== "ERR_SQLITE_ERROR" || !String((error as Error).message).includes("database is locked")) throw error;
-          if (monotonicNow() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
-          await new Promise<void>((resolve, reject) => {
-            const onAbort = () => { clearTimeout(timer); cleanup(); reject(new Error("Artifact operation cancelled.")); };
-            const cleanup = () => signal?.removeEventListener("abort", onAbort);
-            const timer = setTimeout(() => { cleanup(); resolve(); }, 10);
-            if (signal?.aborted) onAbort();
-            else signal?.addEventListener("abort", onAbort, { once: true });
-          });
-        }
-      }
+      if (lockIdentity) break;
+      if (monotonicNow() >= deadline) throw new Error("Timed out waiting for web research artifact capacity lock.");
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => { clearTimeout(timer); cleanup(); reject(new Error("Artifact operation cancelled.")); };
+        const cleanup = () => signal?.removeEventListener("abort", onAbort);
+        const timer = setTimeout(() => { cleanup(); resolve(); }, 10);
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+    try {
       ArtifactStore.throwIfAborted(signal);
-      const result = await operation();
-      try {
-        lockDatabase.exec("COMMIT");
-      } catch (error) {
-        await compensate?.();
-        throw error;
-      }
-      return result;
-    } catch (error) {
-      try { lockDatabase?.exec("ROLLBACK"); } catch { /* transaction may not have started */ }
-      throw error;
+      return await operation();
     } finally {
-      try { lockDatabase?.close(); } finally {
-        releaseLocal();
-        if (ArtifactStore.localQueues.get(this.options.root) === queued) ArtifactStore.localQueues.delete(this.options.root);
-      }
+      try {
+        const current = await lstat(lockPath, { bigint: true });
+        if (current.isDirectory() && current.dev === lockIdentity.dev && current.ino === lockIdentity.ino) {
+          await rm(lockPath, { recursive: true });
+        }
+      } catch { /* fail closed if the owned lock cannot be verified or removed */ }
     }
   }
 
@@ -271,7 +226,7 @@ export class ArtifactStore {
         throw error;
       }
       return { id, path: target, url: input.url, chars: input.content.length, createdAt, expiresAt };
-    }, signal, compensate);
+    }, signal);
   }
 
   async discard(id: string): Promise<void> {

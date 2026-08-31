@@ -20,7 +20,7 @@ The main Pi session remains coordinator. Specialists return evidence and branche
 - Reviewer is separate from builder and has only `read`, `grep`, `find`, and `ls`; it cannot execute shell commands or load extensions. The parent supplies the actual diff and verification evidence so review authority remains genuinely read-only.
 - Ciung loads only the package-owned `web-research` extension and cannot read repository files. Give it sanitized public questions and URLs; Laya handles local repository evidence, and the parent reconciles both streams.
 - Every role sets `inherit_context: false`; the coordinator must supply a self-contained task packet instead of leaking unrelated conversation context.
-- Subagent transcripts are disabled by default. This reduces stray local copies; normal Pi/provider logs and builder worktree commits may still persist.
+- Subagent transcripts are disabled by default. This reduces one source of local copies; it does not disable normal Pi logs, builder worktree commits, or Tavily/Exa API-side logs and retention. Pi log locations and lifetime follow the local Pi configuration. Provider-side storage follows the account settings and published policies of each provider and is not controlled by this extension. Extension-owned cache/artifact locations and retention are documented in [Local Extensions](local-extensions.md#native-web-research).
 
 ## Prerequisites
 

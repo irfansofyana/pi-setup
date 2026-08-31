@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 496 passed, 0 failed.
-- Focused web-research suite: 70 passed, 0 failed.
+- Full repository suite: 494 passed, 0 failed.
+- Focused web-research suite: 68 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -123,7 +123,7 @@ The seventh independent review inspected `2f7d8d6902ae13463c7c4961228dd87d809fbf
 - Exact query-preserving fetch correlation with ArXiv-only `/abs`/`/pdf` canonicalization and explicit requested/canonical identities in output and artifacts.
 - Redaction of secrets discovered only in raw Tavily/Exa fetch result and status URLs.
 - Cancellation- and deadline-aware streaming body reads plus deterministic abort-listener cleanup.
-- SQLite `BEGIN IMMEDIATE` capacity transactions with cancellation-aware bounded polling, same-process queuing, crash rollback, and cross-process regression coverage; this supersedes pathname lock reclamation.
+- SQLite capacity transactions were introduced during this review round, then removed before delivery after an explicit architecture correction; filesystem-only locking is the final design.
 - Fail-closed artifact stat/unlink handling, post-cleanup capacity verification, dead-owner temporary cleanup, and live-owner temporary byte accounting.
 - Shared strict DNS-label validation and RFC 9476 `.alt` rejection at domain and URL boundaries.
 
@@ -132,12 +132,19 @@ Verdict: all seven review rounds' accepted fixes are locally verified; a clean i
 The eighth independent review inspected `8e734b6da3affe09d2fe7f00b011aee50978083f`. Every finding reproduced and was accepted. Fixes added:
 
 - Raw request identity retained through batch reconciliation so redacted display collisions cannot duplicate evidence or artifact handles.
-- Same-process capacity gates released independently of SQLite construction and close failures.
+- Same-process capacity-gate failure handling was reviewed; the gate and SQLite design were subsequently removed.
 - Every pre-existing artifact temporary removed while the exclusive capacity transaction is held, avoiding PID-reuse ambiguity.
-- Post-publication compensation for target cleanup after post-link or transaction-commit failures.
-- Private regular single-link SQLite control-file validation before and after open.
+- Post-publication compensation for target cleanup after post-link failures.
+- SQLite control-file validation was implemented during review and subsequently deleted with the SQLite integration.
 
 Verdict: all eight review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
+
+Architecture correction after the eighth review:
+
+- Removed the `node:sqlite` import and `.capacity.sqlite` control file entirely.
+- Restored an atomic filesystem lock directory for both same-process and cross-process serialization.
+- Narrowed the guarantee deliberately: uncertain or crash-left lock directories are never reclaimed automatically; writers time out or cancel without publishing, and manual removal requires first confirming that no Pi process is writing artifacts.
+- Added a regression asserting that the extension source and artifact directory contain no SQLite runtime or control file.
 
 ## Known limitations and open gates
 
