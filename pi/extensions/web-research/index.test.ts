@@ -89,7 +89,7 @@ test("web_search uses Tavily by default and labels compact snippets as discovery
   assert.deepEqual(result.details, {
     provider: "tavily",
     resolvedMode: "basic",
-    attempts: [{ provider: "tavily", outcome: "success", status: 200, durationMs: 0 }],
+    attempts: [{ provider: "tavily", outcome: "success", status: 200, requestId: "tavily-request-1", durationMs: 0 }],
     resultCount: 1,
     requestId: "tavily-request-1",
     durationMs: 0,
@@ -107,19 +107,31 @@ test("web_search uses Tavily by default and labels compact snippets as discovery
 });
 
 test("web_search redacts sensitive values from URLs embedded in the query", async () => {
-  const query = "find https://docs.example.test/signed?token=%73ecret&password=space+value";
+  const query = "find https://docs.example.test/signed?token=%73ecret&password=space+value&secret=secret%ZZvalue&code=secret%252Fvalue&key=ab";
   const tools = harness(async () => new Response(JSON.stringify({
     request_id: "echo-secret",
     results: [{
       url: "https://docs.example.test/page",
-      title: "echo %73ecret and space+value",
-      content: "provider echoed secret and space value",
+      title: "echo %73ecret space+value secret%ZZvalue secret/value ab",
+      content: "provider echoed secret space value secret%2Fvalue",
     }],
   }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" });
 
   const result = await tools.get("web_search").execute("search-redaction", { query }, undefined, undefined, { cwd: "/tmp/project" });
-  assert.doesNotMatch(JSON.stringify(result), /%73ecret|\bsecret\b|space(?:\s|\+|%20)value/i);
+  assert.doesNotMatch(JSON.stringify(result), /%73ecret|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value/i);
+  assert.doesNotMatch(result.content[0]?.text ?? "", /(?:echo|provider echoed)[^\n]*\b(?:secret|ab)\b/i);
   assert.match(JSON.stringify(result), /REDACTED/);
+});
+
+test("web_search redacts secrets discovered only in provider-returned URLs", async () => {
+  const providerUrl = "https://docs.example.test/page?token=providersecret";
+  const tools = harness(async () => new Response(JSON.stringify({
+    request_id: "provider-url-secret",
+    results: [{ url: providerUrl, title: "echo providersecret", content: "body providersecret" }],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" });
+  const result = await tools.get("web_search").execute("provider-url-secret", { query: "ordinary query" }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.doesNotMatch(JSON.stringify(result), /providersecret/);
+  assert.match(JSON.stringify(result), /token=REDACTED/);
 });
 
 test("web_search normalizes semantic validation failures", async () => {
@@ -134,6 +146,28 @@ test("web_search normalizes semantic validation failures", async () => {
       return true;
     },
   );
+});
+
+test("web_search rejects unsafe domains invalid dates and contradictory publication bounds", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    throw new Error("provider must not run");
+  }, { TAVILY_API_KEY: "test-tavily" });
+  for (const params of [
+    { includeDomains: ["localhost"] },
+    { includeDomains: ["example.com?token=x"] },
+    { includeDomains: ["service.local"] },
+    { publishedAfter: "0" },
+    { publishedAfter: "2026-02-30" },
+    { publishedAfter: "2026-12-31", publishedBefore: "2026-01-01" },
+  ]) {
+    await assert.rejects(
+      tools.get("web_search").execute("invalid-filter", { query: "valid", ...params }, undefined, undefined, { cwd: "/tmp/project" }),
+      (error: unknown) => error instanceof WebProviderError && error.kind === "validation",
+    );
+  }
+  assert.equal(calls, 0);
 });
 
 test("web_search locally caps provider over-return and adversarial metadata", async () => {
@@ -218,7 +252,7 @@ test("web_search routes declared semantic intent to Exa and preserves exact high
   assert.deepEqual(result.details, {
     provider: "exa",
     resolvedMode: "auto",
-    attempts: [{ provider: "exa", outcome: "success", status: 200, durationMs: 0 }],
+    attempts: [{ provider: "exa", outcome: "success", status: 200, requestId: "exa-request-1", durationMs: 0 }],
     resultCount: 1,
     requestId: "exa-request-1",
     durationMs: 0,
@@ -285,8 +319,8 @@ test("web_search falls back from an empty Tavily response to Exa and reports bot
   assert.deepEqual(requests, ["https://api.tavily.com/search", "https://api.exa.ai/search"]);
   assert.equal(result.details.provider, "exa");
   assert.deepEqual(result.details.attempts, [
-    { provider: "tavily", outcome: "empty", status: 200, durationMs: 0 },
-    { provider: "exa", outcome: "success", status: 200, durationMs: 0 },
+    { provider: "tavily", outcome: "empty", status: 200, requestId: "t-empty", durationMs: 0 },
+    { provider: "exa", outcome: "success", status: 200, requestId: "e-fallback", durationMs: 0 },
   ]);
 });
 
@@ -329,7 +363,7 @@ test("web_search never falls back to Exa after a Tavily authentication failure",
   await assert.rejects(
     tools.get("web_search").execute(
       "call-auth",
-      { query: "ordinary current fact" },
+      { query: "find https://docs.example.test/signed?token=safe-req-123" },
       new AbortController().signal,
       undefined,
       { cwd: "/tmp/project" },
@@ -339,12 +373,12 @@ test("web_search never falls back to Exa after a Tavily authentication failure",
       assert.doesNotMatch(String(error), /do not leak this upstream payload/);
       assert.doesNotMatch(String(error), /test-tavily|test-exa/);
       assert.ok(error instanceof WebProviderError);
-      assert.equal(error.requestId, "safe-req-123");
-      assert.equal(error.details.requestId, "safe-req-123");
+      assert.equal(error.requestId, "[REDACTED]");
+      assert.equal(error.details.requestId, "[REDACTED]");
       assert.equal(error.details.errorKind, "authentication");
       assert.equal(error.details.cancellationState, false);
       assert.deepEqual(error.details.attempts, [
-        { provider: "tavily", outcome: "error", status: 401, errorKind: "authentication", requestId: "safe-req-123", durationMs: 0 },
+        { provider: "tavily", outcome: "error", status: 401, errorKind: "authentication", requestId: "[REDACTED]", durationMs: 0 },
       ]);
       return true;
     },
@@ -422,7 +456,7 @@ test("web_search falls back after a retryable Tavily upstream failure", async ()
   assert.equal(result.details.retryCount, 1);
   assert.deepEqual(result.details.attempts, [
     { provider: "tavily", outcome: "error", status: 503, errorKind: "upstream", durationMs: 0 },
-    { provider: "exa", outcome: "empty", status: 200, durationMs: 0 },
+    { provider: "exa", outcome: "empty", status: 200, requestId: "exa-after-503", durationMs: 0 },
   ]);
 });
 
@@ -473,7 +507,7 @@ test("web_fetch uses Tavily Extract by default and reports independent URL failu
   assert.deepEqual(result.details, {
     provider: "tavily",
     resolvedMode: "basic",
-    attempts: [{ provider: "tavily", outcome: "partial", status: 200, durationMs: 0 }],
+    attempts: [{ provider: "tavily", outcome: "partial", status: 200, requestId: "tavily-extract-1", durationMs: 0 }],
     successCount: 1,
     failureCount: 1,
     failureKinds: ["unknown"],
@@ -513,18 +547,18 @@ test("web_fetch drops provider-returned content attached to a non-public URL", a
 
 test("web_fetch redacts sensitive query values from output and artifact metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-research-redacted-url-"));
-  const signedUrl = "https://docs.example.test/signed?token=%73ecret&token=Second%2BValue&password=space+value&x=1#access_token=fragment-secret";
+  const signedUrl = "https://docs.example.test/signed?token=%73ecret&token=Second%2BValue&password=space+value&secret=secret%ZZvalue&code=secret%252Fvalue&key=ab&x=1#access_token=fragment-secret";
   let requestBody: Record<string, unknown> | undefined;
   const tools = harness(async (_input, init = {}) => {
     requestBody = JSON.parse(String(init.body));
     return new Response(JSON.stringify({
       request_id: "redacted-url",
-      results: [{ url: signedUrl, title: "echo %73ecret Second%2BValue space+value", raw_content: "provider echoed %73ecret secret Second+Value Second%2bValue space value space%20value in source body ".repeat(20) }],
+      results: [{ url: signedUrl, title: "echo %73ecret Second%2BValue space+value secret%ZZvalue secret/value ab", raw_content: "provider echoed %73ecret secret Second+Value Second%2bValue space value space%20value secret%ZZvalue secret%2Fvalue secret/value ab in source body ".repeat(20) }],
       failed_results: [],
     }), { status: 200, headers: { "content-type": "application/json" } });
   }, { TAVILY_API_KEY: "test-tavily" }, {
     artifactRoot: root,
-    maxInlineChars: 20,
+    maxInlineChars: 500,
     randomId: () => "redacted-url-artifact",
   });
 
@@ -538,12 +572,15 @@ test("web_fetch redacts sensitive query values from output and artifact metadata
 
   assert.match(JSON.stringify(requestBody), /token=%73ecret/);
   assert.doesNotMatch(JSON.stringify(requestBody), /fragment-secret/);
-  const visible = JSON.stringify(result);
-  assert.doesNotMatch(visible, /%73ecret|\bsecret\b|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|fragment-secret/i);
+  const visible = result.content[0]?.text ?? "";
+  assert.doesNotMatch(visible, /%73ecret|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret/i);
+  assert.doesNotMatch(visible, /(?:echo|provider echoed)[^\n]*\bab\b/i);
+  assert.doesNotMatch(JSON.stringify(result.details), /%73ecret|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret/i);
   assert.match(visible, /token=REDACTED/);
   assert.match(visible, /x=1/);
   const stored = await readFile(join(root, `${result.details.artifacts[0].id}.json`), "utf8");
-  assert.doesNotMatch(stored, /%73ecret|\bsecret\b|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|fragment-secret/i);
+  assert.doesNotMatch(stored, /%73ecret|Second(?:\+|%2[bB])Value|space(?:\s|\+|%20)value|secret%ZZvalue|secret(?:%2F|\/)value|fragment-secret/i);
+  assert.doesNotMatch(stored, /provider echoed[^\n]*\bab\b/i);
   assert.match(stored, /token=REDACTED/);
 });
 
@@ -610,6 +647,41 @@ test("web_fetch emits an outcome for every requested URL when providers omit ent
     assert.equal(result.details.successCount, 1);
     assert.equal(result.details.failureCount, 1);
     assert.match(result.content[0]?.text ?? "", /https:\/\/docs\.example\.test\/two/);
+    assert.match(result.content[0]?.text ?? "", /missing_provider_outcome/);
+  }
+});
+
+test("web_fetch normalizes duplicate and conflicting provider outcomes to one per URL", async () => {
+  for (const provider of ["tavily", "exa"] as const) {
+    const first = "https://docs.example.test/one";
+    const second = "https://docs.example.test/two";
+    const payload = provider === "tavily" ? {
+      request_id: "duplicates-tavily",
+      results: [
+        { url: first, title: "first success", raw_content: "first" },
+        { url: first, title: "duplicate success", raw_content: "duplicate" },
+      ],
+      failed_results: [{ url: first, error: "conflicting failure" }],
+    } : {
+      requestId: "duplicates-exa",
+      results: [
+        { url: first, title: "first success", text: "first" },
+        { url: first, title: "duplicate success", text: "duplicate" },
+      ],
+      statuses: [{ id: first, status: "error", error: { tag: "conflicting failure" } }],
+    };
+    const tools = harness(async () => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }), { TAVILY_API_KEY: "test-tavily", EXA_API_KEY: "test-exa" });
+    const result = await tools.get("web_fetch").execute(`duplicates-${provider}`, {
+      urls: [first, second], provider,
+    }, undefined, undefined, { cwd: "/tmp/project" });
+    assert.equal(result.details.successCount + result.details.failureCount, 2);
+    assert.equal(result.details.successCount, 1);
+    assert.equal(result.details.failureCount, 1);
+    assert.match(result.content[0]?.text ?? "", /first success/);
+    assert.doesNotMatch(result.content[0]?.text ?? "", /duplicate success|conflicting failure/);
     assert.match(result.content[0]?.text ?? "", /missing_provider_outcome/);
   }
 });
@@ -689,6 +761,25 @@ test("web_fetch rejects non-public URLs before calling a provider", async () => 
   assert.equal(calls, 0);
 });
 
+test("transport cancels rejected provider response bodies", async () => {
+  for (const mode of ["declared-oversize", "http-error"] as const) {
+    let cancelled = false;
+    const tools = harness(async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("still streaming")); },
+      cancel() { cancelled = true; },
+    }), mode === "declared-oversize"
+      ? { status: 200, headers: { "content-length": "9999", "content-type": "application/json" } }
+      : { status: 503, headers: { "content-type": "application/json" } }),
+    { TAVILY_API_KEY: "test-tavily" }, { maxRetries: 0, maxResponseBytes: 100 });
+
+    await assert.rejects(
+      tools.get("web_search").execute(`cancel-body-${mode}`, { query: "bounded body", provider: "tavily" }, undefined, undefined, { cwd: "/tmp/project" }),
+      WebProviderError,
+    );
+    assert.equal(cancelled, true, mode);
+  }
+});
+
 test("transport honors Retry-After before returning a successful search", async () => {
   let calls = 0;
   const sleeps: number[] = [];
@@ -715,6 +806,22 @@ test("transport honors Retry-After before returning a successful search", async 
   assert.equal(calls, 2);
   assert.deepEqual(sleeps, [2_000]);
   assert.equal(result.details.retryCount, 1);
+});
+
+test("terminal rate-limit errors preserve bounded retry telemetry", async () => {
+  const tools = harness(async () => new Response("rate limited", {
+    status: 429,
+    headers: { "retry-after": "2", "x-request-id": "rate-limit-id" },
+  }), { TAVILY_API_KEY: "test-tavily" }, { maxRetries: 0 });
+  await assert.rejects(
+    tools.get("web_search").execute("terminal-rate-limit", { query: "rate limit" }, undefined, undefined, { cwd: "/tmp/project" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebProviderError);
+      assert.equal(error.details.retryAfterMs, 2_000);
+      assert.equal(error.details.requestId, "rate-limit-id");
+      return true;
+    },
+  );
 });
 
 test("transport clamps numeric and date Retry-After values", async () => {
@@ -905,6 +1012,29 @@ test("oversized fetched content is truncated inline and stored in an owner-only 
   assert.equal(stored.url, "https://docs.example.test/large");
 });
 
+test("web_fetch enforces one aggregate inline budget across documents", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-web-research-aggregate-inline-"));
+  let ids = 0;
+  const tools = harness(async () => new Response(JSON.stringify({
+    request_id: "aggregate-inline",
+    results: [
+      { url: "https://docs.example.test/one", raw_content: "a".repeat(11_000) },
+      { url: "https://docs.example.test/two", raw_content: "b".repeat(11_000) },
+    ], failed_results: [],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" }, {
+    artifactRoot: root,
+    maxInlineChars: 12_000,
+    randomId: () => `aggregate-${++ids}`,
+  });
+  const result = await tools.get("web_fetch").execute("aggregate-inline", {
+    urls: ["https://docs.example.test/one", "https://docs.example.test/two"],
+    maxCharactersPerResult: 20_000,
+  }, undefined, undefined, { cwd: "/tmp/project" });
+  assert.ok((result.content[0]?.text ?? "").length <= 12_000);
+  assert.ok(result.details.artifacts.length >= 1);
+  assert.equal(result.details.truncated, true);
+});
+
 test("web_fetch rolls back earlier artifacts when later preparation is cancelled", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-research-transactional-artifacts-"));
   const controller = new AbortController();
@@ -1044,8 +1174,8 @@ test("web_fetch falls back to Exa only when automatic Tavily extraction has no s
   assert.deepEqual(requests, ["https://api.tavily.com/extract", "https://api.exa.ai/contents"]);
   assert.equal(result.details.provider, "exa");
   assert.deepEqual(result.details.attempts, [
-    { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", durationMs: 0 },
-    { provider: "exa", outcome: "success", status: 200, durationMs: 0 },
+    { provider: "tavily", outcome: "error", status: 200, errorKind: "timeout", requestId: "tavily-all-failed", durationMs: 0 },
+    { provider: "exa", outcome: "success", status: 200, requestId: "exa-fallback-fetch", durationMs: 0 },
   ]);
   assert.match(result.content[0]?.text ?? "", /Recovered body\./);
 });

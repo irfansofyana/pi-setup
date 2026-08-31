@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 471 passed, 0 failed.
-- Focused web-research suite: 45 passed, 0 failed.
+- Full repository suite: 477 passed, 0 failed.
+- Focused web-research suite: 51 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -86,7 +86,17 @@ The third independent review inspected `2741db9910b032870dbbf98622fce2ffb8c7f1c6
 - Explicit missing-provider outcomes for every unmatched Tavily or Exa batch URL.
 - Bounded allowlisted HTTP request-ID extraction and terminal-error telemetry.
 
-Verdict: all three review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
+The fourth independent review inspected `7c6f755a91086f4c7b0ccacd96b5ce89904467ec`. Every finding reproduced and was accepted. Fixes added:
+
+- Tolerant bounded recursive redaction for malformed, multiply encoded, and short sensitive values.
+- Redaction derived from provider-discovered signed URLs and from input URLs across success/error attempt telemetry.
+- Cancellation of rejected response streams on declared oversize, timeout/cancellation, and non-2xx paths.
+- Canonical public-domain filters, strict ISO calendar dates, and ordered publication bounds.
+- Exactly one deterministic success/failure outcome per requested batch URL.
+- One aggregate call-wide inline-content budget with artifact offload.
+- Safe request IDs on every attempt and bounded retry-after data on terminal errors.
+
+Verdict: all four review rounds' accepted fixes are locally verified; a clean independent re-review against the exact current commit remains mandatory before delivery.
 
 ## Known limitations and open gates
 

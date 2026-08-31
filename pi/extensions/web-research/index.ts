@@ -207,7 +207,13 @@ function domainList(value: unknown, field: string): string[] {
   const domains = value.map((item) => {
     if (typeof item !== "string" || !item.trim()) validationError(`${field} must contain non-empty domain strings.`);
     const domain = item.trim().toLowerCase();
-    if (domain.length > 253 || /[\s/@]/.test(domain)) validationError(`${field} contains an invalid domain.`);
+    const ipVersion = isIP(domain);
+    const blockedName = domain === "localhost" || domain.endsWith(".localhost") || domain.endsWith(".local")
+      || domain.endsWith(".internal") || domain.endsWith(".home.arpa");
+    const canonicalName = domain.length <= 253 && domain.includes(".") && !domain.endsWith(".")
+      && domain.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+    const publicIp = (ipVersion === 4 && !isPrivateIpv4(domain)) || (ipVersion === 6 && !isPrivateIpv6(domain));
+    if (blockedName || (ipVersion === 0 ? !canonicalName : !publicIp)) validationError(`${field} contains an invalid public domain.`);
     return domain;
   });
   return [...new Set(domains)];
@@ -215,10 +221,20 @@ function domainList(value: unknown, field: string): string[] {
 
 function publishedDate(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim() || !Number.isFinite(Date.parse(value))) {
+  if (typeof value !== "string" || !value.trim()) {
     validationError(`${field} must be an ISO 8601 date or timestamp.`);
   }
-  return value.trim();
+  const date = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))?$/.exec(date);
+  if (!match || !Number.isFinite(Date.parse(date))) validationError(`${field} must be an ISO 8601 date or timestamp.`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) {
+    validationError(`${field} must contain a valid calendar date.`);
+  }
+  return date;
 }
 
 function textValue(value: unknown): string | undefined {
@@ -294,28 +310,37 @@ function redactUrlForDisplay(value: string): string {
   return parsed.toString();
 }
 
+function tolerantDecodeStages(rawValue: string): string[] {
+  const stages = new Set<string>([rawValue]);
+  let current = rawValue.replace(/\+/g, " ");
+  stages.add(current);
+  for (let depth = 0; depth < 3; depth++) {
+    const escapedMalformed = current.replace(/%(?![0-9a-fA-F]{2})/g, "%25");
+    let decoded: string;
+    try { decoded = decodeURIComponent(escapedMalformed); } catch { break; }
+    stages.add(decoded);
+    if (decoded === current) break;
+    current = decoded;
+  }
+  return [...stages];
+}
+
 function sensitiveUrlValues(urls: string[]): string[] {
   const values = new Set<string>();
   for (const url of urls) {
-    const parsed = new URL(url);
     const rawQuery = url.split("#", 1)[0]?.split("?", 2)[1] ?? "";
     for (const pair of rawQuery.split("&")) {
       const separator = pair.indexOf("=");
       const rawKey = separator >= 0 ? pair.slice(0, separator) : pair;
       const rawValue = separator >= 0 ? pair.slice(separator + 1) : "";
-      let key: string;
-      let value: string;
-      try {
-        key = decodeURIComponent(rawKey.replace(/\+/g, " "));
-        value = decodeURIComponent(rawValue.replace(/\+/g, " "));
-      } catch {
-        continue;
+      const key = tolerantDecodeStages(rawKey).at(-1) ?? rawKey;
+      if (!SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) || !rawValue) continue;
+      for (const value of tolerantDecodeStages(rawValue)) {
+        if (!value) continue;
+        values.add(value);
+        values.add(encodeURIComponent(value));
+        values.add(encodeURIComponent(value).replace(/%20/g, "+"));
       }
-      if (!SENSITIVE_QUERY_KEYS.has(key.toLowerCase().replace(/[-_.]/g, "")) || value.length < 3) continue;
-      values.add(rawValue);
-      values.add(value);
-      values.add(encodeURIComponent(value));
-      values.add(encodeURIComponent(value).replace(/%20/g, "+"));
     }
   }
   return [...values].sort((a, b) => b.length - a.length);
@@ -371,6 +396,22 @@ function redactSearchResponse(response: ProviderSearchResponse, values: string[]
       author: redactValues(document.author, values),
     })),
   };
+}
+
+function redactProviderError(error: WebProviderError, values: string[]): WebProviderError {
+  const requestId = redactValues(error.requestId, values);
+  if (requestId === error.requestId) return error;
+  return new WebProviderError({
+    provider: error.provider,
+    kind: error.kind,
+    message: error.message,
+    retryable: error.retryable,
+    status: error.status,
+    requestId,
+    retryAfterMs: error.retryAfterMs,
+    retryCount: error.retryCount,
+    details: error.details,
+  });
 }
 
 function publicProviderUrl(value: unknown): string | undefined {
@@ -455,7 +496,15 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
   });
   const requestId = safeRequestId(payload.request_id);
   truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
-  return { provider: "tavily", resolvedMode, status: response.status, requestId, documents, retryCount, truncated };
+  const providerValues = sensitiveUrlValues(rawResults.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const url = textValue((value as Record<string, unknown>).url);
+    return url ? [url] : [];
+  }));
+  return redactSearchResponse(
+    { provider: "tavily", resolvedMode, status: response.status, requestId, documents, retryCount, truncated },
+    providerValues,
+  );
 }
 
 async function searchExa(input: SearchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderSearchResponse> {
@@ -508,7 +557,15 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
   });
   const requestId = safeRequestId(payload.requestId);
   truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
-  return { provider: "exa", resolvedMode, status: response.status, requestId, documents, retryCount, truncated };
+  const providerValues = sensitiveUrlValues(rawResults.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const url = textValue((value as Record<string, unknown>).url);
+    return url ? [url] : [];
+  }));
+  return redactSearchResponse(
+    { provider: "exa", resolvedMode, status: response.status, requestId, documents, retryCount, truncated },
+    providerValues,
+  );
 }
 
 function initialProvider(input: SearchInput): ProviderName {
@@ -536,25 +593,28 @@ async function executeSearch(
         ? await searchTavily(input, dependencies, signal, deadlineAt)
         : await searchExa(input, dependencies, signal, deadlineAt);
       retryCount += response.retryCount;
+      const attemptRequestId = redactValues(response.requestId, sensitiveValuesFromQuery(input.query));
       attempts.push({
         provider,
         outcome: response.documents.length ? "success" : "empty",
         status: response.status,
+        ...(attemptRequestId ? { requestId: attemptRequestId } : {}),
         durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
       });
       return response;
     } catch (error) {
       if (error instanceof WebProviderError) {
-        retryCount += error.retryCount;
+        const redactedError = redactProviderError(error, sensitiveValuesFromQuery(input.query));
+        retryCount += redactedError.retryCount;
         attempts.push({
           provider,
           outcome: "error",
-          status: error.status,
-          errorKind: error.kind,
-          ...(error.requestId ? { requestId: error.requestId } : {}),
+          status: redactedError.status,
+          errorKind: redactedError.kind,
+          ...(redactedError.requestId ? { requestId: redactedError.requestId } : {}),
           durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
         });
-        error.details = {
+        redactedError.details = {
           attempts: [...attempts],
           retryCount,
           durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
@@ -562,10 +622,12 @@ async function executeSearch(
           cacheAgeMs: 0,
           returnedCharacters: 0,
           storedCharacters: 0,
-          cancellationState: error.kind === "cancelled",
-          errorKind: error.kind,
-          ...(error.requestId ? { requestId: error.requestId } : {}),
+          cancellationState: redactedError.kind === "cancelled",
+          errorKind: redactedError.kind,
+          ...(redactedError.requestId ? { requestId: redactedError.requestId } : {}),
+          ...(redactedError.retryAfterMs !== undefined ? { retryAfterMs: redactedError.retryAfterMs } : {}),
         };
+        throw redactedError;
       }
       throw error;
     }
@@ -771,8 +833,8 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   truncated ||= rawFailures.length > input.urls.length;
   const requestId = safeRequestId(payload.request_id);
   truncated ||= textValue(payload.request_id) !== undefined && requestId === undefined;
-  const reconciledFailures = reconcileFetchFailures(input.urls, documents, failures);
-  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents, failures: reconciledFailures, retryCount, truncated };
+  const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
+  return { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated };
 }
 
 function exaStatusFailure(value: unknown): FetchFailure | undefined {
@@ -789,23 +851,31 @@ function exaStatusFailure(value: unknown): FetchFailure | undefined {
   };
 }
 
-function reconcileFetchFailures(
+function reconcileFetchOutcomes(
   requestedUrls: string[],
   documents: Array<WebDocument & { content: string; providerTruncated: boolean }>,
   failures: FetchFailure[],
-): FetchFailure[] {
-  const seen = new Set([...documents.map((document) => document.url), ...failures.map((failure) => failure.url)]);
-  return [
-    ...failures,
-    ...requestedUrls.map(redactUrlForDisplay)
-      .filter((url) => !seen.has(url))
-      .map((url): FetchFailure => ({
-        url,
-        error: "missing_provider_outcome",
-        kind: "upstream",
-        retryable: true,
-      })),
-  ];
+): { documents: Array<WebDocument & { content: string; providerTruncated: boolean }>; failures: FetchFailure[] } {
+  const firstDocument = new Map<string, WebDocument & { content: string; providerTruncated: boolean }>();
+  const firstFailure = new Map<string, FetchFailure>();
+  for (const document of documents) if (!firstDocument.has(document.url)) firstDocument.set(document.url, document);
+  for (const failure of failures) if (!firstFailure.has(failure.url)) firstFailure.set(failure.url, failure);
+  const normalizedDocuments: Array<WebDocument & { content: string; providerTruncated: boolean }> = [];
+  const normalizedFailures: FetchFailure[] = [];
+  for (const url of requestedUrls.map(redactUrlForDisplay)) {
+    const document = firstDocument.get(url);
+    if (document) {
+      normalizedDocuments.push(document);
+      continue;
+    }
+    normalizedFailures.push(firstFailure.get(url) ?? {
+      url,
+      error: "missing_provider_outcome",
+      kind: "upstream",
+      retryable: true,
+    });
+  }
+  return { documents: normalizedDocuments, failures: normalizedFailures };
 }
 
 async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies, signal: AbortSignal | undefined, deadlineAt: number): Promise<ProviderFetchResponse> {
@@ -867,8 +937,8 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
   truncated ||= rawStatuses.length > input.urls.length;
   const requestId = safeRequestId(payload.requestId);
   truncated ||= textValue(payload.requestId) !== undefined && requestId === undefined;
-  const reconciledFailures = reconcileFetchFailures(input.urls, documents, failures);
-  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents, failures: reconciledFailures, retryCount, truncated };
+  const reconciled = reconcileFetchOutcomes(input.urls, documents, failures);
+  return { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated };
 }
 
 async function executeFetch(
@@ -901,26 +971,29 @@ async function executeFetch(
       const errorKind = response.documents.length === 0 && response.failures.length
         ? response.failures[0]?.kind
         : undefined;
+      const attemptRequestId = redactValues(response.requestId, sensitiveUrlValues(input.urls));
       attempts.push({
         provider,
         outcome,
         status: response.status,
         ...(errorKind ? { errorKind } : {}),
+        ...(attemptRequestId ? { requestId: attemptRequestId } : {}),
         durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
       });
       return response;
     } catch (error) {
       if (error instanceof WebProviderError) {
-        retryCount += error.retryCount;
+        const redactedError = redactProviderError(error, sensitiveUrlValues(input.urls));
+        retryCount += redactedError.retryCount;
         attempts.push({
           provider,
           outcome: "error",
-          status: error.status,
-          errorKind: error.kind,
-          ...(error.requestId ? { requestId: error.requestId } : {}),
+          status: redactedError.status,
+          errorKind: redactedError.kind,
+          ...(redactedError.requestId ? { requestId: redactedError.requestId } : {}),
           durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
         });
-        error.details = {
+        redactedError.details = {
           attempts: [...attempts],
           retryCount,
           durationMs: Math.max(0, dependencies.now() - attemptStartedAt),
@@ -928,10 +1001,12 @@ async function executeFetch(
           cacheAgeMs: 0,
           returnedCharacters: 0,
           storedCharacters: 0,
-          cancellationState: error.kind === "cancelled",
-          errorKind: error.kind,
-          ...(error.requestId ? { requestId: error.requestId } : {}),
+          cancellationState: redactedError.kind === "cancelled",
+          errorKind: redactedError.kind,
+          ...(redactedError.requestId ? { requestId: redactedError.requestId } : {}),
+          ...(redactedError.retryAfterMs !== undefined ? { retryAfterMs: redactedError.retryAfterMs } : {}),
         };
+        throw redactedError;
       }
       throw error;
     }
@@ -969,44 +1044,51 @@ async function prepareFetchResults(
   const records: Array<Omit<ArtifactRecord, "path">> = [];
   let truncated = response.truncated || response.documents.some((document) => document.providerTruncated);
   const successful: string[] = [];
+  let usedCharacters = 0;
   try {
     for (let index = 0; index < response.documents.length; index++) {
-    ensureNotCancelled(signal, response.provider);
-    const document = response.documents[index]!;
-    let content = document.content;
-    const providerCapMarker = document.providerTruncated
-      ? `\n\n[Provider content capped at ${document.content.length} characters.]`
-      : "";
-    if (content.length > maxInlineChars) {
-      let artifact: ArtifactRecord;
-      try {
-        artifact = await artifacts.save({
-          url: document.url,
-          title: document.title,
-          content: document.content,
-          provider: response.provider,
-          context: artifactContext,
-        }, signal);
-      } catch (error) {
-        throw normalizeArtifactError(error, response.provider);
-      }
       ensureNotCancelled(signal, response.provider);
-      const { path: _path, ...handle } = artifact;
-      records.push(handle);
-      truncated = true;
-      content = `${content.slice(0, maxInlineChars)}\n\n[Content truncated. Retrieve owner-only artifact ${artifact.id} with web_fetch artifactId.]${providerCapMarker}`;
-    } else {
-      content = `${content}${providerCapMarker}`;
-    }
-      successful.push([
-      `${index + 1}. ${document.title}`,
-      `   URL: ${document.url}`,
-      ...(document.publishedAt ? [`   Published: ${document.publishedAt}`] : []),
-      ...(document.author ? [`   Author: ${document.author}`] : []),
-      ...(document.snippets.length ? [`   Evidence: ${document.snippets.join(" […] ")}`] : []),
-      "",
-      content,
-      ].join("\n"));
+      const document = response.documents[index]!;
+      const providerCapMarker = document.providerTruncated
+        ? `\n\n[Provider content capped at ${document.content.length} characters.]`
+        : "";
+      const header = [
+        `${index + 1}. ${document.title}`,
+        `   URL: ${document.url}`,
+        ...(document.publishedAt ? [`   Published: ${document.publishedAt}`] : []),
+        ...(document.author ? [`   Author: ${document.author}`] : []),
+        ...(document.snippets.length ? [`   Evidence: ${document.snippets.join(" […] ")}`] : []),
+        "",
+      ].join("\n");
+      const separatorLength = successful.length ? 2 : 0;
+      let content = `${document.content}${providerCapMarker}`;
+      if (usedCharacters + separatorLength + header.length + content.length > maxInlineChars) {
+        let artifact: ArtifactRecord;
+        try {
+          artifact = await artifacts.save({
+            url: document.url,
+            title: document.title,
+            content: document.content,
+            provider: response.provider,
+            context: artifactContext,
+          }, signal);
+        } catch (error) {
+          throw normalizeArtifactError(error, response.provider);
+        }
+        ensureNotCancelled(signal, response.provider);
+        const { path: _path, ...handle } = artifact;
+        records.push(handle);
+        truncated = true;
+        const marker = `\n\n[Content truncated. Retrieve owner-only artifact ${artifact.id} with web_fetch artifactId.]${providerCapMarker}`;
+        const available = Math.max(0, maxInlineChars - usedCharacters - separatorLength - header.length - marker.length);
+        content = `${document.content.slice(0, available)}${marker}`;
+      }
+      const remaining = Math.max(0, maxInlineChars - usedCharacters - separatorLength);
+      const entry = `${header}${content}`.slice(0, remaining);
+      if (entry) {
+        successful.push(entry);
+        usedCharacters += separatorLength + entry.length;
+      }
     }
   } catch (error) {
     await Promise.allSettled(records.map((record) => artifacts.discard(record.id)));
@@ -1015,8 +1097,10 @@ async function prepareFetchResults(
   const failed = response.failures.length
     ? ["Failures:", ...response.failures.map((failure) => `- ${failure.url}: [${failure.kind}] ${failure.error}`)].join("\n")
     : "";
+  const combined = [...successful, failed].filter(Boolean).join("\n\n") || "No page content was extracted.";
+  if (combined.length > maxInlineChars) truncated = true;
   return {
-    text: [...successful, failed].filter(Boolean).join("\n\n") || "No page content was extracted.",
+    text: combined.slice(0, maxInlineChars),
     truncated,
     artifacts: records,
   };
@@ -1077,6 +1161,9 @@ export default function webResearch(
         publishedAfter: publishedDate(raw.publishedAfter, "publishedAfter"),
         publishedBefore: publishedDate(raw.publishedBefore, "publishedBefore"),
       };
+      if (input.publishedAfter && input.publishedBefore && Date.parse(input.publishedAfter) > Date.parse(input.publishedBefore)) {
+        validationError("publishedAfter must not be later than publishedBefore.");
+      }
       const startedAt = dependencies.now();
       const selectedProvider = initialProvider(input);
       ensureNotCancelled(signal, selectedProvider);
