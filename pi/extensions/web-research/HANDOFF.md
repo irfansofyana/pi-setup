@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 537 passed, 0 failed.
-- Focused web-research suite: 110 passed, 0 failed.
+- Full repository suite: 538 passed, 0 failed.
+- Focused web-research suite: 111 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 8 passed, 0 failed.
@@ -199,6 +199,7 @@ Accepted:
 - Artifact batches remain pending through all cancellable preparation; the outer fetch path commits once at the final boundary and performs no asynchronous work after peer visibility, so rollback never invalidates a peer-visible handle.
 - Timer-driven artifact tests poll against a bounded monotonic deadline instead of assuming cleanup completes within a fixed wall-clock sleep under parallel CI load.
 - Provider HTTP 408 responses normalize to retryable timeouts; oversized numeric `Retry-After` values are rejected before multiplication can produce non-finite telemetry.
+- Redaction-bound failures receive the selected or active provider explicitly, so Exa safety failures cannot be falsely attributed to Tavily.
 - Failed/cancelled creators remove both artifact files and pending markers; expiry cleanup removes orphaned or expired markers.
 
 Rejected as a current PR blocker:

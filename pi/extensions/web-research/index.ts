@@ -386,7 +386,7 @@ function tolerantDecodeStages(rawValue: string): string[] {
 const MAX_REDACTION_VALUES = 64;
 const MAX_REDACTION_VALUE_CHARS = 32_768;
 
-function sensitiveUrlValues(urls: string[], provider: ProviderName = "tavily"): string[] {
+function sensitiveUrlValues(urls: string[], provider: ProviderName): string[] {
   const values = new Set<string>();
   let totalCharacters = 0;
   const addCandidate = (value: string): void => {
@@ -459,13 +459,13 @@ function redactFetchResponse(response: ProviderFetchResponse, values: string[]):
   };
 }
 
-function sensitiveValuesFromQuery(query: string): string[] {
+function sensitiveValuesFromQuery(query: string, provider: ProviderName): string[] {
   const urls = query.match(/https?:\/\/[^\s<>"']+/gi) ?? [];
   const validUrls = urls.flatMap((value) => {
     const candidate = value.replace(/[),.;!?]+$/, "");
     try { return [new URL(candidate).toString()]; } catch { return []; }
   });
-  return sensitiveUrlValues(validUrls);
+  return sensitiveUrlValues(validUrls, provider);
 }
 
 function literalSecretValues(values: Array<string | undefined>): string[] {
@@ -627,7 +627,7 @@ async function searchTavily(input: SearchInput, dependencies: WebResearchDepende
     if (!value || typeof value !== "object") return [];
     const url = textValue((value as Record<string, unknown>).url);
     return url ? [url] : [];
-  }));
+  }), "tavily");
   return redactSearchResponse(
     { provider: "tavily", resolvedMode, status: response.status, requestId, documents, retryCount, truncated },
     providerValues,
@@ -691,7 +691,7 @@ async function searchExa(input: SearchInput, dependencies: WebResearchDependenci
     if (!value || typeof value !== "object") return [];
     const url = textValue((value as Record<string, unknown>).url);
     return url ? [url] : [];
-  }));
+  }), "exa");
   return redactSearchResponse(
     { provider: "exa", resolvedMode, status: response.status, requestId, documents, retryCount, truncated },
     providerValues,
@@ -711,7 +711,7 @@ async function executeSearch(
 ): Promise<{ response: ProviderSearchResponse; attempts: SearchAttempt[]; retryCount: number }> {
   const selected = initialProvider(input);
   const attempts: SearchAttempt[] = [];
-  const redactionValues = requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query));
+  const redactionValues = requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query, selected));
   let retryCount = 0;
   const deadlineAt = dependencies.totalRequestTimeoutMs > 0
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
@@ -1003,7 +1003,7 @@ async function fetchTavily(input: FetchInput, dependencies: WebResearchDependenc
   const providerSecrets = sensitiveUrlValues([
     ...rawResults.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),
     ...rawFailures.flatMap((value) => value && typeof value === "object" ? [textValue((value as Record<string, unknown>).url) ?? ""] : []),
-  ]);
+  ], "tavily");
   return redactFetchResponse(
     { provider: "tavily", resolvedMode: "basic", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated },
     providerSecrets,
@@ -1135,7 +1135,7 @@ async function fetchExa(input: FetchInput, dependencies: WebResearchDependencies
     ...rawStatuses.flatMap((value) => value && typeof value === "object"
       ? [textValue((value as Record<string, unknown>).id) ?? "", textValue((value as Record<string, unknown>).url) ?? ""]
       : []),
-  ]);
+  ], "exa");
   return redactFetchResponse(
     { provider: "exa", resolvedMode: "contents", status: response.status, requestId, documents: reconciled.documents, failures: reconciled.failures, retryCount, truncated },
     providerSecrets,
@@ -1155,8 +1155,8 @@ async function executeFetch(
   const selected: ProviderName = input.provider === "auto" ? "tavily" : input.provider;
   const attempts: FetchAttempt[] = [];
   const redactionValues = requestRedactionValues(dependencies, [
-    ...sensitiveUrlValues(input.urls),
-    ...sensitiveValuesFromQuery(input.focus ?? ""),
+    ...sensitiveUrlValues(input.urls, selected),
+    ...sensitiveValuesFromQuery(input.focus ?? "", selected),
   ]);
   let retryCount = 0;
   const deadlineAt = dependencies.totalRequestTimeoutMs > 0
@@ -1485,7 +1485,7 @@ export default function webResearch(
       }
       const executed = await executeSearch(input, dependencies, signal, onUpdate);
       ensureNotCancelled(signal, executed.response.provider);
-      const response = redactSearchResponse(executed.response, requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query)));
+      const response = redactSearchResponse(executed.response, requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query, executed.response.provider)));
       const { attempts, retryCount } = executed;
       const formatted = formatSearchResults(response.documents);
       ensureNotCancelled(signal, response.provider);
@@ -1614,8 +1614,8 @@ export default function webResearch(
         const executed = await executeFetch(input, dependencies, signal, onUpdate);
         ensureNotCancelled(signal, executed.response.provider);
         response = redactFetchResponse(executed.response, requestRedactionValues(dependencies, [
-          ...sensitiveUrlValues(input.urls),
-          ...sensitiveValuesFromQuery(input.focus ?? ""),
+          ...sensitiveUrlValues(input.urls, executed.response.provider),
+          ...sensitiveValuesFromQuery(input.focus ?? "", executed.response.provider),
         ]));
         attempts = executed.attempts;
         retryCount = executed.retryCount;

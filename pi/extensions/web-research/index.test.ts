@@ -258,6 +258,33 @@ test("web_fetch rejects excessive redaction patterns before provider work", asyn
   assert.equal(calls, 0);
 });
 
+test("explicit Exa redaction-bound failures preserve provider attribution", async () => {
+  let calls = 0;
+  const tools = harness(async () => {
+    calls++;
+    return new Response("{}");
+  }, { EXA_API_KEY: "test-exa" });
+  const queryValues = Array.from({ length: 80 }, (_, index) => `token=secret-${index}`).join("&");
+
+  await assert.rejects(
+    tools.get("web_search").execute(
+      "exa-redaction-bound",
+      { query: `find https://docs.example.com/page?${queryValues}`, provider: "exa" },
+      undefined,
+      undefined,
+      { cwd: "/tmp/project" },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof WebProviderError);
+      assert.equal(error.kind, "safety-policy");
+      assert.equal(error.provider, "exa");
+      assert.equal(error.details.errorKind, "safety-policy");
+      return true;
+    },
+  );
+  assert.equal(calls, 0);
+});
+
 test("web_search normalizes semantic validation failures", async () => {
   const tools = harness(async () => { throw new Error("provider must not run"); }, { TAVILY_API_KEY: "test-tavily" });
   await assert.rejects(
