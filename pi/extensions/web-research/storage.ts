@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 export class TimedCache<T> {
   private readonly entries = new Map<string, { value: T; createdAt: number; expiresAt: number }>();
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly maxEntries: number;
@@ -21,6 +22,19 @@ export class TimedCache<T> {
     }
   }
 
+  private scheduleExpirySweep(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
+    if (this.entries.size === 0) return;
+    const earliest = Math.min(...[...this.entries.values()].map((entry) => entry.expiresAt));
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = undefined;
+      this.sweepExpired();
+      this.scheduleExpirySweep();
+    }, Math.max(0, earliest - this.now()));
+    this.expiryTimer.unref?.();
+  }
+
   get(key: string): T | undefined {
     return this.getWithAge(key)?.value;
   }
@@ -28,13 +42,13 @@ export class TimedCache<T> {
   getWithAge(key: string): { value: T; ageMs: number } | undefined {
     this.sweepExpired();
     const entry = this.entries.get(key);
-    if (!entry) return undefined;
-    if (entry.expiresAt <= this.now()) {
-      this.entries.delete(key);
+    if (!entry) {
+      this.scheduleExpirySweep();
       return undefined;
     }
     this.entries.delete(key);
     this.entries.set(key, entry);
+    this.scheduleExpirySweep();
     return { value: entry.value, ageMs: Math.max(0, this.now() - entry.createdAt) };
   }
 
@@ -49,6 +63,7 @@ export class TimedCache<T> {
     }
     const createdAt = this.now();
     this.entries.set(key, { value, createdAt, expiresAt: createdAt + this.ttlMs });
+    this.scheduleExpirySweep();
   }
 }
 

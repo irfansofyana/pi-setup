@@ -31,8 +31,8 @@ Pi load smoke used RPC mode with only `pi/extensions/web-research/index.ts` load
 
 ## Observed verification
 
-- Full repository suite: 497 passed, 0 failed.
-- Focused web-research suite: 71 passed, 0 failed.
+- Full repository suite: 498 passed, 0 failed.
+- Focused web-research suite: 72 passed, 0 failed.
 - Strict isolated TypeScript check: passed.
 - Package dry-run: passed; extension code/trackers/evaluation corpus and bundled skill/references are present.
 - Package contract: 7 passed, 0 failed.
@@ -158,6 +158,7 @@ Accepted:
 
 - The two disclosed P1 findings matched the ninth independent review and are fixed as described above.
 - Per-fetch URL size was unbounded. Runtime validation and the tool schema now cap each URL at 4,096 characters before provider work.
+- The first cache-expiry remediation still required later cache traffic. A single unref'd nearest-expiry timer now removes idle entries at TTL without keeping the Pi process alive.
 
 Rejected as a current PR blocker:
 

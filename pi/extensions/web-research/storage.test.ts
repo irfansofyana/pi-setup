@@ -32,6 +32,13 @@ test("TimedCache sweeps unrelated expired entries during ordinary access", () =>
   assert.equal((cache as any).entries.has("sensitive-plaintext-key"), false);
 });
 
+test("TimedCache expires idle entries without later cache access", async () => {
+  const cache = new TimedCache<string>(() => Date.now(), 10, 10);
+  cache.set("idle-sensitive-key", "secret");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal((cache as any).entries.has("idle-sensitive-key"), false);
+});
+
 test("ArtifactStore preserves valid artifacts and rejects a save when the entry cap is full", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-web-artifact-capacity-"));
   let id = 0;
