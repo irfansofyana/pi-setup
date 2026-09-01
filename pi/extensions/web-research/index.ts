@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { ArtifactStore, TimedCache, type ArtifactRecord } from "./storage.ts";
 import {
   defaultSleep,
@@ -489,6 +490,12 @@ function requestRedactionValues(dependencies: WebResearchDependencies, contextua
   ])].sort((a, b) => b.length - a.length);
 }
 
+function searchQueryForDisplay(query: unknown, dependencies: WebResearchDependencies, provider: ProviderName): string {
+  const sanitized = sanitizeProviderText(query, true) ?? "[invalid query]";
+  const values = requestRedactionValues(dependencies, sensitiveValuesFromQuery(sanitized, provider));
+  return redactValues(sanitized, values) ?? "[REDACTED]";
+}
+
 function rejectConfiguredCredentialLiterals(
   values: Array<string | undefined>,
   dependencies: WebResearchDependencies,
@@ -559,12 +566,27 @@ function ensureNotCancelled(signal: AbortSignal | undefined, provider: ProviderN
   }
 }
 
+function sourceType(url: string): string {
+  let hostname: string;
+  try { hostname = new URL(url).hostname.toLowerCase(); } catch { return "Independent publication"; }
+  if (hostname.startsWith("docs.") || hostname.startsWith("developer.")) return "Documentation site";
+  if (["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`))) {
+    return "Repository source";
+  }
+  if (["stackoverflow.com", "stackexchange.com", "reddit.com", "news.ycombinator.com"].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`))) {
+    return "Community discussion";
+  }
+  if (hostname === "arxiv.org" || hostname === "doi.org" || hostname.endsWith(".edu")) return "Academic or scholarly source";
+  return "Independent publication";
+}
+
 function formatSearchResults(results: WebDocument[]): { text: string; truncated: boolean } {
   if (results.length === 0) return { text: "No web search results.", truncated: false };
   const formatted = results.map((result, index) => [
     `${index + 1}. ${result.title}`,
     `   URL: ${result.url}`,
     `   Canonical URL: ${result.canonicalUrl}`,
+    `   Source type: ${sourceType(result.canonicalUrl)}`,
     `   Provider: ${result.provider}`,
     ...(result.publishedAt ? [`   Published: ${result.publishedAt}`] : []),
     ...(result.author ? [`   Author: ${result.author}`] : []),
@@ -712,13 +734,14 @@ async function executeSearch(
   const selected = initialProvider(input);
   const attempts: SearchAttempt[] = [];
   const redactionValues = requestRedactionValues(dependencies, sensitiveValuesFromQuery(input.query, selected));
+  const displayQuery = searchQueryForDisplay(input.query, dependencies, selected);
   let retryCount = 0;
   const deadlineAt = dependencies.totalRequestTimeoutMs > 0
     ? dependencies.monotonicNow() + dependencies.totalRequestTimeoutMs
     : Number.POSITIVE_INFINITY;
   const run = async (provider: ProviderName): Promise<ProviderSearchResponse> => {
     const attemptStartedAt = dependencies.monotonicNow();
-    onUpdate?.({ content: [{ type: "text", text: `Searching ${providerLabel(provider)}…` }], details: { provider } });
+    onUpdate?.({ content: [{ type: "text", text: `Searching ${providerLabel(provider)} for ${displayQuery}…` }], details: { provider } });
     try {
       const response = provider === "tavily"
         ? await searchTavily(input, dependencies, signal, deadlineAt)
@@ -1428,6 +1451,12 @@ export default function webResearch(
       publishedAfter: Schema.Optional(Schema.String({ description: "Inclusive ISO publication lower bound; timestamps require provider=exa." })),
       publishedBefore: Schema.Optional(Schema.String({ description: "Inclusive ISO publication upper bound; timestamps require provider=exa." })),
     }) as any,
+    renderCall(args: Record<string, unknown>, theme: any, context: any) {
+      const text = context.lastComponent ?? new Text("", 0, 0);
+      const query = searchQueryForDisplay(args.query, dependencies, "tavily");
+      text.setText(`${theme.fg("toolTitle", "Web Search")}\n${theme.fg("toolOutput", `Query: ${query}`)}`);
+      return text;
+    },
     async execute(
       _toolCallId: string,
       params: Record<string, unknown>,
