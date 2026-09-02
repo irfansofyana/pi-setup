@@ -1244,6 +1244,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       try {
         const registry = modelRegistryRoutingSnapshot(ctx);
+        // Zero-reference retained proxies have already unregistered their
+        // providers, so live models are native again and safe to snapshot.
+        shared.canonicalModels = routableModels(registry.models, dependencies.configuredProviderIds());
         const registration = registerProxyProviders(
           pi,
           config,
