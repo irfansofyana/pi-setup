@@ -2,8 +2,8 @@
 description: Worktree-isolated implementation specialist
 display_name: Sangkur
 tools: read, grep, find, ls, edit, write
-disallowed_tools: Agent, get_subagent_result, steer_subagent
 extensions: [headroom]
+disallowed_tools: Agent, get_subagent_result, steer_subagent, headroom_stats
 skills: code-review
 thinking: high
 max_turns: 60

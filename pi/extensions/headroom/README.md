@@ -121,7 +121,7 @@ Defaults:
 ### Native proxy mode (default)
 
 - Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy.
-- Native routing requires the Headroom proxy to report routing readiness before built-in and compatible `models.json` provider overrides are installed. After changing model providers during a session, use `/headroom disable` then `/headroom enable`, or `/reload`, to rebuild routing safely.
+- Native routing requires the Headroom proxy to report routing readiness before built-in and compatible `models.json` provider overrides are installed. After changing model providers during a session, use `/headroom disable` then `/headroom enable`, or `/reload`, to rebuild routing safely. Stop active child sessions before changing `proxyUrl` or `models.json`; shared runtime routes stay fixed until last lease releases.
 - Readiness is checked again at `turn_start`. If an adopted external proxy disappears, the extension first restores Pi's native providers; the triggering model request stays on native routing, and one managed replacement is attempted after that turn ends when `startup` is `auto`.
 - Manual and off startup modes never recover automatically, and recovery uses no background polling.
 - Optional proxy-history synchronization runs after turns. Repeated history failures back off without disabling otherwise healthy model routing.
@@ -141,7 +141,7 @@ Defaults:
 - If concurrent sessions race to start the same local proxy, a losing session rechecks readiness after its child exits and adopts the healthy winner instead of disabling compression.
 - Missing CLI, log/PID setup failures, spawn errors, readiness timeouts, and unexpected managed-proxy exits always produce a Pi notification and disable Headroom safely; `notifyFailures` only controls repetitive legacy compression-path warnings.
 - `/headroom stop` never kills an external proxy and disables Headroom for the current session.
-- Headroom uses Pi's provider-registration ownership API and skips IDs already registered by another extension, including built-in IDs another extension has overridden. Compatible custom IDs are routed only when declared in `models.json` and not extension-owned. If ownership cannot be established, native routing fails closed without registering overrides. This prevents `/headroom disable` or proxy failure from deleting another extension's provider registration. Disabling Headroom restores Pi's built-in and `models.json` definitions.
+- Headroom uses Pi's provider-registration ownership API and skips IDs already registered by another extension, including built-in IDs another extension has overridden. Compatible custom IDs are routed only when declared in `models.json` and not extension-owned. If ownership cannot be established, native routing fails closed without registering overrides. This prevents `/headroom disable` or proxy failure from deleting another extension's provider registration. Disabling Headroom restores Pi's built-in and `models.json` definitions after the last active shared-session routing lease releases.
 - Commands mutate runtime state only. Use `/headroom config save` to persist.
 
 ## Local CCR store

@@ -3,6 +3,7 @@ description: Evidence-first public web researcher
 display_name: Ciung
 tools: "ext:web-research/web_search, ext:web-research/web_fetch"
 extensions: [web-research, headroom]
+disallowed_tools: headroom_stats
 skills: my-web-search
 thinking: medium
 max_turns: 20
