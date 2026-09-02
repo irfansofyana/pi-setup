@@ -1366,7 +1366,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           requestSharedManagedRelease(shared);
         }
       } else if (disableSharedRuntime) {
-        shared.invalidatedReferences = shared.references;
+        shared.invalidatedReferences += shared.references;
         shared.references = 0;
         shared.generation++;
         shared.adoptable = false;
