@@ -823,9 +823,12 @@ function modelRegistryRoutingSnapshot(ctx: ExtensionContext): { models: unknown[
 
 function sharedRoutingMatches(shared: SharedHeadroomRoutingState, config: HeadroomConfig, models: HeadroomRouteModel[]): boolean {
   if (shared.proxyUrl !== config.proxyUrl) return false;
-  const canonicalKeys = new Set(shared.canonicalModels.map((model) => routeKey(model.provider, model.id)));
-  const liveKeys = new Set(models.map((model) => routeKey(model.provider, model.id)));
-  if (canonicalKeys.size !== liveKeys.size || [...canonicalKeys].some((key) => !liveKeys.has(key))) return false;
+  const canonicalByKey = new Map(shared.canonicalModels.map((model) => [routeKey(model.provider, model.id), model]));
+  const liveByKey = new Map(models.map((model) => [routeKey(model.provider, model.id), model]));
+  if (canonicalByKey.size !== liveByKey.size || [...canonicalByKey.keys()].some((key) => {
+    const live = liveByKey.get(key);
+    return !live || live.api !== canonicalByKey.get(key)!.api;
+  })) return false;
   // Provider registration mutates live model baseUrls to point at Headroom.
   // Replan from definitions captured before that mutation, not routed models.
   const plan = planProxyProviderRoutes(config.proxyUrl, shared.canonicalModels);
@@ -1712,6 +1715,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       handleTerminalFailure(lifecycle.handleSpawnError(error));
     });
     child.on("exit", (code, signal) => {
+      // handleExit suppresses notices for intentional or previously failed
+      // termination; confirmed exit must still release transferred ownership.
+      clearManagedProcessFromSharedRouting(child);
       handleTerminalFailure(lifecycle.handleExit(code, signal));
       if (managedProcess === child) {
         managedStartupPending = false;
