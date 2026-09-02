@@ -3,7 +3,7 @@ description: Read-only codebase architecture mapper
 display_name: Laya
 tools: read, grep, find, ls
 extensions: [headroom]
-disallowed_tools: headroom_stats
+disallowed_tools: headroom_stats, headroom_retrieve
 skills: mermaid, teach
 thinking: high
 max_turns: 25

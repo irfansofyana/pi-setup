@@ -60,12 +60,14 @@ test("all specialists use fresh context and portable runtime model selection", (
   }
 });
 
-test("specialists load Headroom routing without exposing stats tool", () => {
+test("specialists load Headroom routing without exposing Headroom tools", () => {
   for (const role of roles) {
     const fm = frontmatter(role);
     assert.match(fm, /^extensions:.*\bheadroom\b/m);
     assert.match(fm, /^disallowed_tools:.*\bheadroom_stats\b/m);
+    assert.match(fm, /^disallowed_tools:.*\bheadroom_retrieve\b/m);
     assert.doesNotMatch(fm, /^tools:.*\bheadroom_stats\b/m);
+    assert.doesNotMatch(fm, /^tools:.*\bheadroom_retrieve\b/m);
   }
 });
 
@@ -111,7 +113,7 @@ test("builder is a fresh-context worktree agent with narrow local editing author
   assert.match(fm, /^isolation: worktree$/m);
   assert.match(fm, /^skills: code-review$/m);
   assert.match(fm, /^run_in_background: true$/m);
-  assert.match(fm, /^disallowed_tools: Agent, get_subagent_result, steer_subagent, headroom_stats$/m);
+  assert.match(fm, /^disallowed_tools: Agent, get_subagent_result, steer_subagent, headroom_stats, headroom_retrieve$/m);
   assert.match(content, /cannot execute tests/i);
   assert.match(content, /execution is pending/i);
   assert.match(content, /smallest assigned vertical slice/i);

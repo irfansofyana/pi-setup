@@ -1208,7 +1208,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     if (shared?.references === 0) {
       const ownsManagedProcess = !!managedProcess && shared.managedProcess === managedProcess;
       const canReuseUnmanagedState = !shared.managedProcess && !shared.stopping;
-      if (shared.invalidatedReferences > 0 || ((!shared.adoptable && !ownsManagedProcess && !canReuseUnmanagedState) || shared.proxyUrl !== config.proxyUrl)) {
+      const canReuseRetainedManagedState = !!shared.managedProcess && !shared.stopping;
+      if ((!shared.adoptable && !ownsManagedProcess && !canReuseUnmanagedState && !canReuseRetainedManagedState) || shared.proxyUrl !== config.proxyUrl) {
         proxyRoutingError = shared.adoptable
           ? "another session owns a managed Headroom proxy for a different proxyUrl"
           : "a previous shared Headroom managed proxy is still tracked after failed termination";
@@ -1301,7 +1302,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (!leaseIsCurrent) {
         shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
         if (shared.invalidatedReferences === 0) {
-          if (shared.releaseManagedProcess) {
+          if (shared.references > 0) {
+            shared.stopping = false;
+            shared.adoptable = false;
+          } else if (shared.releaseManagedProcess) {
             shared.stopping = true;
             shared.adoptable = false;
             if (releaseFinalManagedProcess && !managedProcess) void shared.releaseManagedProcess().catch(() => undefined);
@@ -1341,6 +1345,25 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       return;
     }
     unregisterProxyProviders(pi, active.registeredProviders);
+  };
+  const retireInvalidatedProxyLease = (): void => {
+    const active = proxyRegistration;
+    const shared = active?.sharedState;
+    if (!active || !shared || active.leaseGeneration === undefined || active.leaseGeneration === shared.generation) return;
+    proxyRegistration = undefined;
+    shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
+    if (shared.invalidatedReferences > 0) return;
+    if (shared.references > 0) {
+      shared.stopping = false;
+      shared.adoptable = false;
+      return;
+    }
+    if (shared.releaseManagedProcess) {
+      shared.stopping = false;
+      shared.adoptable = true;
+      return;
+    }
+    if (sharedRoutingStates().get(shared.runtime) === shared) sharedRoutingStates().delete(shared.runtime);
   };
   let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
@@ -1892,8 +1915,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   });
 
   pi.on("before_provider_headers", (event, ctx) => {
-    if (!runtimeEnabled || config.localToolResultCompression || !proxyRegistration || (proxyRegistration.sharedState && proxyRegistration.sharedState.references === 0) || !ctx.model) return;
-    const upstream = proxyRegistration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
+    const routingRuntime = runtimeForRouting(ctx);
+    const shared = routingRuntime ? sharedRoutingStates().get(routingRuntime) : undefined;
+    const registration = proxyRegistration && (!proxyRegistration.sharedState || proxyRegistration.sharedState.references > 0)
+      ? proxyRegistration
+      : shared && shared.references > 0 ? shared.registration : undefined;
+    if ((!runtimeEnabled && !(shared && shared.references > 0)) || config.localToolResultCompression || !registration || !ctx.model) return;
+    const upstream = registration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
     if (upstream) event.headers["x-headroom-base-url"] = upstream;
   });
 
@@ -2100,13 +2128,18 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       if (command === "enable") {
         const proxyUrlSupported = hasSupportedProxyProtocol(config.proxyUrl);
+        const routingRuntime = runtimeForRouting(ctx);
+        const sharedRouting = routingRuntime ? sharedRoutingStates().get(routingRuntime) : undefined;
+        const routingActive = !!proxyRegistration && (!proxyRegistration.sharedState || proxyRegistration.sharedState.references > 0)
+          || !!sharedRouting && sharedRouting.references > 0;
+        if (!routingActive) retireInvalidatedProxyLease();
         const enableSignal = getContextSignal(ctx);
         if (startInFlight) {
           if (managedStartupPending) await startInFlight;
           else startCoordinator.cancel();
         }
         if (enableSignal?.aborted) return;
-        if (runtimeEnabled) {
+        if (runtimeEnabled && routingActive) {
           const routingRevision = routingMutationRevision;
           const healthy = await dependencies.health(config, enableSignal);
           if (enableSignal?.aborted || !routingMutationIsCurrent(routingRevision)) return;
@@ -2121,6 +2154,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           disableProxyRouting();
           updateStatus(ctx, runtimeEnabled, owner, stats);
         }
+        if (!routingActive) runtimeEnabled = false;
         const routingRevision = beginRoutingMutation();
         const proxyHealthy = config.startup !== "off" && proxyUrlSupported && await dependencies.health(config, enableSignal);
         if (enableSignal?.aborted || !routingMutationIsCurrent(routingRevision)) return;
