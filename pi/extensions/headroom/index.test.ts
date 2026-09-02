@@ -494,6 +494,44 @@ test("shared managed proxy survives parent shutdown and stops after final child 
   assert.equal(terminateCalls, 1);
 });
 
+test("child adopts retained managed proxy after parent disables routing", async () => {
+  const runtime = {};
+  const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
+  const child = Object.assign(new EventEmitter(), { pid: 8383, exitCode: null, signalCode: null, killed: false });
+  let terminateCalls = 0;
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+    terminateChild: async () => { terminateCalls++; return true; },
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+  await parent.commands.headroom.handler("disable", parent.ctx);
+
+  const childSession = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+  }, undefined, models, [], runtime);
+  await childSession.handlers.session_start({}, childSession.ctx);
+  assert.deepEqual(childSession.providers.map((provider) => provider.name), ["openai", "anthropic", "openai-codex", "litellm"]);
+
+  await parent.handlers.session_shutdown({}, parent.ctx);
+  assert.equal(terminateCalls, 0);
+  const event = { headers: {} as Record<string, string | null> };
+  await childSession.handlers.before_provider_headers(event, { ...childSession.ctx, model: models[0] });
+  assert.equal(event.headers["x-headroom-base-url"], "https://litellm.example");
+  await childSession.handlers.session_shutdown({}, childSession.ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(terminateCalls, 1);
+});
+
 test("managed proxy can disable and re-enable routing without respawn", async () => {
   const child = Object.assign(new EventEmitter(), { pid: 8282, exitCode: null, signalCode: null, killed: false });
   let healthCalls = 0;
