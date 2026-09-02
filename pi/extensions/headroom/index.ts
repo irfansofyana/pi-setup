@@ -1371,6 +1371,14 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   let managedLifecycle: ReturnType<typeof createManagedProxyLifecycle> | undefined;
   let managedSharedRoutingState: SharedHeadroomRoutingState | undefined;
   let managedStartupPending = false;
+  const synchronizeSharedRouting = (): void => {
+    const active = proxyRegistration;
+    const shared = active?.sharedState;
+    if (!active || !shared || active.leaseGeneration === undefined || active.leaseGeneration === shared.generation) return;
+    const routeActive = shared.references > 0;
+    retireInvalidatedProxyLease();
+    if (!routeActive) runtimeEnabled = false;
+  };
   const clearManagedProcessFromSharedRouting = (child: ChildProcess): void => {
     const shared = managedSharedRoutingState;
     if (!shared || shared.managedProcess !== child) return;
@@ -1860,6 +1868,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       return terminated;
     }
     if (releaseSharedManagedProcess) {
+      if (managedSharedRouting) managedSharedRouting.stopping = true;
       const terminated = await releaseSharedManagedProcess();
       owner = terminated ? "none" : "managed";
       if (notify && ctx.hasUI) ctx.ui.notify(terminated ? "Headroom managed proxy stopped. Compression disabled." : "Headroom managed proxy did not terminate; compression is disabled and the process remains tracked. Retry /headroom stop or terminate it manually.", terminated ? "info" : "error");
@@ -1927,6 +1936,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   let deferredNativeRecoveryRevision: number | undefined;
   const recoverNativeRouting = async (ctx: ExtensionContext, deferReplacement = false): Promise<boolean> => {
+    synchronizeSharedRouting();
     if (config.localToolResultCompression) return runtimeEnabled;
     if (!runtimeEnabled) return false;
     const signal = getContextSignal(ctx);
@@ -2095,6 +2105,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     promptSnippet: "Inspect Headroom compression savings and local retrieval stats.",
     parameters: Schema.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      synchronizeSharedRouting();
       const history = runtimeEnabled
         ? await fetchProxyHistory(signal ?? getContextSignal(ctx))
         : { error: "routing disabled" };
@@ -2113,6 +2124,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       const trimmed = args.trim();
       const [command = "status", ...rest] = trimmed.split(/\s+/);
       const value = rest.join(" ").trim();
+      synchronizeSharedRouting();
 
       if (command === "start") {
         await startManagedProxy(ctx);
