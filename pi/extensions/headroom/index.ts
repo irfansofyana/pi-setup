@@ -64,6 +64,8 @@ interface SharedHeadroomRoutingState {
   proxyUrl: string;
   excludedProviderIds: Set<string>;
   references: number;
+  generation: number;
+  invalidatedReferences: number;
   adoptable: boolean;
   stopping: boolean;
   managedProcess?: ChildProcess;
@@ -73,6 +75,7 @@ interface SharedHeadroomRoutingState {
 
 interface ActiveHeadroomProxyRegistration extends HeadroomProxyRegistration {
   sharedState?: SharedHeadroomRoutingState;
+  leaseGeneration?: number;
 }
 
 // Subagent extension instances share ModelRuntime with parent, but not extension-local state.
@@ -1203,7 +1206,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       return false;
     }
     if (shared?.references === 0) {
-      if (!shared.adoptable || shared.proxyUrl !== config.proxyUrl) {
+      const ownsManagedProcess = !!managedProcess && shared.managedProcess === managedProcess;
+      const canReuseUnmanagedState = !shared.managedProcess && !shared.stopping;
+      if (shared.invalidatedReferences > 0 || ((!shared.adoptable && !ownsManagedProcess && !canReuseUnmanagedState) || shared.proxyUrl !== config.proxyUrl)) {
         proxyRoutingError = shared.adoptable
           ? "another session owns a managed Headroom proxy for a different proxyUrl"
           : "a previous shared Headroom managed proxy is still tracked after failed termination";
@@ -1226,7 +1231,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         shared.unregisterProvider = (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider?.bind(pi);
         shared.references = 1;
         shared.adoptable = false;
-        proxyRegistration = { ...registration, sharedState: shared };
+        proxyRegistration = { ...registration, sharedState: shared, leaseGeneration: shared.generation };
         proxyRoutingError = undefined;
         return true;
       } catch (error) {
@@ -1242,7 +1247,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         return false;
       }
       shared.references++;
-      proxyRegistration = { ...shared.registration, sharedState: shared };
+      proxyRegistration = { ...shared.registration, sharedState: shared, leaseGeneration: shared.generation };
       proxyRoutingError = undefined;
       return true;
     }
@@ -1265,12 +1270,15 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
             proxyUrl: config.proxyUrl,
             excludedProviderIds: registry.registeredProviderIds,
             references: 1,
+            generation: 0,
+            invalidatedReferences: 0,
             adoptable: false,
             stopping: false,
             unregisterProvider: (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider?.bind(pi),
           };
           sharedRoutingStates().set(runtime, sharedState);
           active.sharedState = sharedState;
+          active.leaseGeneration = sharedState.generation;
         }
         proxyRegistration = active;
       } else {
@@ -1288,9 +1296,19 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     proxyRegistration = undefined;
     if (active.sharedState) {
       const shared = active.sharedState;
+      const states = sharedRoutingStates();
+      const leaseIsCurrent = active.leaseGeneration === undefined || active.leaseGeneration === shared.generation;
+      if (!leaseIsCurrent) {
+        shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
+        if (shared.invalidatedReferences === 0) {
+          shared.stopping = true;
+          shared.adoptable = false;
+          if (releaseFinalManagedProcess && !managedProcess) void shared.releaseManagedProcess?.().catch(() => undefined);
+        }
+        return;
+      }
       shared.references = Math.max(0, shared.references - 1);
       if (shared.references === 0) {
-        const states = sharedRoutingStates();
         for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
         const retain = !!shared.managedProcess && !!shared.releaseManagedProcess;
         shared.adoptable = retain && !shared.stopping;
@@ -1304,16 +1322,11 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           void shared.releaseManagedProcess?.().catch(() => undefined);
         }
       } else if (disableSharedRuntime) {
+        shared.invalidatedReferences = shared.references;
         shared.references = 0;
+        shared.generation++;
+        shared.adoptable = false;
         for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
-        const retain = !!shared.managedProcess && !!shared.releaseManagedProcess;
-        shared.adoptable = retain && !shared.stopping;
-        if (!retain) {
-          shared.managedProcess = undefined;
-          shared.releaseManagedProcess = undefined;
-          if (managedSharedRoutingState === shared) managedSharedRoutingState = undefined;
-          if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
-        }
       }
       return;
     }
@@ -1754,14 +1767,22 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   const performStopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
     const activeSharedRouting = proxyRegistration?.sharedState;
+    const activeLeaseGeneration = activeSharedRouting ? proxyRegistration?.leaseGeneration : undefined;
     const runtime = runtimeForRouting(ctx);
     const staleSharedRouting = activeSharedRouting ? undefined : runtime ? sharedRoutingStates().get(runtime) : undefined;
+    const sharedHasPeers = (shared: SharedHeadroomRoutingState, leaseGeneration?: number): boolean => {
+      if (leaseGeneration === undefined) return shared.references > 0 || shared.invalidatedReferences > 0;
+      if (leaseGeneration !== shared.generation) {
+        return shared.references > 0 || shared.invalidatedReferences > 1;
+      }
+      return shared.references > 1 || shared.invalidatedReferences > 0;
+    };
     let sharedRoutingHasPeers = activeSharedRouting
-      ? activeSharedRouting.references > 1
-      : (staleSharedRouting?.references ?? 0) > 0;
+      ? sharedHasPeers(activeSharedRouting, activeLeaseGeneration)
+      : !!staleSharedRouting && sharedHasPeers(staleSharedRouting);
     const releaseSharedManagedProcess = managedProcess
       ? undefined
-      : activeSharedRouting?.releaseManagedProcess ?? (staleSharedRouting?.references === 0 ? staleSharedRouting.releaseManagedProcess : undefined);
+      : activeSharedRouting?.releaseManagedProcess ?? ((staleSharedRouting?.references === 0 || (staleSharedRouting?.invalidatedReferences ?? 0) > 0) ? staleSharedRouting.releaseManagedProcess : undefined);
     const managedSharedRouting = activeSharedRouting ?? staleSharedRouting;
     const shouldStopManagedProxy = !!managedProcess && !sharedRoutingHasPeers;
     if (shouldStopManagedProxy && managedSharedRouting) managedSharedRouting.stopping = true;
@@ -1776,7 +1797,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
     if (!routingMutationIsCurrent(stopRevision)) return false;
     if (!sharedRoutingHasPeers && runtime) {
-      sharedRoutingHasPeers = (sharedRoutingStates().get(runtime)?.references ?? 0) > 0;
+      const currentSharedRouting = sharedRoutingStates().get(runtime);
+      sharedRoutingHasPeers = !!currentSharedRouting && sharedHasPeers(currentSharedRouting, activeLeaseGeneration);
     }
     if (sharedRoutingHasPeers) {
       if (managedProcess) managedLifecycle?.markActive();
@@ -2137,7 +2159,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         invalidatePendingBaselineCapture();
         const wasRuntimeEnabled = runtimeEnabled;
         runtimeEnabled = false;
-        disableProxyRouting(true, !managedProcess);
+        disableProxyRouting(true, true);
         updateStatus(ctx, runtimeEnabled, owner, stats);
         await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
         if (!routingMutationIsCurrent(disableRevision)) return;

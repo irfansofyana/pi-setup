@@ -488,7 +488,7 @@ test("shared managed proxy survives parent shutdown and stops after final child 
   assert.equal(terminateCalls, 0);
   const event = { headers: {} as Record<string, string | null> };
   await childSession.handlers.before_provider_headers(event, { ...childSession.ctx, model: { id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" } });
-  assert.equal(event.headers["x-headroom-base-url"], "https://litellm.example");
+  assert.equal(event.headers["x-headroom-base-url"], undefined);
   await childSession.handlers.session_shutdown({}, childSession.ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(terminateCalls, 1);
