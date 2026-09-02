@@ -1869,7 +1869,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     await trackStart(startCoordinator.restart(ctx));
   };
 
-  const performStopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+  const performStopManagedProxy = async (ctx: ExtensionContext, notify = true, disableSharedRuntime = false): Promise<boolean> => {
     const activeSharedRouting = proxyRegistration?.sharedState;
     const activeLeaseGeneration = activeSharedRouting ? proxyRegistration?.leaseGeneration : undefined;
     const runtime = runtimeForRouting(ctx);
@@ -1896,11 +1896,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const wasRuntimeEnabled = runtimeEnabled;
     runtimeEnabled = false;
     if (shouldStopManagedProxy) managedLifecycle?.markStopping();
-    disableProxyRouting(false);
+    disableProxyRouting(false, disableSharedRuntime);
+    if (disableSharedRuntime) sharedRoutingHasPeers = false;
     updateStatus(ctx, runtimeEnabled, owner, stats);
     await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
     if (!routingMutationIsCurrent(stopRevision)) return false;
-    if (!sharedRoutingHasPeers && runtime) {
+    if (!disableSharedRuntime && !sharedRoutingHasPeers && runtime) {
       const currentSharedRouting = sharedRoutingStates().get(runtime);
       sharedRoutingHasPeers = !!currentSharedRouting && sharedHasPeers(currentSharedRouting, activeLeaseGeneration);
     }
@@ -1945,9 +1946,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     return true;
   };
 
-  const stopManagedProxy = (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+  const stopManagedProxy = (ctx: ExtensionContext, notify = true, disableSharedRuntime = false): Promise<boolean> => {
     if (stopInFlight) return stopInFlight;
-    const operation = performStopManagedProxy(ctx, notify);
+    const operation = performStopManagedProxy(ctx, notify, disableSharedRuntime);
     stopInFlight = operation;
     const cleanup = (): void => {
       if (stopInFlight === operation) stopInFlight = undefined;
@@ -2206,11 +2207,11 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         return;
       }
       if (command === "stop") {
-        await stopManagedProxy(ctx);
+        await stopManagedProxy(ctx, true, true);
         return;
       }
       if (command === "restart") {
-        if (await stopManagedProxy(ctx)) await restartManagedProxy(ctx);
+        if (await stopManagedProxy(ctx, true, true)) await restartManagedProxy(ctx);
         return;
       }
       if (command === "enable") {
