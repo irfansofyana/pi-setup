@@ -1282,7 +1282,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     return proxyRegistration !== undefined;
   };
-  const disableProxyRouting = (): void => {
+  const disableProxyRouting = (releaseFinalManagedProcess = true): void => {
     const active = proxyRegistration;
     if (!active) return;
     proxyRegistration = undefined;
@@ -1299,6 +1299,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           shared.releaseManagedProcess = undefined;
           if (managedSharedRoutingState === shared) managedSharedRoutingState = undefined;
           if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+        } else if (releaseFinalManagedProcess && !managedProcess) {
+          shared.stopping = true;
+          void shared.releaseManagedProcess?.().catch(() => undefined);
         }
       }
       return;
@@ -1756,8 +1759,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     invalidatePendingBaselineCapture();
     const wasRuntimeEnabled = runtimeEnabled;
     runtimeEnabled = false;
-    if (managedProcess) managedLifecycle?.markStopping();
-    disableProxyRouting();
+    if (shouldStopManagedProxy) managedLifecycle?.markStopping();
+    disableProxyRouting(false);
     updateStatus(ctx, runtimeEnabled, owner, stats);
     await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
     if (!routingMutationIsCurrent(stopRevision)) return false;

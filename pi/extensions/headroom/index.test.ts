@@ -494,6 +494,40 @@ test("shared managed proxy survives parent shutdown and stops after final child 
   assert.equal(terminateCalls, 1);
 });
 
+test("final child recovery releases retained managed proxy ownership", async () => {
+  const runtime = {};
+  const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
+  const child = Object.assign(new EventEmitter(), { pid: 8282, exitCode: null, signalCode: null, killed: false });
+  let terminateCalls = 0;
+  let childHealthy = true;
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+    terminateChild: async () => { terminateCalls++; return true; },
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+  const childSession = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => childHealthy,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+  }, undefined, models, [], runtime);
+  await childSession.handlers.session_start({}, childSession.ctx);
+  childHealthy = false;
+  await parent.handlers.session_shutdown({}, parent.ctx);
+  assert.equal(terminateCalls, 0);
+
+  await childSession.handlers.turn_start({}, childSession.ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(terminateCalls, 1);
+});
+
 test("shutdown rechecks child leases acquired during stats finalization", async () => {
   const runtime = {};
   const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
