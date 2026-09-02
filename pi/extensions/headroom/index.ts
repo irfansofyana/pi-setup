@@ -1193,6 +1193,14 @@ const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
 export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<HeadroomDependencies> = {}) {
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
+  const isEphemeralChildSession = (ctx: ExtensionContext): boolean => {
+    // pi-subagents creates specialist sessions with in-memory SessionManagers.
+    // Keep local compression out of those sessions: specialists deny
+    // headroom_retrieve and must never receive unrecoverable markers.
+    const sessionManager = ctx.sessionManager as ExtensionContext["sessionManager"] | undefined;
+    return sessionManager?.getSessionFile?.() === undefined
+      && sessionManager?.getSessionDir?.() === "";
+  };
   let resetConfigForSave: HeadroomConfig | undefined;
   let proxyRegistration: ActiveHeadroomProxyRegistration | undefined;
   let proxyRoutingError: string | undefined;
@@ -1920,6 +1928,11 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
+    if (config.localToolResultCompression && isEphemeralChildSession(ctx)) {
+      config = { ...config, enabled: false, localToolResultCompression: false, startup: "off" };
+      runtimeEnabled = false;
+      owner = "none";
+    }
     try {
       dependencies.cleanupStore(config);
     } catch (error) {

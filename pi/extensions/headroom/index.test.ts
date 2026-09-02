@@ -349,6 +349,27 @@ function createHeadroomHarness(
   return { handlers, commands, tools, notices, statuses, providers, unregisteredProviders, ctx };
 }
 
+test("specialist sessions disable local compression when retrieval is denied", async () => {
+  let startupConfig: HeadroomConfig | undefined;
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: true }),
+    cleanupStore: (config) => { startupConfig = config; },
+    health: async () => true,
+  });
+  Object.assign(harness.ctx, {
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionDir: () => "",
+    },
+  });
+
+  await harness.handlers.session_start({}, harness.ctx);
+
+  assert.equal(startupConfig?.localToolResultCompression, false);
+  assert.equal(startupConfig?.startup, "off");
+  assert.deepEqual(harness.providers, []);
+});
+
 test("session startup registers native provider endpoints with Headroom", async () => {
   const harness = createHeadroomHarness({
     readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
