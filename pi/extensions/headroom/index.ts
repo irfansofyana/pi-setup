@@ -1411,6 +1411,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (active?.sharedState) runtimeEnabled = false;
       return;
     }
+    const registry = modelRegistryRoutingSnapshot(ctx);
+    const models = routableModels(registry.models, dependencies.configuredProviderIds());
+    if (!sharedRoutingMatches(shared, config, models)) {
+      proxyRoutingError = "shared Headroom route no longer matches this session's proxyUrl or models; keeping native routing";
+      runtimeEnabled = false;
+      return;
+    }
     if (!proxyRegistration) {
       shared.references++;
       proxyRegistration = { ...shared.registration, sharedState: shared, leaseGeneration: shared.generation };
@@ -1964,10 +1971,16 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   pi.on("before_provider_headers", (event, ctx) => {
     const routingRuntime = runtimeForRouting(ctx);
     const shared = routingRuntime ? sharedRoutingStates().get(routingRuntime) : undefined;
-    const registration = proxyRegistration && (!proxyRegistration.sharedState || proxyRegistration.sharedState.references > 0)
-      ? proxyRegistration
-      : shared && shared.references > 0 ? shared.registration : undefined;
-    if ((!runtimeEnabled && !(shared && shared.references > 0)) || config.localToolResultCompression || !registration || !ctx.model) return;
+    const activeLease = proxyRegistration?.sharedState
+      ? proxyRegistration.leaseGeneration === proxyRegistration.sharedState.generation
+        && proxyRegistration.sharedState.references > 0
+      : !!proxyRegistration;
+    const sharedRoute = !proxyRegistration && shared && shared.references > 0
+      && sharedRoutingMatches(shared, config, routableModels(modelRegistryRoutingSnapshot(ctx).models, dependencies.configuredProviderIds()))
+      ? shared.registration
+      : undefined;
+    const registration = activeLease ? proxyRegistration : sharedRoute;
+    if (!runtimeEnabled || config.localToolResultCompression || !registration || !ctx.model) return;
     const upstream = registration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
     if (upstream) event.headers["x-headroom-base-url"] = upstream;
   });

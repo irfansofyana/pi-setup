@@ -456,6 +456,10 @@ test("child refuses divergent shared provider routes", async () => {
   await child.handlers.session_start({}, child.ctx);
 
   assert.deepEqual(child.providers, []);
+  await child.handlers.turn_start({}, child.ctx);
+  const event = { headers: {} as Record<string, string | null> };
+  await child.handlers.before_provider_headers(event, { ...child.ctx, model: models[0] });
+  assert.equal(event.headers["x-headroom-base-url"], undefined);
   await child.handlers.session_shutdown({}, child.ctx);
   await parent.handlers.session_shutdown({}, parent.ctx);
 });
