@@ -578,6 +578,7 @@ test("adopted proxy recovery waits for transferred process release before replac
     spawnProxy: () => { spawnCalls++; return firstChild; },
     waitForHealth: async () => true,
     proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+    writePid: () => {},
     terminateChild: async () => {
       terminateCalls++;
       await terminationStarted;
