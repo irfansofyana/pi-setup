@@ -1889,7 +1889,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       : activeSharedRouting?.releaseManagedProcess ?? ((staleSharedRouting?.references === 0 || (staleSharedRouting?.invalidatedReferences ?? 0) > 0) ? staleSharedRouting.releaseManagedProcess : undefined);
     const managedSharedRouting = activeSharedRouting ?? staleSharedRouting;
     const shouldStopManagedProxy = !!managedProcess && !sharedRoutingHasPeers;
-    if (shouldStopManagedProxy && managedSharedRouting) managedSharedRouting.stopping = true;
+    const shouldReleaseTransferredProxy = !!releaseSharedManagedProcess && !sharedRoutingHasPeers;
+    if ((shouldStopManagedProxy || shouldReleaseTransferredProxy) && managedSharedRouting) managedSharedRouting.stopping = true;
     startCoordinator.cancel();
     const stopRevision = beginRoutingMutation();
     invalidatePendingBaselineCapture();
