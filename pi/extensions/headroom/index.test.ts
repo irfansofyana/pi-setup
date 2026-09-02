@@ -312,6 +312,7 @@ function createHeadroomHarness(
   const statuses: string[] = [];
   const providers: Array<{ name: string; options: unknown }> = [];
   const unregisteredProviders: string[] = [];
+  let sessionName: string | undefined;
   const pi = {
     registerProvider(name: string, options: unknown) {
       if (name === failProvider) throw new Error(`${name} registration failed`);
@@ -321,6 +322,7 @@ function createHeadroomHarness(
     on(name: string, handler: (...args: any[]) => any) { handlers[name] = handler; },
     registerCommand(name: string, command: any) { commands[name] = command; },
     registerTool(tool: any) { tools[tool.name] = tool; },
+    getSessionName() { return sessionName; },
   };
   const ctx = {
     cwd: "/tmp/headroom-lifecycle-test",
@@ -346,8 +348,39 @@ function createHeadroomHarness(
     })),
     ...dependencies,
   } as any);
-  return { handlers, commands, tools, notices, statuses, providers, unregisteredProviders, ctx };
+  return {
+    handlers,
+    commands,
+    tools,
+    notices,
+    statuses,
+    providers,
+    unregisteredProviders,
+    ctx,
+    setSessionName(name: string) { sessionName = name; },
+  };
 }
+
+test("specialist startup skips legacy local compression proxy", async () => {
+  let spawnCalls = 0;
+  const child = Object.assign(new EventEmitter(), { pid: 8281, exitCode: null, signalCode: null, killed: false });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: true }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return child; },
+    writePid: () => {},
+    waitForHealth: async () => true,
+  });
+  harness.setSessionName("researcher");
+
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.equal(spawnCalls, 0);
+  await harness.handlers.turn_start({}, harness.ctx);
+  assert.equal(spawnCalls, 0);
+});
 
 test("session startup registers native provider endpoints with Headroom", async () => {
   const harness = createHeadroomHarness({
@@ -1405,6 +1438,7 @@ test("aborted startup health probe cannot spawn a managed child", async () => {
   const controller = new AbortController();
   let spawnCalls = 0;
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => {
       healthStarted();
       return new Promise<boolean>((resolve) => { releaseHealth = resolve; });
@@ -1455,6 +1489,7 @@ test("child error without confirmed exit retains ownership and blocks replacemen
   let spawnCalls = 0;
   const child = Object.assign(new EventEmitter(), { pid: 9872, exitCode: null, signalCode: null });
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => false,
     commandAvailable: () => true,
     openLog: () => 1,
@@ -1615,6 +1650,7 @@ test("disable during startup invalidates stale startup before spawn", async () =
   const started = new Promise<void>((resolve) => { probeStarted = resolve; });
   let spawnCalls = 0;
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => {
       probeStarted();
       return new Promise<boolean>((resolve) => { releaseHealth = resolve; });
@@ -1638,6 +1674,7 @@ test("stop during the initial health probe invalidates startup before spawn", as
   const started = new Promise<void>((resolve) => { probeStarted = resolve; });
   let spawnCalls = 0;
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => {
       probeStarted();
       return new Promise<boolean>((resolve) => { releaseHealth = resolve; });
@@ -1673,7 +1710,7 @@ test("config reset during startup waits for stale work then runs a fresh probe",
     },
   });
 
-  const sessionStart = harness.handlers.session_start({}, harness.ctx);
+  const sessionStart = harness.handlers.turn_start({}, harness.ctx);
   await started;
   const reset = harness.commands.headroom.handler("config reset", harness.ctx);
   releaseFirst(false);
@@ -1710,7 +1747,7 @@ test("concurrent startup loser adopts the winner after its child exits before re
     terminateChild: async () => true,
   });
 
-  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
 
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(healthCalls, 1);
@@ -1748,7 +1785,7 @@ test("concurrent startup loser waits only the remaining startup budget for the w
     terminateChild: async () => true,
   });
 
-  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
 
   const stats = await harness.tools.headroom_stats.execute();
   assert.deepEqual(waitTimeouts, [DEFAULT_CONFIG.startupHealthTimeoutMs, DEFAULT_CONFIG.startupHealthTimeoutMs - 1_250]);
@@ -1783,7 +1820,7 @@ test("concurrent startup loser skips winner wait and adoption at zero remaining 
     terminateChild: async () => true,
   });
 
-  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
 
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(waitCalls, 1);
@@ -1817,7 +1854,7 @@ test("concurrent startup loser skips winner wait and adoption at negative remain
     terminateChild: async () => true,
   });
 
-  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
 
   const stats = await harness.tools.headroom_stats.execute();
   assert.equal(waitCalls, 1);
@@ -1854,7 +1891,7 @@ test("wall-clock rollback cannot extend the concurrent-winner deadline", async (
     terminateChild: async () => true,
   });
 
-  await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
 
   const stats = await harness.tools.headroom_stats.execute();
   assert.deepEqual(waitTimeouts, [DEFAULT_CONFIG.startupHealthTimeoutMs]);
@@ -1867,6 +1904,7 @@ test("signal-exited startup child is no longer tracked when no concurrent proxy 
   let waitCalls = 0;
   let terminateCalls = 0;
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => false,
     waitForHealth: async () => {
       waitCalls++;
@@ -1912,6 +1950,7 @@ test("auto session replaces a lost adopted proxy on the compression health path"
   });
 
   await harness.handlers.session_start({}, harness.ctx);
+  await harness.handlers.turn_start({}, harness.ctx);
   let stats = await harness.tools.headroom_stats.execute();
   assert.equal(stats.details.proxyOwner, "external");
 
@@ -1933,12 +1972,13 @@ test("directory and PID-file failures stay visible and do not leak ownership", a
   const directoryFailure = createHeadroomHarness({
     ensureDirs: () => { throw new Error("permission denied"); },
   });
-  await directoryFailure.handlers.session_start({}, directoryFailure.ctx);
+  await directoryFailure.handlers.turn_start({}, directoryFailure.ctx);
   assert.ok(directoryFailure.notices.some((notice) => notice.message.includes("directory setup failed")));
 
   const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, killed: false });
   let terminateCalls = 0;
   const pidFailure = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => false,
     commandAvailable: () => true,
     openLog: () => 7,
@@ -1964,6 +2004,7 @@ test("an unkillable timed-out child stays tracked until a later stop confirms ex
   const child = Object.assign(new EventEmitter(), { pid: 5678, exitCode: null, killed: false });
   let terminateCalls = 0;
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => false,
     waitForHealth: async () => false,
     commandAvailable: () => true,
@@ -1997,6 +2038,7 @@ test("start refuses to replace a tracked child after failed termination", async 
   const child = Object.assign(new EventEmitter(), { pid: 5900, exitCode: null, killed: false });
   let spawnCalls = 0;
   const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
     health: async () => false,
     waitForHealth: async () => false,
     commandAvailable: () => true,
@@ -2043,7 +2085,7 @@ test("cancellation during timeout termination suppresses stale state and notices
     },
   });
 
-  const startup = harness.handlers.session_start({}, harness.ctx);
+  const startup = harness.handlers.turn_start({}, harness.ctx);
   await terminationStarted;
   await harness.commands.headroom.handler("stop", harness.ctx);
   releaseFirstTermination(true);
@@ -2061,7 +2103,7 @@ test("config reset preserves ownership when a managed child cannot stop", async 
   let readinessStarted!: () => void;
   const readiness = new Promise<void>((resolve) => { readinessStarted = resolve; });
   const harness = createHeadroomHarness({
-    readConfig: () => ({ ...DEFAULT_CONFIG, proxyUrl: "http://127.0.0.1:9999", port: 9999 }),
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false, proxyUrl: "http://127.0.0.1:9999", port: 9999 }),
     health: async () => false,
     waitForHealth: async () => {
       readinessStarted();

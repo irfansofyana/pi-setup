@@ -1202,8 +1202,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   const specialistSessionNames = new Set(["researcher", "code-mapper", "builder", "reviewer"]);
   const disableLocalCompressionForSpecialist = (): void => {
     if (!config.localToolResultCompression || !specialistSessionNames.has(pi.getSessionName?.() ?? "")) return;
-    // pi-subagents assigns role name after extension binding, so detect it on
-    // first turn rather than guessing from SessionManager persistence.
+    // pi-subagents assigns role name after extension binding, so inspect it on
+    // first turn, before deferred local-proxy startup.
     config = { ...config, enabled: false, localToolResultCompression: false, startup: "off" };
     runtimeEnabled = false;
     owner = "none";
@@ -1402,6 +1402,13 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   let managedLifecycle: ReturnType<typeof createManagedProxyLifecycle> | undefined;
   let managedSharedRoutingState: SharedHeadroomRoutingState | undefined;
   let managedStartupPending = false;
+  const invalidateSharedRoutingForConflict = (shared: SharedHeadroomRoutingState): void => {
+    shared.invalidatedReferences += shared.references;
+    shared.references = 0;
+    shared.generation++;
+    shared.adoptable = false;
+    for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+  };
   const synchronizeSharedRouting = (ctx?: ExtensionContext): void => {
     if (!ctx) return;
     const routingRuntime = runtimeForRouting(ctx);
@@ -1417,7 +1424,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const registry = modelRegistryRoutingSnapshot(ctx);
     const models = routableModels(registry.models, dependencies.configuredProviderIds());
     if (!sharedRoutingMatches(shared, config, models)) {
-      proxyRoutingError = "shared Headroom route no longer matches this session's proxyUrl or models; keeping native routing";
+      proxyRoutingError = "shared Headroom route no longer matches this session's proxyUrl or models; restoring native routing";
+      if (proxyRegistration?.sharedState === shared) disableProxyRouting(false, true);
+      else invalidateSharedRoutingForConflict(shared);
       runtimeEnabled = false;
       return;
     }
@@ -1963,7 +1972,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     } catch (error) {
       notifyLifecycleFailure(ctx, `Headroom local-store cleanup failed: ${error instanceof Error ? error.message : String(error)}. Compression will remain disabled unless startup succeeds.`);
     }
-    if (config.startup === "auto") await startManagedProxy(ctx);
+    if (config.startup === "auto" && !config.localToolResultCompression) await startManagedProxy(ctx);
     else updateStatus(ctx, runtimeEnabled, owner, stats);
   });
 
@@ -2032,6 +2041,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
   pi.on("turn_start", async (_event, ctx) => {
     disableLocalCompressionForSpecialist();
+    if (config.localToolResultCompression && config.startup === "auto" && runtimeEnabled) {
+      await startManagedProxy(ctx);
+    }
     await recoverNativeRouting(ctx, true);
   });
 
