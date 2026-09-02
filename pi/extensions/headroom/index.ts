@@ -1282,7 +1282,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     return proxyRegistration !== undefined;
   };
-  const disableProxyRouting = (releaseFinalManagedProcess = true): void => {
+  const disableProxyRouting = (releaseFinalManagedProcess = true, disableSharedRuntime = false): void => {
     const active = proxyRegistration;
     if (!active) return;
     proxyRegistration = undefined;
@@ -1302,6 +1302,17 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         } else if (releaseFinalManagedProcess && !managedProcess) {
           shared.stopping = true;
           void shared.releaseManagedProcess?.().catch(() => undefined);
+        }
+      } else if (disableSharedRuntime) {
+        shared.references = 0;
+        for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+        const retain = !!shared.managedProcess && !!shared.releaseManagedProcess;
+        shared.adoptable = retain && !shared.stopping;
+        if (!retain) {
+          shared.managedProcess = undefined;
+          shared.releaseManagedProcess = undefined;
+          if (managedSharedRoutingState === shared) managedSharedRoutingState = undefined;
+          if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
         }
       }
       return;
@@ -1849,7 +1860,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   });
 
   pi.on("before_provider_headers", (event, ctx) => {
-    if (!runtimeEnabled || config.localToolResultCompression || !proxyRegistration || !ctx.model) return;
+    if (!runtimeEnabled || config.localToolResultCompression || !proxyRegistration || (proxyRegistration.sharedState && proxyRegistration.sharedState.references === 0) || !ctx.model) return;
     const upstream = proxyRegistration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
     if (upstream) event.headers["x-headroom-base-url"] = upstream;
   });
@@ -1868,7 +1879,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const recoveryRevision = beginRoutingMutation();
     invalidatePendingBaselineCapture();
     runtimeEnabled = false;
-    disableProxyRouting();
+    disableProxyRouting(true, true);
     updateStatus(ctx, runtimeEnabled, owner, stats);
     if (owner === "external" && config.startup === "auto") {
       if (deferReplacement) deferredNativeRecoveryRevision = recoveryRevision;
@@ -2126,7 +2137,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         invalidatePendingBaselineCapture();
         const wasRuntimeEnabled = runtimeEnabled;
         runtimeEnabled = false;
-        disableProxyRouting(true);
+        disableProxyRouting(true, !managedProcess);
         updateStatus(ctx, runtimeEnabled, owner, stats);
         await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
         if (!routingMutationIsCurrent(disableRevision)) return;

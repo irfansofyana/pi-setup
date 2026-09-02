@@ -528,6 +528,36 @@ test("final child recovery releases retained managed proxy ownership", async () 
   assert.equal(terminateCalls, 1);
 });
 
+test("shared child disable restores native routing for runtime", async () => {
+  const runtime = {};
+  const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
+  const child = Object.assign(new EventEmitter(), { pid: 8384, exitCode: null, signalCode: null, killed: false });
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+  const childSession = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+  }, undefined, models, [], runtime);
+  await childSession.handlers.session_start({}, childSession.ctx);
+
+  await childSession.commands.headroom.handler("disable", childSession.ctx);
+  assert.deepEqual(parent.unregisteredProviders, ["openai", "anthropic", "openai-codex", "litellm"]);
+  const event = { headers: {} as Record<string, string | null> };
+  await parent.handlers.before_provider_headers(event, { ...parent.ctx, model: models[0] });
+  assert.equal(event.headers["x-headroom-base-url"], undefined);
+});
+
 test("shutdown rechecks child leases acquired during stats finalization", async () => {
   const runtime = {};
   const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
