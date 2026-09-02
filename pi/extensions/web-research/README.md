@@ -16,6 +16,7 @@ Both tools accept `provider: "auto" | "tavily" | "exa"`. Explicit overrides win.
 - Search and fetch caches use opaque per-process keys, are bounded, expire independently of later cache traffic, and live only for the loaded extension instance.
 - Fetch content is capped at 50,000 characters per source by default and 12,000 characters inline. Oversized content is atomically offloaded to owner-only, TTL-pruned artifacts under `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/`; valid artifacts are preserved and new overflow fails closed when capacity is full. `web_fetch` pages stored content by opaque `artifactId` without exposing filesystem paths.
 - Search snippets are candidate-discovery material, not confirmation; fetch important sources before making material claims.
+- Search results include a conservative URL-derived source type (documentation, repository, community, academic, or independent publication). It is a navigation aid, not a trust score or filter: public results remain eligible regardless of source type.
 
 ## Delivery boundary
 

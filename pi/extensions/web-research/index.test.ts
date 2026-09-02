@@ -122,6 +122,58 @@ test("web_search uses Tavily by default and labels compact snippets as discovery
   assert.ok(updates.length >= 1);
 });
 
+test("web_search labels source types without filtering independent publications", async () => {
+  const tools = harness(async () => new Response(JSON.stringify({
+    results: [
+      { title: "Repository implementation", url: "https://github.com/example/project", content: "Source code." },
+      { title: "Practitioner write-up", url: "https://blog.example.net/pi-rendering", content: "Working example." },
+      { title: "Community answer", url: "https://stackoverflow.com/questions/12345/pi-rendering", content: "Troubleshooting." },
+    ],
+  }), { status: 200, headers: { "content-type": "application/json" } }), { TAVILY_API_KEY: "test-tavily" });
+
+  const result = await tools.get("web_search").execute(
+    "source-types",
+    { query: "Pi renderer examples", maxResults: 3 },
+    undefined,
+    undefined,
+    { cwd: "/tmp/project" },
+  );
+
+  const text = result.content[0]?.text ?? "";
+  assert.match(text, /Repository implementation/);
+  assert.match(text, /Practitioner write-up/);
+  assert.match(text, /Community answer/);
+  assert.match(text, /Source type: Repository source/);
+  assert.match(text, /Source type: Independent publication/);
+  assert.match(text, /Source type: Community discussion/);
+});
+
+test("web_search shows a sanitized query in its call card and live progress", async () => {
+  const tools = harness(async () => new Response(JSON.stringify({ results: [] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  }), { TAVILY_API_KEY: "test-tavily" });
+  const tool = tools.get("web_search");
+  const query = "find https://example.com/search?token=private-token";
+
+  assert.equal(typeof tool.renderCall, "function");
+  const call = tool.renderCall(
+    { query },
+    { fg: (_color: string, text: string) => text },
+    { lastComponent: undefined },
+  );
+  const rendered = call.render(120).join("\n");
+  assert.match(rendered, /Web Search/);
+  assert.match(rendered, /find https:\/\/example\.com\/search\?token=\[REDACTED\]/);
+  assert.doesNotMatch(rendered, /private-token/);
+
+  const updates: any[] = [];
+  await tool.execute("visible-query", { query }, undefined, (update: unknown) => updates.push(update), { cwd: "/tmp/project" });
+  const progress = updates.map((update) => update.content[0]?.text ?? "").join("\n");
+  assert.match(progress, /Searching Tavily for find https:\/\/example\.com\/search\?token=\[REDACTED\]…/);
+  assert.doesNotMatch(progress, /private-token/);
+});
+
 test("successful search adapters preserve safe header-only request IDs", async () => {
   for (const provider of ["tavily", "exa"] as const) {
     const headerId = `${provider}-search-header`;
