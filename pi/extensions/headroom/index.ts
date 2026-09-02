@@ -572,6 +572,9 @@ export function createManagedProxyLifecycle() {
     markStopping(): void {
       stopping = true;
     },
+    markActive(): void {
+      stopping = false;
+    },
     handleSpawnError(error: unknown): ManagedProxyLifecycleNotice | undefined {
       if (stopping || terminalHandled) return undefined;
       terminalHandled = true;
@@ -1733,24 +1736,28 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const activeSharedRouting = proxyRegistration?.sharedState;
     const runtime = runtimeForRouting(ctx);
     const staleSharedRouting = activeSharedRouting ? undefined : runtime ? sharedRoutingStates().get(runtime) : undefined;
-    const sharedRoutingHasPeers = activeSharedRouting
+    let sharedRoutingHasPeers = activeSharedRouting
       ? activeSharedRouting.references > 1
       : (staleSharedRouting?.references ?? 0) > 0;
     const releaseSharedManagedProcess = managedProcess
       ? undefined
       : activeSharedRouting?.releaseManagedProcess ?? (staleSharedRouting?.references === 0 ? staleSharedRouting.releaseManagedProcess : undefined);
-    if (managedProcess && !sharedRoutingHasPeers && activeSharedRouting) activeSharedRouting.releaseManagedProcess = undefined;
+    const retainManagedProcess = !!managedProcess && !!activeSharedRouting;
     startCoordinator.cancel();
     const stopRevision = beginRoutingMutation();
     invalidatePendingBaselineCapture();
     const wasRuntimeEnabled = runtimeEnabled;
     runtimeEnabled = false;
-    disableProxyRouting();
+    if (managedProcess) managedLifecycle?.markStopping();
+    disableProxyRouting(retainManagedProcess);
     updateStatus(ctx, runtimeEnabled, owner, stats);
-    if (!sharedRoutingHasPeers) managedLifecycle?.markStopping();
     await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
     if (!routingMutationIsCurrent(stopRevision)) return false;
+    if (!sharedRoutingHasPeers && runtime) {
+      sharedRoutingHasPeers = (sharedRoutingStates().get(runtime)?.references ?? 0) > 0;
+    }
     if (sharedRoutingHasPeers) {
+      if (managedProcess) managedLifecycle?.markActive();
       if (notify && ctx.hasUI) ctx.ui.notify("Headroom routing released for this session; active subagents retain the shared proxy.", "info");
       updateStatus(ctx, runtimeEnabled, owner, stats);
       return true;

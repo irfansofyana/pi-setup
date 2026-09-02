@@ -494,6 +494,54 @@ test("shared managed proxy survives parent shutdown and stops after final child 
   assert.equal(terminateCalls, 1);
 });
 
+test("shutdown rechecks child leases acquired during stats finalization", async () => {
+  const runtime = {};
+  const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
+  const child = Object.assign(new EventEmitter(), { pid: 8484, exitCode: null, signalCode: null, killed: false });
+  let healthCalls = 0;
+  let historyCalls = 0;
+  let terminateCalls = 0;
+  let releaseFinalization!: () => void;
+  let finalizationStarted!: () => void;
+  const finalizationReady = new Promise<void>((resolve) => { finalizationStarted = resolve; });
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => ++healthCalls > 1,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => child,
+    writePid: () => {},
+    waitForHealth: async () => true,
+    proxyHistory: async () => {
+      historyCalls++;
+      if (historyCalls === 2) {
+        finalizationStarted();
+        await new Promise<void>((resolve) => { releaseFinalization = resolve; });
+      }
+      return { displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } };
+    },
+    terminateChild: async () => { terminateCalls++; return true; },
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+  const shutdown = parent.handlers.session_shutdown({}, parent.ctx);
+  await finalizationReady;
+
+  const childSession = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+  }, undefined, models, [], runtime);
+  await childSession.handlers.session_start({}, childSession.ctx);
+  releaseFinalization();
+  await shutdown;
+
+  assert.equal(terminateCalls, 0);
+  await childSession.handlers.session_shutdown({}, childSession.ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(terminateCalls, 1);
+});
+
 test("child adopts retained managed proxy after parent disables routing", async () => {
   const runtime = {};
   const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
