@@ -61,6 +61,7 @@ interface HeadroomProxyRegistration extends HeadroomProviderRoutePlan {
 interface SharedHeadroomRoutingState {
   runtime: object;
   registration: HeadroomProxyRegistration;
+  canonicalModels: HeadroomRouteModel[];
   proxyUrl: string;
   excludedProviderIds: Set<string>;
   references: number;
@@ -822,7 +823,12 @@ function modelRegistryRoutingSnapshot(ctx: ExtensionContext): { models: unknown[
 
 function sharedRoutingMatches(shared: SharedHeadroomRoutingState, config: HeadroomConfig, models: HeadroomRouteModel[]): boolean {
   if (shared.proxyUrl !== config.proxyUrl) return false;
-  const plan = planProxyProviderRoutes(config.proxyUrl, models);
+  const canonicalKeys = new Set(shared.canonicalModels.map((model) => routeKey(model.provider, model.id)));
+  const liveKeys = new Set(models.map((model) => routeKey(model.provider, model.id)));
+  if (canonicalKeys.size !== liveKeys.size || [...canonicalKeys].some((key) => !liveKeys.has(key))) return false;
+  // Provider registration mutates live model baseUrls to point at Headroom.
+  // Replan from definitions captured before that mutation, not routed models.
+  const plan = planProxyProviderRoutes(config.proxyUrl, shared.canonicalModels);
   for (const provider of shared.registration.registeredProviders) {
     if (plan.providers.get(provider) !== shared.registration.providers.get(provider)) return false;
   }
@@ -848,7 +854,7 @@ function routableModels(models: unknown[], configuredProviders: Set<string>): He
       && typeof candidate.api === "string" && typeof candidate.baseUrl === "string";
     if (!structurallyValid) return false;
     return ["openai", "anthropic", "openai-codex"].includes(candidate.provider!) || configuredProviders.has(candidate.provider!);
-  });
+  }).map((model) => ({ ...model }));
 }
 
 function registerProxyProviders(
@@ -1193,17 +1199,30 @@ const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
 export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<HeadroomDependencies> = {}) {
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
-  const isEphemeralChildSession = (ctx: ExtensionContext): boolean => {
-    // pi-subagents creates specialist sessions with in-memory SessionManagers.
-    // Keep local compression out of those sessions: specialists deny
-    // headroom_retrieve and must never receive unrecoverable markers.
-    const sessionManager = ctx.sessionManager as ExtensionContext["sessionManager"] | undefined;
-    return sessionManager?.getSessionFile?.() === undefined
-      && sessionManager?.getSessionDir?.() === "";
+  const specialistSessionNames = new Set(["researcher", "code-mapper", "builder", "reviewer"]);
+  const disableLocalCompressionForSpecialist = (): void => {
+    if (!config.localToolResultCompression || !specialistSessionNames.has(pi.getSessionName?.() ?? "")) return;
+    // pi-subagents assigns role name after extension binding, so detect it on
+    // first turn rather than guessing from SessionManager persistence.
+    config = { ...config, enabled: false, localToolResultCompression: false, startup: "off" };
+    runtimeEnabled = false;
+    owner = "none";
   };
   let resetConfigForSave: HeadroomConfig | undefined;
   let proxyRegistration: ActiveHeadroomProxyRegistration | undefined;
   let proxyRoutingError: string | undefined;
+  let sharedReleaseInFlight: Promise<boolean> | undefined;
+  const requestSharedManagedRelease = (shared: SharedHeadroomRoutingState): void => {
+    const release = shared.releaseManagedProcess;
+    if (!release || sharedReleaseInFlight) return;
+    const pending = release();
+    sharedReleaseInFlight = pending;
+    void pending.then(() => {
+      if (sharedReleaseInFlight === pending) sharedReleaseInFlight = undefined;
+    }, () => {
+      if (sharedReleaseInFlight === pending) sharedReleaseInFlight = undefined;
+    });
+  };
   const enableProxyRouting = (ctx: ExtensionContext): boolean => {
     if (config.localToolResultCompression || proxyRegistration) return true;
 
@@ -1228,7 +1247,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         const registration = registerProxyProviders(
           pi,
           config,
-          routableModels(registry.models, dependencies.configuredProviderIds()),
+          shared.canonicalModels,
           registry.registeredProviderIds,
         );
         if (!registration) {
@@ -1276,6 +1295,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           const sharedState: SharedHeadroomRoutingState = {
             runtime,
             registration,
+            canonicalModels: routableModels(registry.models, dependencies.configuredProviderIds()),
             proxyUrl: config.proxyUrl,
             excludedProviderIds: registry.registeredProviderIds,
             references: 1,
@@ -1316,7 +1336,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           } else if (shared.releaseManagedProcess) {
             shared.stopping = true;
             shared.adoptable = false;
-            if (releaseFinalManagedProcess && !managedProcess) void shared.releaseManagedProcess().catch(() => undefined);
+            if (releaseFinalManagedProcess && !managedProcess) requestSharedManagedRelease(shared);
           } else {
             shared.stopping = false;
             shared.adoptable = false;
@@ -1337,7 +1357,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
         } else if (releaseFinalManagedProcess && !managedProcess) {
           shared.stopping = true;
-          void shared.releaseManagedProcess?.().catch(() => undefined);
+          requestSharedManagedRelease(shared);
         }
       } else if (disableSharedRuntime) {
         shared.invalidatedReferences = shared.references;
@@ -1928,11 +1948,6 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
-    if (config.localToolResultCompression && isEphemeralChildSession(ctx)) {
-      config = { ...config, enabled: false, localToolResultCompression: false, startup: "off" };
-      runtimeEnabled = false;
-      owner = "none";
-    }
     try {
       dependencies.cleanupStore(config);
     } catch (error) {
@@ -1975,6 +1990,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     disableProxyRouting(true, true);
     updateStatus(ctx, runtimeEnabled, owner, stats);
     if (owner === "external" && config.startup === "auto") {
+      const release = sharedReleaseInFlight;
+      if (release && !(await release)) return false;
       if (deferReplacement) deferredNativeRecoveryRevision = recoveryRevision;
       else await startManagedProxy(ctx);
     }
@@ -1998,6 +2015,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
 
   pi.on("turn_start", async (_event, ctx) => {
+    disableLocalCompressionForSpecialist();
     await recoverNativeRouting(ctx, true);
   });
 

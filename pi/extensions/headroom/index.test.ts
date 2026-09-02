@@ -349,27 +349,6 @@ function createHeadroomHarness(
   return { handlers, commands, tools, notices, statuses, providers, unregisteredProviders, ctx };
 }
 
-test("specialist sessions disable local compression when retrieval is denied", async () => {
-  let startupConfig: HeadroomConfig | undefined;
-  const harness = createHeadroomHarness({
-    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: true }),
-    cleanupStore: (config) => { startupConfig = config; },
-    health: async () => true,
-  });
-  Object.assign(harness.ctx, {
-    sessionManager: {
-      getSessionFile: () => undefined,
-      getSessionDir: () => "",
-    },
-  });
-
-  await harness.handlers.session_start({}, harness.ctx);
-
-  assert.equal(startupConfig?.localToolResultCompression, false);
-  assert.equal(startupConfig?.startup, "off");
-  assert.deepEqual(harness.providers, []);
-});
-
 test("session startup registers native provider endpoints with Headroom", async () => {
   const harness = createHeadroomHarness({
     readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
@@ -435,6 +414,31 @@ test("child session reuses parent routing despite existing provider ownership", 
   assert.deepEqual(child.unregisteredProviders, []);
   await parent.handlers.session_shutdown({}, parent.ctx);
   assert.deepEqual(parent.unregisteredProviders, ["openai", "anthropic", "openai-codex", "litellm"]);
+});
+
+test("child reuses canonical upstreams after live model routes are overridden", async () => {
+  const runtime = {};
+  const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+
+  models[0]!.baseUrl = "http://127.0.0.1:8787/v1";
+  const child = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+  }, undefined, models, ["openai", "anthropic", "openai-codex", "litellm"], runtime);
+  await child.handlers.session_start({}, child.ctx);
+
+  assert.deepEqual(child.providers, []);
+  const event = { headers: {} as Record<string, string | null> };
+  await child.handlers.before_provider_headers(event, { ...child.ctx, model: models[0] });
+  assert.equal(event.headers["x-headroom-base-url"], "https://litellm.example");
+
+  await child.handlers.session_shutdown({}, child.ctx);
+  await parent.handlers.session_shutdown({}, parent.ctx);
 });
 
 test("child refuses divergent shared provider routes", async () => {
@@ -547,6 +551,60 @@ test("final child recovery releases retained managed proxy ownership", async () 
   await childSession.handlers.turn_start({}, childSession.ctx);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(terminateCalls, 1);
+});
+
+test("adopted proxy recovery waits for transferred process release before replacement", async () => {
+  const runtime = {};
+  const models = [{ id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" }];
+  const firstChild = Object.assign(new EventEmitter(), { pid: 8383, exitCode: null, signalCode: null, killed: false });
+  const replacementChild = Object.assign(new EventEmitter(), { pid: 8385, exitCode: null, signalCode: null, killed: false });
+  let spawnCalls = 0;
+  let terminateCalls = 0;
+  let releaseTermination!: () => void;
+  const terminationStarted = new Promise<void>((resolve) => {
+    releaseTermination = resolve;
+  });
+  let childHealthy = true;
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => false,
+    commandAvailable: () => true,
+    openLog: () => 1,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return firstChild; },
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+    terminateChild: async () => {
+      terminateCalls++;
+      await terminationStarted;
+      return true;
+    },
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+
+  const child = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => childHealthy,
+    commandAvailable: () => true,
+    openLog: () => 2,
+    closeLog: () => {},
+    spawnProxy: () => { spawnCalls++; return replacementChild; },
+    waitForHealth: async () => true,
+    proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
+    terminateChild: async () => true,
+  }, undefined, models, [], runtime);
+  await child.handlers.session_start({}, child.ctx);
+  await parent.handlers.session_shutdown({}, parent.ctx);
+
+  childHealthy = false;
+  const recovery = child.handlers.turn_end({}, child.ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(terminateCalls, 1);
+  assert.equal(spawnCalls, 1);
+
+  releaseTermination();
+  await recovery;
+  assert.equal(spawnCalls, 2);
 });
 
 test("shared child disable restores native routing for runtime", async () => {
