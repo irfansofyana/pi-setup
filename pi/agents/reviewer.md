@@ -2,7 +2,7 @@
 description: Independent correctness and maintainability reviewer
 display_name: Prabu
 tools: read, grep, find, ls
-extensions: false
+extensions: [headroom]
 skills: code-review
 thinking: high
 max_turns: 25

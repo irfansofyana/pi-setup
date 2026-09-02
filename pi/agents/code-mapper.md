@@ -2,7 +2,7 @@
 description: Read-only codebase architecture mapper
 display_name: Laya
 tools: read, grep, find, ls
-extensions: false
+extensions: [headroom]
 skills: mermaid, teach
 thinking: high
 max_turns: 25

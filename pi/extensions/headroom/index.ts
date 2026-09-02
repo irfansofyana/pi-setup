@@ -58,6 +58,30 @@ interface HeadroomProxyRegistration extends HeadroomProviderRoutePlan {
   registeredProviders: string[];
 }
 
+interface SharedHeadroomRoutingState {
+  runtime: object;
+  registration: HeadroomProxyRegistration;
+  references: number;
+  unregisterProvider?: (name: string) => void;
+}
+
+interface ActiveHeadroomProxyRegistration extends HeadroomProxyRegistration {
+  sharedState?: SharedHeadroomRoutingState;
+}
+
+// Subagent extension instances share ModelRuntime with parent, but not extension-local state.
+const SHARED_ROUTING_STATE_KEY = Symbol.for("pi-headroom-routing-state");
+
+function sharedRoutingStates(): WeakMap<object, SharedHeadroomRoutingState> {
+  const globalState = globalThis as typeof globalThis & Record<symbol, unknown>;
+  let states = globalState[SHARED_ROUTING_STATE_KEY] as WeakMap<object, SharedHeadroomRoutingState> | undefined;
+  if (!states) {
+    states = new WeakMap<object, SharedHeadroomRoutingState>();
+    globalState[SHARED_ROUTING_STATE_KEY] = states;
+  }
+  return states;
+}
+
 export interface ProxyHistorySummary {
   lifetime?: Record<string, unknown>;
   displaySession?: Record<string, unknown>;
@@ -772,6 +796,11 @@ function configuredProviderIds(): Set<string> {
   }
 }
 
+function runtimeForRouting(ctx: ExtensionContext): object | undefined {
+  const runtime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
+  return runtime !== null && typeof runtime === "object" ? runtime : undefined;
+}
+
 function modelRegistryRoutingSnapshot(ctx: ExtensionContext): { models: unknown[]; registeredProviderIds: Set<string> } {
   return {
     models: ctx.modelRegistry.getAvailable(),
@@ -1133,19 +1162,45 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
   let resetConfigForSave: HeadroomConfig | undefined;
-  let proxyRegistration: HeadroomProxyRegistration | undefined;
+  let proxyRegistration: ActiveHeadroomProxyRegistration | undefined;
   let proxyRoutingError: string | undefined;
   const enableProxyRouting = (ctx: ExtensionContext): boolean => {
     if (config.localToolResultCompression || proxyRegistration) return true;
+
+    const runtime = runtimeForRouting(ctx);
+    const shared = runtime ? sharedRoutingStates().get(runtime) : undefined;
+    if (shared) {
+      shared.references++;
+      proxyRegistration = { ...shared.registration, sharedState: shared };
+      proxyRoutingError = undefined;
+      return true;
+    }
+
     try {
       const registry = modelRegistryRoutingSnapshot(ctx);
-      proxyRegistration = registerProxyProviders(
+      const registration = registerProxyProviders(
         pi,
         config,
         routableModels(registry.models, dependencies.configuredProviderIds()),
         registry.registeredProviderIds,
       );
-      proxyRoutingError = proxyRegistration ? undefined : "Pi provider registration API is unavailable";
+      proxyRoutingError = registration ? undefined : "Pi provider registration API is unavailable";
+      if (registration) {
+        const active: ActiveHeadroomProxyRegistration = { ...registration };
+        if (runtime) {
+          const sharedState: SharedHeadroomRoutingState = {
+            runtime,
+            registration,
+            references: 1,
+            unregisterProvider: (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider?.bind(pi),
+          };
+          sharedRoutingStates().set(runtime, sharedState);
+          active.sharedState = sharedState;
+        }
+        proxyRegistration = active;
+      } else {
+        proxyRegistration = undefined;
+      }
     } catch (error) {
       proxyRegistration = undefined;
       proxyRoutingError = error instanceof Error ? error.message : String(error);
@@ -1153,9 +1208,20 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     return proxyRegistration !== undefined;
   };
   const disableProxyRouting = (): void => {
-    if (!proxyRegistration) return;
-    unregisterProxyProviders(pi, proxyRegistration.registeredProviders);
+    const active = proxyRegistration;
+    if (!active) return;
     proxyRegistration = undefined;
+    if (active.sharedState) {
+      const shared = active.sharedState;
+      shared.references = Math.max(0, shared.references - 1);
+      if (shared.references === 0) {
+        const states = sharedRoutingStates();
+        if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+        for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+      }
+      return;
+    }
+    unregisterProxyProviders(pi, active.registeredProviders);
   };
   let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
