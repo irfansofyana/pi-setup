@@ -1301,9 +1301,15 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (!leaseIsCurrent) {
         shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
         if (shared.invalidatedReferences === 0) {
-          shared.stopping = true;
-          shared.adoptable = false;
-          if (releaseFinalManagedProcess && !managedProcess) void shared.releaseManagedProcess?.().catch(() => undefined);
+          if (shared.releaseManagedProcess) {
+            shared.stopping = true;
+            shared.adoptable = false;
+            if (releaseFinalManagedProcess && !managedProcess) void shared.releaseManagedProcess().catch(() => undefined);
+          } else {
+            shared.stopping = false;
+            shared.adoptable = false;
+            if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+          }
         }
         return;
       }
@@ -1327,6 +1333,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         shared.generation++;
         shared.adoptable = false;
         for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+        if ((!shared.managedProcess || !shared.releaseManagedProcess) && shared.invalidatedReferences === 0) {
+          if (managedSharedRoutingState === shared) managedSharedRoutingState = undefined;
+          if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+        }
       }
       return;
     }
