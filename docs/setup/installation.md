@@ -29,10 +29,10 @@ pi --version
 Install a reviewed release tag:
 
 ```bash
-pi install git:github.com/irfansofyana/pi-setup@v0.5.1
+pi install git:github.com/irfansofyana/pi-setup@v0.5.2
 ```
 
-Replace `v0.5.1` with a newer release only after reviewing it. One install provides:
+Replace `v0.5.2` with a newer release only after reviewing it. One install provides:
 
 - all declared repository extensions under `pi/extensions/`;
 - all themes under `pi/themes/`;

@@ -52,7 +52,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 npm install -g @earendil-works/pi-coding-agent
 
 # 2) Install one reviewed pi-setup release
-pi install git:github.com/irfansofyana/pi-setup@v0.5.1
+pi install git:github.com/irfansofyana/pi-setup@v0.5.2
 
 # 3) Start Pi
 pi
