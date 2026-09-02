@@ -533,12 +533,12 @@ test("shutdown rechecks child leases acquired during stats finalization", async 
     proxyHistory: async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } }),
   }, undefined, models, [], runtime);
   await childSession.handlers.session_start({}, childSession.ctx);
+  assert.deepEqual(childSession.providers, []);
   releaseFinalization();
   await shutdown;
 
-  assert.equal(terminateCalls, 0);
+  assert.equal(terminateCalls, 1);
   await childSession.handlers.session_shutdown({}, childSession.ctx);
-  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(terminateCalls, 1);
 });
 

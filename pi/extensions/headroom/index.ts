@@ -65,6 +65,7 @@ interface SharedHeadroomRoutingState {
   excludedProviderIds: Set<string>;
   references: number;
   adoptable: boolean;
+  stopping: boolean;
   managedProcess?: ChildProcess;
   releaseManagedProcess?: () => Promise<boolean>;
   unregisterProvider?: (name: string) => void;
@@ -1197,6 +1198,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
 
     const runtime = runtimeForRouting(ctx);
     const shared = runtime ? sharedRoutingStates().get(runtime) : undefined;
+    if (shared?.stopping) {
+      proxyRoutingError = "another session is stopping the shared Headroom proxy; retry after shutdown completes";
+      return false;
+    }
     if (shared?.references === 0) {
       if (!shared.adoptable || shared.proxyUrl !== config.proxyUrl) {
         proxyRoutingError = shared.adoptable
@@ -1261,6 +1266,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
             excludedProviderIds: registry.registeredProviderIds,
             references: 1,
             adoptable: false,
+            stopping: false,
             unregisterProvider: (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider?.bind(pi),
           };
           sharedRoutingStates().set(runtime, sharedState);
@@ -1276,7 +1282,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     }
     return proxyRegistration !== undefined;
   };
-  const disableProxyRouting = (retainManagedProcess = false): void => {
+  const disableProxyRouting = (): void => {
     const active = proxyRegistration;
     if (!active) return;
     proxyRegistration = undefined;
@@ -1286,8 +1292,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (shared.references === 0) {
         const states = sharedRoutingStates();
         for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
-        const retain = retainManagedProcess && !!shared.managedProcess && !!shared.releaseManagedProcess;
-        shared.adoptable = retain;
+        const retain = !!shared.managedProcess && !!shared.releaseManagedProcess;
+        shared.adoptable = retain && !shared.stopping;
         if (!retain) {
           shared.managedProcess = undefined;
           shared.releaseManagedProcess = undefined;
@@ -1742,14 +1748,16 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const releaseSharedManagedProcess = managedProcess
       ? undefined
       : activeSharedRouting?.releaseManagedProcess ?? (staleSharedRouting?.references === 0 ? staleSharedRouting.releaseManagedProcess : undefined);
-    const retainManagedProcess = !!managedProcess && !!activeSharedRouting;
+    const managedSharedRouting = activeSharedRouting ?? staleSharedRouting;
+    const shouldStopManagedProxy = !!managedProcess && !sharedRoutingHasPeers;
+    if (shouldStopManagedProxy && managedSharedRouting) managedSharedRouting.stopping = true;
     startCoordinator.cancel();
     const stopRevision = beginRoutingMutation();
     invalidatePendingBaselineCapture();
     const wasRuntimeEnabled = runtimeEnabled;
     runtimeEnabled = false;
     if (managedProcess) managedLifecycle?.markStopping();
-    disableProxyRouting(retainManagedProcess);
+    disableProxyRouting();
     updateStatus(ctx, runtimeEnabled, owner, stats);
     await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
     if (!routingMutationIsCurrent(stopRevision)) return false;
