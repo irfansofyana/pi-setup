@@ -1203,8 +1203,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
   const specialistSessionNames = new Set(["researcher", "code-mapper", "builder", "reviewer"]);
+  const isSpecialistSession = (): boolean => specialistSessionNames.has(pi.getSessionName?.() ?? "");
   const disableLocalCompressionForSpecialist = (): void => {
-    if (!config.localToolResultCompression || !specialistSessionNames.has(pi.getSessionName?.() ?? "")) return;
+    if (!config.localToolResultCompression || !isSpecialistSession()) return;
     // pi-subagents assigns role name after extension binding, so inspect it on
     // first turn, before deferred local-proxy startup.
     config = { ...config, enabled: false, localToolResultCompression: false, startup: "off" };
@@ -1975,6 +1976,12 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
+    if (isSpecialistSession()) {
+      disableLocalCompressionForSpecialist();
+      synchronizeSharedRouting(ctx);
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      return;
+    }
     try {
       dependencies.cleanupStore(config);
     } catch (error) {
