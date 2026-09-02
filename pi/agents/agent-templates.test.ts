@@ -60,10 +60,18 @@ test("all specialists use fresh context and portable runtime model selection", (
   }
 });
 
+test("specialists load Headroom routing without exposing stats tool", () => {
+  for (const role of roles) {
+    const fm = frontmatter(role);
+    assert.match(fm, /\bheadroom\b/);
+    assert.doesNotMatch(fm, /\bheadroom_stats\b/);
+  }
+});
+
 test("researcher gets only the native web tools and bundled research skill", () => {
   const content = read("researcher.md");
   const fm = frontmatter("researcher");
-  assert.match(fm, /^extensions: \[web-research\]$/m);
+  assert.match(fm, /^extensions: \[web-research, headroom\]$/m);
   assert.match(
     fm,
     /^tools: "ext:web-research\/web_search, ext:web-research\/web_fetch"$/m,
@@ -83,7 +91,7 @@ test("code mapper preloads teaching and diagram skills without shell access", ()
   const content = read("code-mapper.md");
   const fm = frontmatter("code-mapper");
   assert.match(fm, /^tools: read, grep, find, ls$/m);
-  assert.match(fm, /^extensions: false$/m);
+  assert.match(fm, /^extensions: \[headroom\]$/m);
   assert.match(fm, /^skills: mermaid, teach$/m);
   assert.match(content, /entry point/i);
   assert.match(content, /call\/data path/i);
@@ -97,7 +105,7 @@ test("builder is a fresh-context worktree agent with narrow local editing author
   const content = read("builder.md");
   const fm = frontmatter("builder");
   assert.match(fm, /^tools: read, grep, find, ls, edit, write$/m);
-  assert.match(fm, /^extensions: false$/m);
+  assert.match(fm, /^extensions: \[headroom\]$/m);
   assert.match(fm, /^prompt_mode: append$/m);
   assert.match(fm, /^isolation: worktree$/m);
   assert.match(fm, /^skills: code-review$/m);
@@ -114,7 +122,7 @@ test("reviewer has no shell, mutation, or extension authority", () => {
   const content = read("reviewer.md");
   const fm = frontmatter("reviewer");
   assert.match(fm, /^tools: read, grep, find, ls$/m);
-  assert.match(fm, /^extensions: false$/m);
+  assert.match(fm, /^extensions: \[headroom\]$/m);
   assert.doesNotMatch(fm, /\bbash\b/);
   assert.match(content, /diff and verification evidence supplied by the parent/i);
   assert.match(content, /search for counterevidence/i);

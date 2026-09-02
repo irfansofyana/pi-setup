@@ -303,6 +303,7 @@ function createHeadroomHarness(
   failProvider?: string,
   models: unknown[] = [],
   registeredProviderIds: string[] = [],
+  runtime?: object,
 ) {
   const handlers: Record<string, (...args: any[]) => any> = {};
   const commands: Record<string, any> = {};
@@ -327,6 +328,7 @@ function createHeadroomHarness(
     modelRegistry: {
       getAvailable: () => models,
       getRegisteredProviderIds: () => registeredProviderIds,
+      ...(runtime ? { runtime } : {}),
     },
     ui: {
       notify(message: string, level: string) { notices.push({ message, level }); },
@@ -380,6 +382,38 @@ test("session startup routes compatible custom providers and preserves their ups
   const event = { headers: {} as Record<string, string | null> };
   await harness.handlers.before_provider_headers(event, { ...harness.ctx, model: models[0] });
   assert.equal(event.headers["x-headroom-base-url"], "https://litellm.example");
+});
+
+test("child session reuses parent routing despite existing provider ownership", async () => {
+  const runtime = {};
+  const models = [
+    { id: "gpt", provider: "litellm", api: "openai-completions", baseUrl: "https://litellm.example/v1" },
+  ];
+  const proxyHistory = async () => ({ displaySession: { requests: 0, tokens_saved: 0, total_input_tokens: 0 } });
+  const parent = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory,
+  }, undefined, models, [], runtime);
+  await parent.handlers.session_start({}, parent.ctx);
+
+  const child = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, localToolResultCompression: false }),
+    health: async () => true,
+    proxyHistory,
+  }, undefined, models, ["openai", "anthropic", "openai-codex", "litellm"], runtime);
+  await child.handlers.session_start({}, child.ctx);
+
+  assert.deepEqual(child.providers, []);
+  const event = { headers: {} as Record<string, string | null> };
+  await child.handlers.before_provider_headers(event, { ...child.ctx, model: models[0] });
+  assert.equal(event.headers["x-headroom-base-url"], "https://litellm.example");
+
+  await child.handlers.session_shutdown({}, child.ctx);
+  assert.deepEqual(parent.unregisteredProviders, []);
+  assert.deepEqual(child.unregisteredProviders, []);
+  await parent.handlers.session_shutdown({}, parent.ctx);
+  assert.deepEqual(parent.unregisteredProviders, ["openai", "anthropic", "openai-codex", "litellm"]);
 });
 
 test("session startup leaves extension-owned custom providers native even with models.json overlap", async () => {
