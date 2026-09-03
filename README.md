@@ -98,6 +98,7 @@ The root `piSetup.requiredPackages` metadata is canonical. These packages are in
 
 | Package | Version | Purpose |
 | --- | --- | --- |
+| `@ff-labs/pi-fff` | `0.10.5` | FFF-powered specialist search |
 | `@gotgenes/pi-permission-system` | `24.0.0` | Approval gates |
 | `@juicesharp/rpiv-ask-user-question` | `2.4.0` | Structured questions |
 | `@juicesharp/rpiv-todo` | `2.4.0` | Task tracking |
@@ -158,7 +159,7 @@ Package updates replace package-owned code, not user-owned configuration. Preser
 ## Core operating rules
 
 - Install the first-party package from a reviewed Git tag.
-- Install the nine required companions as separate Pi package sources through the approval-gated setup skill.
+- Install the ten required companions as separate Pi package sources through the approval-gated setup skill.
 - Do not manually copy package-owned extensions, themes, or bundled skills.
 - Install unrelated skills with `npx skills` or `npx skills@latest`.
 - Deploy reviewed global agent templates through the bundled skill because agents are not package resources.

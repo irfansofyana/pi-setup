@@ -105,6 +105,7 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     "npm:@juicesharp/rpiv-todo@2.4.0",
     "npm:pi-9router-ext@0.2.3",
     "npm:pi-stats-ext@0.2.0",
+    "npm:@ff-labs/pi-fff@0.10.5",
   ];
   for (const field of ["dependencies", "optionalDependencies", "bundledDependencies"]) {
     assert.equal(manifest[field], undefined, `companions must not appear in ${field}`);

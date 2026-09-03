@@ -93,8 +93,8 @@ test("researcher gets only the native web tools and bundled research skill", () 
 test("code mapper preloads teaching and diagram skills without shell access", () => {
   const content = read("code-mapper.md");
   const fm = frontmatter("code-mapper");
-  assert.match(fm, /^tools: read, grep, find, ls$/m);
-  assert.match(fm, /^extensions: \[headroom\]$/m);
+  assert.match(fm, /^tools: read, grep, find, ls, ext:fff\/fffind, ext:fff\/ffgrep, ext:fff\/fff-multi-grep$/m);
+  assert.match(fm, /^extensions: \[headroom, fff\]$/m);
   assert.match(fm, /^skills: mermaid, teach$/m);
   assert.match(content, /entry point/i);
   assert.match(content, /call\/data path/i);
@@ -107,8 +107,8 @@ test("code mapper preloads teaching and diagram skills without shell access", ()
 test("builder is a fresh-context worktree agent with narrow local editing authority", () => {
   const content = read("builder.md");
   const fm = frontmatter("builder");
-  assert.match(fm, /^tools: read, grep, find, ls, edit, write$/m);
-  assert.match(fm, /^extensions: \[headroom\]$/m);
+  assert.match(fm, /^tools: read, grep, find, ls, edit, write, ext:fff\/fffind, ext:fff\/ffgrep, ext:fff\/fff-multi-grep$/m);
+  assert.match(fm, /^extensions: \[headroom, fff\]$/m);
   assert.match(fm, /^prompt_mode: append$/m);
   assert.match(fm, /^isolation: worktree$/m);
   assert.match(fm, /^skills: code-review$/m);
@@ -124,8 +124,8 @@ test("builder is a fresh-context worktree agent with narrow local editing author
 test("reviewer has no shell, mutation, or extension authority", () => {
   const content = read("reviewer.md");
   const fm = frontmatter("reviewer");
-  assert.match(fm, /^tools: read, grep, find, ls$/m);
-  assert.match(fm, /^extensions: \[headroom\]$/m);
+  assert.match(fm, /^tools: read, grep, find, ls, ext:fff\/fffind, ext:fff\/ffgrep, ext:fff\/fff-multi-grep$/m);
+  assert.match(fm, /^extensions: \[headroom, fff\]$/m);
   assert.doesNotMatch(fm, /\bbash\b/);
   assert.match(content, /diff and verification evidence supplied by the parent/i);
   assert.match(content, /search for counterevidence/i);

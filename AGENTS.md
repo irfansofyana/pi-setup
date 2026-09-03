@@ -24,7 +24,7 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 ## Pi package conventions
 
 - Normal installation is one reviewed release tag, for example `pi install git:github.com/irfansofyana/pi-setup@v0.1.0`.
-- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the nine exact companions remain separate Pi package sources.
+- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the ten exact companions remain separate Pi package sources.
 - Keep companion names and exact versions aligned with `piSetup.requiredPackages`; companions are deliberately installed as separate Pi package sources after approval.
 - Package installation must not overwrite user settings, config, state, logs, generated skills, memory, or secrets. Keep the package free of postinstall mutation.
 - `irfan-sumi` is fresh-install setup metadata. Changing an existing device's selected theme requires a separate explicit approval.

@@ -37,7 +37,7 @@ Replace `v0.5.2` with a newer release only after reviewing it. One install provi
 - all declared repository extensions under `pi/extensions/`;
 - all themes under `pi/themes/`;
 - the bundled `pi-setup` skill;
-- metadata listing the exact nine companion package sources for the setup skill.
+- metadata listing the exact ten companion package sources for the setup skill.
 
 Do not clone the repository, install the setup skill separately, or copy package resources into `~/.pi/agent/` for a normal fresh setup. Companion packages are installed separately because they retain independent ownership, updates, and lifecycle scripts.
 
