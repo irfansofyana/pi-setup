@@ -6,25 +6,25 @@ This setup turns `@tintinweb/pi-subagents` into a small agent team instead of a 
 
 | Identity | Role ID | Job | Authority | Preloaded skills |
 | --- | --- | --- | --- | --- |
-| **Ciung** | `researcher` | Current public-web research with primary-source evidence | Native `web_search`/`web_fetch` only; no local file tools | bundled `my-web-search` |
-| **Laya** | `code-mapper` | Trace architecture, execution flow, change surface, and tests | Read-only; no shell or extensions | `mermaid`, `teach` |
-| **Sangkur** | `builder` | Prepares behavior tests and implementation in a Git worktree; parent executes tests | Local read/edit/write only; no shell, test execution, network, or extensions | `code-review` |
-| **Prabu** | `reviewer` | Independent diff, risk, and test review | Read-only; no shell or extensions | `code-review` |
+| **Ciung** | `researcher` | Current public-web research with primary-source evidence | Native `web_search`/`web_fetch` only; no local file tools; Headroom routing only | bundled `my-web-search` |
+| **Laya** | `code-mapper` | Trace architecture, execution flow, change surface, and tests | Read-only; no shell; FFF search; Headroom routing | `mermaid`, `teach` |
+| **Sangkur** | `builder` | Prepares behavior tests and implementation in a Git worktree; parent executes tests | Local read/edit/write only; no shell, test execution, network; FFF search; Headroom routing | `code-review` |
+| **Prabu** | `reviewer` | Independent diff, risk, and test review | Read-only; no shell; FFF search; Headroom routing | `code-review` |
 
 The main Pi session remains coordinator. Specialists return evidence and branches; they do not become a second autonomous hierarchy.
 
 ## Why these boundaries
 
 - Research and code understanding can run in parallel without sharing a checkout or modifying state.
-- Builder uses `isolation: worktree` so its file edits do not collide with the parent checkout. Worktree isolation is only checkout separation, not a security boundary and not protection against external side effects. The builder separately has only `read`, `grep`, `find`, `ls`, `edit`, and `write`; it has no shell, network, extensions, or nested-agent tools. A changed worktree is preserved on a local `pi-agent-*` branch for explicit review/integration.
-- Reviewer is separate from builder and has only `read`, `grep`, `find`, and `ls`; it cannot execute shell commands or load extensions. The parent supplies the actual diff and verification evidence so review authority remains genuinely read-only.
-- Ciung loads only the package-owned `web-research` extension and cannot read repository files. Give it sanitized public questions and URLs; Laya handles local repository evidence, and the parent reconciles both streams.
+- Builder uses `isolation: worktree` so its file edits do not collide with the parent checkout. Worktree isolation is only checkout separation, not a security boundary and not protection against external side effects. The builder separately has only local read/edit tools plus FFF search; it has no shell, network, or nested-agent tools. Headroom is loaded only to preserve provider routing; `headroom_stats` remains disallowed. A changed worktree is preserved on a local `pi-agent-*` branch for explicit review/integration.
+- Reviewer is separate from builder and has only local read/search tools plus FFF search; it cannot execute shell commands or use mutation tools. Headroom loads only for provider routing. The parent supplies the actual diff and verification evidence so review authority remains genuinely read-only.
+- Ciung loads package-owned `web-research` plus Headroom routing. It cannot read repository files or use Headroom tools. Give it sanitized public questions and URLs; Laya handles local repository evidence with FFF search, and the parent reconciles both streams.
 - Every role sets `inherit_context: false`; the coordinator must supply a self-contained task packet instead of leaking unrelated conversation context.
 - Subagent transcripts are disabled by default. This reduces one source of local copies; it does not disable normal Pi logs, builder worktree commits, or Tavily/Exa API-side logs and retention. Pi log locations and lifetime follow the local Pi configuration. Provider-side storage follows the account settings and published policies of each provider and is not controlled by this extension. Extension-owned cache/artifact locations and retention are documented in [Local Extensions](local-extensions.md#native-web-research).
 
 ## Prerequisites
 
-`@tintinweb/pi-subagents` is a separately managed [required companion package](../../README.md#required-npm-package-manifest). Pi package resources do not natively include agents, so continue to review and deploy the global templates in this guide. The native web extension and `my-web-search` skill are already package resources; do not install either separately. Install only the remaining role skills from [Skills and optional tools](skills-and-tools.md):
+`@tintinweb/pi-subagents` is a separately managed [required companion package](../../README.md#required-npm-package-manifest). `@ff-labs/pi-fff` is also required because local specialists explicitly receive its read-only `fffind`, `ffgrep`, and `fff-multi-grep` tools. Pi package resources do not natively include agents, so continue to review and deploy the global templates in this guide. The native web extension and `my-web-search` skill are already package resources; do not install either separately. Install only the remaining role skills from [Skills and optional tools](skills-and-tools.md):
 
 ```bash
 npx skills add irfansofyana/ai-marketplace --global --skill mermaid

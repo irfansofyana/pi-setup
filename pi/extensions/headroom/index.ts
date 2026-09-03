@@ -58,6 +58,40 @@ interface HeadroomProxyRegistration extends HeadroomProviderRoutePlan {
   registeredProviders: string[];
 }
 
+interface SharedHeadroomRoutingState {
+  runtime: object;
+  registration: HeadroomProxyRegistration;
+  canonicalModels: HeadroomRouteModel[];
+  proxyUrl: string;
+  excludedProviderIds: Set<string>;
+  references: number;
+  generation: number;
+  invalidatedReferences: number;
+  adoptable: boolean;
+  stopping: boolean;
+  managedProcess?: ChildProcess;
+  releaseManagedProcess?: () => Promise<boolean>;
+  unregisterProvider?: (name: string) => void;
+}
+
+interface ActiveHeadroomProxyRegistration extends HeadroomProxyRegistration {
+  sharedState?: SharedHeadroomRoutingState;
+  leaseGeneration?: number;
+}
+
+// Subagent extension instances share ModelRuntime with parent, but not extension-local state.
+const SHARED_ROUTING_STATE_KEY = Symbol.for("pi-headroom-routing-state");
+
+function sharedRoutingStates(): WeakMap<object, SharedHeadroomRoutingState> {
+  const globalState = globalThis as typeof globalThis & Record<symbol, unknown>;
+  let states = globalState[SHARED_ROUTING_STATE_KEY] as WeakMap<object, SharedHeadroomRoutingState> | undefined;
+  if (!states) {
+    states = new WeakMap<object, SharedHeadroomRoutingState>();
+    globalState[SHARED_ROUTING_STATE_KEY] = states;
+  }
+  return states;
+}
+
 export interface ProxyHistorySummary {
   lifetime?: Record<string, unknown>;
   displaySession?: Record<string, unknown>;
@@ -543,6 +577,9 @@ export function createManagedProxyLifecycle() {
     markStopping(): void {
       stopping = true;
     },
+    markActive(): void {
+      stopping = false;
+    },
     handleSpawnError(error: unknown): ManagedProxyLifecycleNotice | undefined {
       if (stopping || terminalHandled) return undefined;
       terminalHandled = true;
@@ -772,11 +809,44 @@ function configuredProviderIds(): Set<string> {
   }
 }
 
+function runtimeForRouting(ctx: ExtensionContext): object | undefined {
+  const runtime = (ctx.modelRegistry as unknown as { runtime?: unknown }).runtime;
+  return runtime !== null && typeof runtime === "object" ? runtime : undefined;
+}
+
 function modelRegistryRoutingSnapshot(ctx: ExtensionContext): { models: unknown[]; registeredProviderIds: Set<string> } {
   return {
     models: ctx.modelRegistry.getAvailable(),
     registeredProviderIds: new Set(ctx.modelRegistry.getRegisteredProviderIds()),
   };
+}
+
+function sharedRoutingMatches(shared: SharedHeadroomRoutingState, config: HeadroomConfig, models: HeadroomRouteModel[]): boolean {
+  if (shared.proxyUrl !== config.proxyUrl) return false;
+  const canonicalByKey = new Map(shared.canonicalModels.map((model) => [routeKey(model.provider, model.id), model]));
+  const liveByKey = new Map(models.map((model) => [routeKey(model.provider, model.id), model]));
+  if (canonicalByKey.size !== liveByKey.size || [...canonicalByKey.keys()].some((key) => {
+    const live = liveByKey.get(key);
+    return !live || live.api !== canonicalByKey.get(key)!.api;
+  })) return false;
+  // Provider registration mutates live model baseUrls to point at Headroom.
+  // Replan from definitions captured before that mutation, not routed models.
+  const plan = planProxyProviderRoutes(config.proxyUrl, shared.canonicalModels);
+  for (const provider of shared.registration.registeredProviders) {
+    if (plan.providers.get(provider) !== shared.registration.providers.get(provider)) return false;
+  }
+  const sharedProviders = new Set(shared.registration.registeredProviders);
+  for (const provider of plan.providers.keys()) {
+    if (!sharedProviders.has(provider) && !shared.excludedProviderIds.has(provider)) return false;
+  }
+  for (const [modelKey, upstream] of shared.registration.upstreamByModel) {
+    if (plan.upstreamByModel.get(modelKey) !== upstream) return false;
+  }
+  for (const modelKey of plan.upstreamByModel.keys()) {
+    const provider = modelKey.slice(0, modelKey.indexOf("\u0000"));
+    if (!shared.registration.upstreamByModel.has(modelKey) && !shared.excludedProviderIds.has(provider)) return false;
+  }
+  return true;
 }
 
 function routableModels(models: unknown[], configuredProviders: Set<string>): HeadroomRouteModel[] {
@@ -787,7 +857,7 @@ function routableModels(models: unknown[], configuredProviders: Set<string>): He
       && typeof candidate.api === "string" && typeof candidate.baseUrl === "string";
     if (!structurallyValid) return false;
     return ["openai", "anthropic", "openai-codex"].includes(candidate.provider!) || configuredProviders.has(candidate.provider!);
-  });
+  }).map((model) => ({ ...model }));
 }
 
 function registerProxyProviders(
@@ -1132,36 +1202,281 @@ const DEFAULT_DEPENDENCIES: HeadroomDependencies = {
 export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<HeadroomDependencies> = {}) {
   const dependencies: HeadroomDependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   let config = dependencies.readConfig();
+  const specialistSessionNames = new Set(["researcher", "code-mapper", "builder", "reviewer"]);
+  const isSpecialistSession = (): boolean => specialistSessionNames.has(pi.getSessionName?.() ?? "");
+  const disableLocalCompressionForSpecialist = (): void => {
+    if (!config.localToolResultCompression || !isSpecialistSession()) return;
+    // pi-subagents assigns role name after extension binding, so inspect it on
+    // first turn, before deferred local-proxy startup.
+    config = { ...config, enabled: false, localToolResultCompression: false, startup: "off" };
+    runtimeEnabled = false;
+    owner = "none";
+  };
   let resetConfigForSave: HeadroomConfig | undefined;
-  let proxyRegistration: HeadroomProxyRegistration | undefined;
+  let proxyRegistration: ActiveHeadroomProxyRegistration | undefined;
   let proxyRoutingError: string | undefined;
+  let sharedReleaseInFlight: Promise<boolean> | undefined;
+  const requestSharedManagedRelease = (shared: SharedHeadroomRoutingState): void => {
+    const release = shared.releaseManagedProcess;
+    if (!release || sharedReleaseInFlight) return;
+    const pending = release();
+    sharedReleaseInFlight = pending;
+    void pending.then(() => {
+      if (sharedReleaseInFlight === pending) sharedReleaseInFlight = undefined;
+    }, () => {
+      if (sharedReleaseInFlight === pending) sharedReleaseInFlight = undefined;
+    });
+  };
   const enableProxyRouting = (ctx: ExtensionContext): boolean => {
     if (config.localToolResultCompression || proxyRegistration) return true;
+
+    const runtime = runtimeForRouting(ctx);
+    const shared = runtime ? sharedRoutingStates().get(runtime) : undefined;
+    if (shared?.stopping) {
+      proxyRoutingError = "another session is stopping the shared Headroom proxy; retry after shutdown completes";
+      return false;
+    }
+    if (shared?.references === 0) {
+      const ownsManagedProcess = !!managedProcess && shared.managedProcess === managedProcess;
+      const canReuseUnmanagedState = !shared.managedProcess && !shared.stopping;
+      const canReuseRetainedManagedState = !!shared.managedProcess && !shared.stopping;
+      if ((!shared.adoptable && !ownsManagedProcess && !canReuseUnmanagedState && !canReuseRetainedManagedState) || shared.proxyUrl !== config.proxyUrl) {
+        proxyRoutingError = shared.adoptable
+          ? "another session owns a managed Headroom proxy for a different proxyUrl"
+          : "a previous shared Headroom managed proxy is still tracked after failed termination";
+        return false;
+      }
+      try {
+        const registry = modelRegistryRoutingSnapshot(ctx);
+        // Zero-reference retained proxies have already unregistered their
+        // providers, so live models are native again and safe to snapshot.
+        shared.canonicalModels = routableModels(registry.models, dependencies.configuredProviderIds());
+        const registration = registerProxyProviders(
+          pi,
+          config,
+          shared.canonicalModels,
+          registry.registeredProviderIds,
+        );
+        if (!registration) {
+          proxyRoutingError = "Pi provider registration API is unavailable";
+          return false;
+        }
+        shared.registration = registration;
+        shared.excludedProviderIds = registry.registeredProviderIds;
+        shared.unregisterProvider = (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider?.bind(pi);
+        shared.references = 1;
+        shared.adoptable = false;
+        proxyRegistration = { ...registration, sharedState: shared, leaseGeneration: shared.generation };
+        proxyRoutingError = undefined;
+        return true;
+      } catch (error) {
+        proxyRoutingError = error instanceof Error ? error.message : String(error);
+        return false;
+      }
+    }
+    if (shared) {
+      const registry = modelRegistryRoutingSnapshot(ctx);
+      const models = routableModels(registry.models, dependencies.configuredProviderIds());
+      if (!sharedRoutingMatches(shared, config, models)) {
+        proxyRoutingError = "another active session owns a different Headroom provider route; stop it before changing proxyUrl or models.json";
+        return false;
+      }
+      shared.references++;
+      proxyRegistration = { ...shared.registration, sharedState: shared, leaseGeneration: shared.generation };
+      proxyRoutingError = undefined;
+      return true;
+    }
+
     try {
       const registry = modelRegistryRoutingSnapshot(ctx);
-      proxyRegistration = registerProxyProviders(
+      const registration = registerProxyProviders(
         pi,
         config,
         routableModels(registry.models, dependencies.configuredProviderIds()),
         registry.registeredProviderIds,
       );
-      proxyRoutingError = proxyRegistration ? undefined : "Pi provider registration API is unavailable";
+      proxyRoutingError = registration ? undefined : "Pi provider registration API is unavailable";
+      if (registration) {
+        const active: ActiveHeadroomProxyRegistration = { ...registration };
+        if (runtime) {
+          const sharedState: SharedHeadroomRoutingState = {
+            runtime,
+            registration,
+            canonicalModels: routableModels(registry.models, dependencies.configuredProviderIds()),
+            proxyUrl: config.proxyUrl,
+            excludedProviderIds: registry.registeredProviderIds,
+            references: 1,
+            generation: 0,
+            invalidatedReferences: 0,
+            adoptable: false,
+            stopping: false,
+            unregisterProvider: (pi as ExtensionAPI & { unregisterProvider?: (name: string) => void }).unregisterProvider?.bind(pi),
+          };
+          sharedRoutingStates().set(runtime, sharedState);
+          active.sharedState = sharedState;
+          active.leaseGeneration = sharedState.generation;
+        }
+        proxyRegistration = active;
+      } else {
+        proxyRegistration = undefined;
+      }
     } catch (error) {
       proxyRegistration = undefined;
       proxyRoutingError = error instanceof Error ? error.message : String(error);
     }
     return proxyRegistration !== undefined;
   };
-  const disableProxyRouting = (): void => {
-    if (!proxyRegistration) return;
-    unregisterProxyProviders(pi, proxyRegistration.registeredProviders);
+  const disableProxyRouting = (releaseFinalManagedProcess = true, disableSharedRuntime = false): void => {
+    const active = proxyRegistration;
+    if (!active) return;
     proxyRegistration = undefined;
+    if (active.sharedState) {
+      const shared = active.sharedState;
+      const states = sharedRoutingStates();
+      const leaseIsCurrent = active.leaseGeneration === undefined || active.leaseGeneration === shared.generation;
+      if (!leaseIsCurrent) {
+        shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
+        if (shared.invalidatedReferences === 0) {
+          if (shared.references > 0) {
+            shared.stopping = false;
+            shared.adoptable = false;
+          } else if (shared.releaseManagedProcess) {
+            shared.stopping = true;
+            shared.adoptable = false;
+            if (releaseFinalManagedProcess && !managedProcess) requestSharedManagedRelease(shared);
+          } else {
+            shared.stopping = false;
+            shared.adoptable = false;
+            if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+          }
+        }
+        return;
+      }
+      shared.references = Math.max(0, shared.references - 1);
+      if (shared.references === 0) {
+        for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+        const retain = !!shared.managedProcess && !!shared.releaseManagedProcess;
+        shared.adoptable = retain && !shared.stopping;
+        if (!retain) {
+          shared.managedProcess = undefined;
+          shared.releaseManagedProcess = undefined;
+          if (managedSharedRoutingState === shared) managedSharedRoutingState = undefined;
+          if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+        } else if (releaseFinalManagedProcess && !managedProcess) {
+          shared.stopping = true;
+          requestSharedManagedRelease(shared);
+        }
+      } else if (disableSharedRuntime) {
+        shared.invalidatedReferences += shared.references;
+        shared.references = 0;
+        shared.generation++;
+        shared.adoptable = false;
+        for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+        if ((!shared.managedProcess || !shared.releaseManagedProcess) && shared.invalidatedReferences === 0) {
+          if (managedSharedRoutingState === shared) managedSharedRoutingState = undefined;
+          if (states.get(shared.runtime) === shared) states.delete(shared.runtime);
+        }
+      }
+      return;
+    }
+    unregisterProxyProviders(pi, active.registeredProviders);
+  };
+  const retireInvalidatedProxyLease = (): void => {
+    const active = proxyRegistration;
+    const shared = active?.sharedState;
+    if (!active || !shared || active.leaseGeneration === undefined || active.leaseGeneration === shared.generation) return;
+    proxyRegistration = undefined;
+    shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
+    if (shared.invalidatedReferences > 0) return;
+    if (shared.references > 0) {
+      shared.stopping = false;
+      shared.adoptable = false;
+      return;
+    }
+    if (shared.releaseManagedProcess) {
+      shared.stopping = false;
+      shared.adoptable = true;
+      return;
+    }
+    if (sharedRoutingStates().get(shared.runtime) === shared) sharedRoutingStates().delete(shared.runtime);
   };
   let runtimeEnabled = initialRuntimeEnabled(config);
   let owner: ProxyOwner = "none";
   let managedProcess: ChildProcess | undefined;
   let managedLifecycle: ReturnType<typeof createManagedProxyLifecycle> | undefined;
+  let managedSharedRoutingState: SharedHeadroomRoutingState | undefined;
   let managedStartupPending = false;
+  const invalidateSharedRoutingForConflict = (shared: SharedHeadroomRoutingState): void => {
+    shared.invalidatedReferences += shared.references;
+    shared.references = 0;
+    shared.generation++;
+    shared.adoptable = false;
+    for (const provider of shared.registration.registeredProviders) shared.unregisterProvider?.(provider);
+  };
+  const synchronizeSharedRouting = (ctx?: ExtensionContext): void => {
+    if (!ctx) return;
+    const routingRuntime = runtimeForRouting(ctx);
+    const shared = routingRuntime ? sharedRoutingStates().get(routingRuntime) : undefined;
+    const active = proxyRegistration;
+    if (active?.sharedState && active.leaseGeneration !== undefined && active.leaseGeneration !== active.sharedState.generation) {
+      retireInvalidatedProxyLease();
+    }
+    if (!shared || shared.references === 0) {
+      if (active?.sharedState) runtimeEnabled = false;
+      return;
+    }
+    const registry = modelRegistryRoutingSnapshot(ctx);
+    const models = routableModels(registry.models, dependencies.configuredProviderIds());
+    if (!sharedRoutingMatches(shared, config, models)) {
+      proxyRoutingError = "shared Headroom route no longer matches this session's proxyUrl or models; restoring native routing";
+      if (proxyRegistration?.sharedState === shared) disableProxyRouting(false, true);
+      else invalidateSharedRoutingForConflict(shared);
+      runtimeEnabled = false;
+      return;
+    }
+    if (!proxyRegistration) {
+      shared.references++;
+      proxyRegistration = { ...shared.registration, sharedState: shared, leaseGeneration: shared.generation };
+    }
+    runtimeEnabled = true;
+  };
+  const clearManagedProcessFromSharedRouting = (child: ChildProcess): void => {
+    const shared = managedSharedRoutingState;
+    if (!shared || shared.managedProcess !== child) return;
+    shared.managedProcess = undefined;
+    shared.releaseManagedProcess = undefined;
+    managedSharedRoutingState = undefined;
+    const states = sharedRoutingStates();
+    if (shared.references === 0 && states.get(shared.runtime) === shared) states.delete(shared.runtime);
+  };
+  const attachManagedProcessToSharedRouting = (): void => {
+    const shared = proxyRegistration?.sharedState;
+    const child = managedProcess;
+    if (!shared || !child || shared.managedProcess) return;
+    shared.managedProcess = child;
+    managedSharedRoutingState = shared;
+    const releaseManagedProcess = async (): Promise<boolean> => {
+      managedLifecycle?.markStopping();
+      const terminated = await dependencies.terminateChild(child);
+      if (!terminated) {
+        if (shared.references === 0) {
+          shared.managedProcess = child;
+          shared.releaseManagedProcess = releaseManagedProcess;
+          managedSharedRoutingState = shared;
+          sharedRoutingStates().set(shared.runtime, shared);
+        }
+        return false;
+      }
+      clearManagedProcessFromSharedRouting(child);
+      if (managedProcess === child) {
+        managedProcess = undefined;
+        managedLifecycle = undefined;
+      }
+      try { if (existsSync(PID_PATH)) unlinkSync(PID_PATH); } catch {}
+      return true;
+    };
+    shared.releaseManagedProcess = releaseManagedProcess;
+  };
   let routingMutationRevision = 0;
   const beginRoutingMutation = (): number => ++routingMutationRevision;
   const routingMutationIsCurrent = (revision: number): boolean => revision === routingMutationRevision;
@@ -1252,7 +1567,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
 
   const activateProxyRouting = (ctx: ExtensionContext): boolean => {
-    if (enableProxyRouting(ctx)) return true;
+    if (enableProxyRouting(ctx)) {
+      attachManagedProcessToSharedRouting();
+      return true;
+    }
     runtimeEnabled = false;
     updateStatus(ctx, runtimeEnabled, owner, stats);
     notifyLifecycleFailure(ctx, `Headroom could not install Pi provider routing: ${proxyRoutingError ?? "unknown provider registration failure"}. Native providers remain active.`);
@@ -1377,7 +1695,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       beginRoutingMutation();
       invalidatePendingBaselineCapture();
       const exited = childHasExited(child);
-      if (exited) managedStartupPending = false;
+      if (exited) {
+        managedStartupPending = false;
+        clearManagedProcessFromSharedRouting(child);
+      }
       if (exited && managedProcess === child) managedProcess = undefined;
       if (exited && managedLifecycle === lifecycle) managedLifecycle = undefined;
       runtimeEnabled = false;
@@ -1395,6 +1716,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       handleTerminalFailure(lifecycle.handleSpawnError(error));
     });
     child.on("exit", (code, signal) => {
+      // handleExit suppresses notices for intentional or previously failed
+      // termination; confirmed exit must still release transferred ownership.
+      clearManagedProcessFromSharedRouting(child);
       handleTerminalFailure(lifecycle.handleExit(code, signal));
       if (managedProcess === child) {
         managedStartupPending = false;
@@ -1427,6 +1751,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       if (!attempt.isCurrent()) return;
       if (notice) notifyLifecycleFailure(ctx, notice.message);
       if (terminated) {
+        clearManagedProcessFromSharedRouting(child);
         if (managedProcess === child) managedProcess = undefined;
         if (managedLifecycle === lifecycle) managedLifecycle = undefined;
         owner = "none";
@@ -1545,17 +1870,49 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     await trackStart(startCoordinator.restart(ctx));
   };
 
-  const performStopManagedProxy = async (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+  const performStopManagedProxy = async (ctx: ExtensionContext, notify = true, disableSharedRuntime = false): Promise<boolean> => {
+    const activeSharedRouting = proxyRegistration?.sharedState;
+    const activeLeaseGeneration = activeSharedRouting ? proxyRegistration?.leaseGeneration : undefined;
+    const runtime = runtimeForRouting(ctx);
+    const staleSharedRouting = activeSharedRouting ? undefined : runtime ? sharedRoutingStates().get(runtime) : undefined;
+    const sharedHasPeers = (shared: SharedHeadroomRoutingState, leaseGeneration?: number): boolean => {
+      if (leaseGeneration === undefined) return shared.references > 0 || shared.invalidatedReferences > 0;
+      if (leaseGeneration !== shared.generation) {
+        return shared.references > 0 || shared.invalidatedReferences > 1;
+      }
+      return shared.references > 1 || shared.invalidatedReferences > 0;
+    };
+    let sharedRoutingHasPeers = activeSharedRouting
+      ? sharedHasPeers(activeSharedRouting, activeLeaseGeneration)
+      : !!staleSharedRouting && sharedHasPeers(staleSharedRouting);
+    const releaseSharedManagedProcess = managedProcess
+      ? undefined
+      : activeSharedRouting?.releaseManagedProcess ?? ((staleSharedRouting?.references === 0 || (staleSharedRouting?.invalidatedReferences ?? 0) > 0) ? staleSharedRouting.releaseManagedProcess : undefined);
+    const managedSharedRouting = activeSharedRouting ?? staleSharedRouting;
+    const shouldStopManagedProxy = !!managedProcess && !sharedRoutingHasPeers;
+    const shouldReleaseTransferredProxy = !!releaseSharedManagedProcess && !sharedRoutingHasPeers;
+    if ((shouldStopManagedProxy || shouldReleaseTransferredProxy) && managedSharedRouting) managedSharedRouting.stopping = true;
     startCoordinator.cancel();
     const stopRevision = beginRoutingMutation();
     invalidatePendingBaselineCapture();
     const wasRuntimeEnabled = runtimeEnabled;
     runtimeEnabled = false;
-    disableProxyRouting();
+    if (shouldStopManagedProxy) managedLifecycle?.markStopping();
+    disableProxyRouting(false, disableSharedRuntime);
+    if (disableSharedRuntime) sharedRoutingHasPeers = false;
     updateStatus(ctx, runtimeEnabled, owner, stats);
-    managedLifecycle?.markStopping();
     await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
     if (!routingMutationIsCurrent(stopRevision)) return false;
+    if (!disableSharedRuntime && !sharedRoutingHasPeers && runtime) {
+      const currentSharedRouting = sharedRoutingStates().get(runtime);
+      sharedRoutingHasPeers = !!currentSharedRouting && sharedHasPeers(currentSharedRouting, activeLeaseGeneration);
+    }
+    if (sharedRoutingHasPeers) {
+      if (managedProcess) managedLifecycle?.markActive();
+      if (notify && ctx.hasUI) ctx.ui.notify("Headroom routing released for this session; active subagents retain the shared proxy.", "info");
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      return true;
+    }
     if (managedProcess) {
       const child = managedProcess;
       const lifecycle = managedLifecycle;
@@ -1563,6 +1920,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       const terminated = await dependencies.terminateChild(child);
       managedStartupPending = false;
       if (terminated) {
+        clearManagedProcessFromSharedRouting(child);
         if (managedProcess === child) managedProcess = undefined;
         if (managedLifecycle === lifecycle) managedLifecycle = undefined;
         owner = "none";
@@ -1575,6 +1933,14 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       updateStatus(ctx, runtimeEnabled, owner, stats);
       return terminated;
     }
+    if (releaseSharedManagedProcess) {
+      if (managedSharedRouting) managedSharedRouting.stopping = true;
+      const terminated = await releaseSharedManagedProcess();
+      owner = terminated ? "none" : "managed";
+      if (notify && ctx.hasUI) ctx.ui.notify(terminated ? "Headroom managed proxy stopped. Compression disabled." : "Headroom managed proxy did not terminate; compression is disabled and the process remains tracked. Retry /headroom stop or terminate it manually.", terminated ? "info" : "error");
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      return terminated;
+    }
     const wasExternal = owner === "external";
     owner = wasExternal ? "external" : "none";
     if (notify && ctx.hasUI) ctx.ui.notify(wasExternal ? "Compression disabled. External proxy left running." : "Compression disabled.", "info");
@@ -1582,9 +1948,9 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     return true;
   };
 
-  const stopManagedProxy = (ctx: ExtensionContext, notify = true): Promise<boolean> => {
+  const stopManagedProxy = (ctx: ExtensionContext, notify = true, disableSharedRuntime = false): Promise<boolean> => {
     if (stopInFlight) return stopInFlight;
-    const operation = performStopManagedProxy(ctx, notify);
+    const operation = performStopManagedProxy(ctx, notify, disableSharedRuntime);
     stopInFlight = operation;
     const cleanup = (): void => {
       if (stopInFlight === operation) stopInFlight = undefined;
@@ -1610,12 +1976,18 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
+    if (isSpecialistSession()) {
+      disableLocalCompressionForSpecialist();
+      synchronizeSharedRouting(ctx);
+      updateStatus(ctx, runtimeEnabled, owner, stats);
+      return;
+    }
     try {
       dependencies.cleanupStore(config);
     } catch (error) {
       notifyLifecycleFailure(ctx, `Headroom local-store cleanup failed: ${error instanceof Error ? error.message : String(error)}. Compression will remain disabled unless startup succeeds.`);
     }
-    if (config.startup === "auto") await startManagedProxy(ctx);
+    if (config.startup === "auto" && !config.localToolResultCompression) await startManagedProxy(ctx);
     else updateStatus(ctx, runtimeEnabled, owner, stats);
   });
 
@@ -1624,13 +1996,25 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   });
 
   pi.on("before_provider_headers", (event, ctx) => {
-    if (!runtimeEnabled || config.localToolResultCompression || !proxyRegistration || !ctx.model) return;
-    const upstream = proxyRegistration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
+    const routingRuntime = runtimeForRouting(ctx);
+    const shared = routingRuntime ? sharedRoutingStates().get(routingRuntime) : undefined;
+    const activeLease = proxyRegistration?.sharedState
+      ? proxyRegistration.leaseGeneration === proxyRegistration.sharedState.generation
+        && proxyRegistration.sharedState.references > 0
+      : !!proxyRegistration;
+    const sharedRoute = !proxyRegistration && shared && shared.references > 0
+      && sharedRoutingMatches(shared, config, routableModels(modelRegistryRoutingSnapshot(ctx).models, dependencies.configuredProviderIds()))
+      ? shared.registration
+      : undefined;
+    const registration = activeLease ? proxyRegistration : sharedRoute;
+    if (!runtimeEnabled || config.localToolResultCompression || !registration || !ctx.model) return;
+    const upstream = registration.upstreamByModel.get(routeKey(ctx.model.provider, ctx.model.id));
     if (upstream) event.headers["x-headroom-base-url"] = upstream;
   });
 
   let deferredNativeRecoveryRevision: number | undefined;
   const recoverNativeRouting = async (ctx: ExtensionContext, deferReplacement = false): Promise<boolean> => {
+    synchronizeSharedRouting(ctx);
     if (config.localToolResultCompression) return runtimeEnabled;
     if (!runtimeEnabled) return false;
     const signal = getContextSignal(ctx);
@@ -1643,9 +2027,11 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     const recoveryRevision = beginRoutingMutation();
     invalidatePendingBaselineCapture();
     runtimeEnabled = false;
-    disableProxyRouting();
+    disableProxyRouting(true, true);
     updateStatus(ctx, runtimeEnabled, owner, stats);
     if (owner === "external" && config.startup === "auto") {
+      const release = sharedReleaseInFlight;
+      if (release && !(await release)) return false;
       if (deferReplacement) deferredNativeRecoveryRevision = recoveryRevision;
       else await startManagedProxy(ctx);
     }
@@ -1669,6 +2055,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
 
   pi.on("turn_start", async (_event, ctx) => {
+    disableLocalCompressionForSpecialist();
+    if (config.localToolResultCompression && config.startup === "auto" && runtimeEnabled) {
+      await startManagedProxy(ctx);
+    }
     await recoverNativeRouting(ctx, true);
   });
 
@@ -1799,6 +2189,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     promptSnippet: "Inspect Headroom compression savings and local retrieval stats.",
     parameters: Schema.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      synchronizeSharedRouting(ctx);
       const history = runtimeEnabled
         ? await fetchProxyHistory(signal ?? getContextSignal(ctx))
         : { error: "routing disabled" };
@@ -1817,28 +2208,34 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       const trimmed = args.trim();
       const [command = "status", ...rest] = trimmed.split(/\s+/);
       const value = rest.join(" ").trim();
+      synchronizeSharedRouting(ctx);
 
       if (command === "start") {
         await startManagedProxy(ctx);
         return;
       }
       if (command === "stop") {
-        await stopManagedProxy(ctx);
+        await stopManagedProxy(ctx, true, true);
         return;
       }
       if (command === "restart") {
-        if (await stopManagedProxy(ctx)) await restartManagedProxy(ctx);
+        if (await stopManagedProxy(ctx, true, true)) await restartManagedProxy(ctx);
         return;
       }
       if (command === "enable") {
         const proxyUrlSupported = hasSupportedProxyProtocol(config.proxyUrl);
+        const routingRuntime = runtimeForRouting(ctx);
+        const sharedRouting = routingRuntime ? sharedRoutingStates().get(routingRuntime) : undefined;
+        const routingActive = !!proxyRegistration && (!proxyRegistration.sharedState || proxyRegistration.sharedState.references > 0)
+          || !!sharedRouting && sharedRouting.references > 0;
+        if (!routingActive) retireInvalidatedProxyLease();
         const enableSignal = getContextSignal(ctx);
         if (startInFlight) {
           if (managedStartupPending) await startInFlight;
           else startCoordinator.cancel();
         }
         if (enableSignal?.aborted) return;
-        if (runtimeEnabled) {
+        if (runtimeEnabled && routingActive) {
           const routingRevision = routingMutationRevision;
           const healthy = await dependencies.health(config, enableSignal);
           if (enableSignal?.aborted || !routingMutationIsCurrent(routingRevision)) return;
@@ -1853,6 +2250,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
           disableProxyRouting();
           updateStatus(ctx, runtimeEnabled, owner, stats);
         }
+        if (!routingActive) runtimeEnabled = false;
         const routingRevision = beginRoutingMutation();
         const proxyHealthy = config.startup !== "off" && proxyUrlSupported && await dependencies.health(config, enableSignal);
         if (enableSignal?.aborted || !routingMutationIsCurrent(routingRevision)) return;
@@ -1901,7 +2299,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
         invalidatePendingBaselineCapture();
         const wasRuntimeEnabled = runtimeEnabled;
         runtimeEnabled = false;
-        disableProxyRouting();
+        disableProxyRouting(true, true);
         updateStatus(ctx, runtimeEnabled, owner, stats);
         await finalizeProxyStatsSegment(wasRuntimeEnabled, getContextSignal(ctx));
         if (!routingMutationIsCurrent(disableRevision)) return;
