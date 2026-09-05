@@ -32,7 +32,7 @@ pi --version
 pi list
 ```
 
-Confirm `pi list` shows the tagged first-party package and each required companion as a separate source. Companion packages are expected; audit them for missing or version-drifted sources, not aggregate duplication.
+Confirm `pi list` shows the tagged first-party package and each required companion as a separate source. Companion packages are expected; audit them for missing or below-minimum sources, not aggregate duplication. Installed versions meeting documented minimums are compliant.
 
 Inside Pi:
 

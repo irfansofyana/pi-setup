@@ -23,7 +23,7 @@ Call the verified directory `PACKAGE_ROOT`. Resolve all docs and templates from 
 
 Before auditing:
 
-1. Read `PACKAGE_ROOT/package.json` for exact companion sources in `piSetup.requiredPackages`, package resources, and setup metadata.
+1. Read `PACKAGE_ROOT/package.json` for companion sources in `piSetup.requiredPackages`, package resources, and setup metadata. For each versioned npm source, treat its version suffix as the minimum floor; do not use README prose as audit input.
 2. Read `PACKAGE_ROOT/AGENTS.md` and `PACKAGE_ROOT/README.md`.
 3. Read only relevant topic docs:
    - package install and migration: `docs/setup/installation.md`
@@ -42,7 +42,7 @@ The package owns `/pi-setup-init` and `/pi-setup-doctor` as thin prompt adapters
 Distinguish every target:
 
 - **Package-owned:** repository code, themes, and skills loaded from the installed first-party package, including `web-research` and `my-web-search`.
-- **Companion package-owned:** the separate Pi package sources pinned by `piSetup.requiredPackages`.
+- **Companion package-owned:** the separate Pi package sources named by `piSetup.requiredPackages`; versioned npm source suffixes define minimum floors, and newer installed versions satisfy them.
 - **Global user-owned:** settings, manual loaders, agents, component config/state/logs, generated skills, and Pi-specific MCP under `~/.pi/agent/`.
 - **Global shared MCP:** `~/.config/mcp/mcp.json`.
 - **Project-local:** `.mcp.json` and trusted project-owned Pi files.
@@ -59,7 +59,7 @@ Audit relevant surfaces:
 - Pi availability/version and `pi list` package sources.
 - First-party package presence and declared resources against `package.json`.
 - Native `web-research` discovery, both exact tool names, bundled `my-web-search`, and owner-only artifact state without reading fetched bodies.
-- Presence and installed source/version of every separately managed package in `piSetup.requiredPackages`.
+- Presence and installed source/version of every separately managed package in `piSetup.requiredPackages`; compare installed versions against each source's version suffix. Installed versions at or above that floor are compliant, not drifted.
 - Known legacy manual extension files/directories under `~/.pi/agent/extensions/`, including same-command or same-tool registrations.
 - Potential custom-editor claimants among enabled, resolved package entrypoints. Inspect effective load order plus runtime feature/config evidence. Report static `setEditorComponent()` matches as potential claimants; call them effective owners only when proven, otherwise classify ownership as `blocked`. Never reorder packages during audit.
 - Manually copied package themes under `~/.pi/agent/themes/`.
@@ -77,7 +77,7 @@ Classify every item:
 - `compliant`: package, companion, or user-owned state matches documented intent.
 - `missing`: required resource or config absent.
 - `duplicate`: first-party package resource and a legacy/manual loader are both active.
-- `drifted`: present but differs from intended approved state.
+- `drifted`: present below the version floor encoded in its required npm source, from a different source, or otherwise differs from intended approved state. Newer versions satisfying floors are compliant.
 - `optional`: documented but not required for requested scope.
 - `blocked`: cannot verify or change safely because of ambiguity, access, credentials, missing dependency, or unknown lifecycle command.
 
@@ -107,7 +107,7 @@ For each mutation include:
 Separate proposal groups:
 
 - required first-party package verification;
-- missing or version-drifted companion package installation/update;
+- missing or below-minimum companion package installation/update;
 - duplicate legacy manual loader cleanup;
 - optional settings/config changes, including theme;
 - global subagent template deployment;
@@ -127,7 +127,7 @@ For each approved proposal, one at a time:
 5. Apply only the approved narrow action.
 6. Preserve settings, unknown config keys, state, archives, logs, memory, generated skills, and unrelated entries.
 7. Remove legacy manual code/theme loaders only when they are proven duplicates. Never remove a component config/state directory merely because code is now package-owned.
-8. Keep companion packages as separate Pi-managed sources. Install or update only an explicitly approved exact source; never remove one as a first-party-package duplicate.
+8. Keep companion packages as separate Pi-managed sources. Install or update only an explicitly approved source; for new installs, strip the `@version` floor from the required npm source so Pi resolves a current release, and accept any installed version at or above the encoded floor. Never remove one as a first-party-package duplicate.
 9. For global agents, follow `docs/setup/subagents.md`: review templates, back up existing files, preserve machine-local model choices unless approved, and merge `subagents.json` narrowly. Deploying native Ciung does not authorize deleting its legacy skill/routes/MCP configuration.
 10. Never expose, generate, copy, or write credentials. Ask the user to complete `/login`, environment, or provider-profile steps.
 11. Reload/restart and verify this mutation before continuing. On failure, restore only its approved legacy loader when rollback is safe and deterministic; never overwrite newer user data with stale config.

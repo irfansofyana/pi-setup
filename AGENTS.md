@@ -24,11 +24,11 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 ## Pi package conventions
 
 - Normal installation is one reviewed release tag, for example `pi install git:github.com/irfansofyana/pi-setup@v0.1.0`.
-- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the ten exact companions remain separate Pi package sources.
-- Keep companion names and exact versions aligned with `piSetup.requiredPackages`; companions are deliberately installed as separate Pi package sources after approval.
+- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the seven exact companions remain separate Pi package sources.
+- Keep companion names and documented minimum versions aligned with `piSetup.requiredPackages`; newer installed versions satisfy minimums and remain separate Pi package sources after approval.
 - Package installation must not overwrite user settings, config, state, logs, generated skills, memory, or secrets. Keep the package free of postinstall mutation.
 - `irfan-sumi` is fresh-install setup metadata. Changing an existing device's selected theme requires a separate explicit approval.
-- Existing-device migration must detect legacy manual extension/theme copies plus missing or version-drifted companion packages. Back up manual duplicate candidates privately and remove only explicitly approved duplicates after the first-party resource is verified.
+- Existing-device migration must detect legacy manual extension/theme copies plus missing or below-minimum companion packages. Installed versions meeting minimums are compliant. Back up manual duplicate candidates privately and remove only explicitly approved duplicates after the first-party resource is verified.
 - `/pi-setup-init` and `/pi-setup-doctor` are thin prompt adapters into the bundled skill. They must never mutate files or settings directly; init remains proposal-first and doctor strictly read-only.
 - Headroom CLI remains a separate Python tool: `pipx install "headroom-ai[proxy]"` or `uv tool install "headroom-ai[proxy]"`; npm `headroom-ai` is SDK-only.
 - oh-my-pi is the reference shape for local Hindsight behavior; Headroom is separate and unrelated.

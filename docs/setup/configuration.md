@@ -7,7 +7,7 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | Path | Scope | Use |
 | --- | --- | --- |
 | Installed `@irfansofyana/pi-setup` package | Pi-managed | Repository-owned extensions, themes, and skills |
-| Required companion packages | Pi-managed | Separate sources pinned by `piSetup.requiredPackages` |
+| Required companion packages | Pi-managed | Separate sources with documented minimum versions |
 | `~/.pi/agent/settings.json` | Global Pi | Pi settings and selected theme |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |

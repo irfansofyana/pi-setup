@@ -2,24 +2,22 @@
 
 An installable first-party Pi package plus a reviewed companion-package manifest: themes, local extensions, MCP, memory, context compression, subagents, skills, and operational guardrails.
 
-![Pi setup home screen](docs/images/pi-home.png)
-
 ## What this package provides
 
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with provider login through `/login` |
-| Theme/UI | `irfan-sumi` with integrated editor, `irfan-pi`, alternate themes, and Pi Signature |
+| Theme/UI | `irfan-sumi` with integrated editor and Pi Signature |
 | Web research | Native `web_search`/`web_fetch`, Tavily-first routing, Exa selection, and bundled `my-web-search` methodology |
 | MCP | MCP adapter plus optional/legacy search, OAuth, and bearer patterns |
 | Delegation | Ciung research, Laya code mapping, Sangkur worktree builds, and Prabu review |
 | Guardrails | Permission gates, todos, persisted goals, and prompt loops |
-| Context | `context-mode`; Headroom native OpenAI/Anthropic proxy routing by default, with legacy local tool-result compression/retrieval as an opt-in |
+| Context | Headroom native OpenAI/Anthropic proxy routing by default, with legacy local tool-result compression/retrieval as an opt-in |
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel while the main agent works |
-| Routing | `pi-9router-ext` model routing and legacy search coexistence during migration |
-| Operations | Markdown preview, usage stats, `/context` diagnostics, and Caveman response mode |
-| Skills | Setup, `my-web-search`, MCP, context-mode, and optional workflow skills |
+| Routing | Legacy search coexistence during migration |
+| Operations | Usage stats, `/context` diagnostics, and Caveman response mode |
+| Skills | Setup, `my-web-search`, MCP, and optional workflow skills |
 
 ### `irfan-sumi` preview
 
@@ -33,7 +31,7 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 package.json                  # Pi resources + exact companion package metadata
 pi/
   agents/                     # reviewed templates; deployed separately
-  themes/                     # irfan-sumi bundle, irfan-pi, and alternates
+  themes/                     # irfan-sumi bundle
   extensions/                 # repo-owned package extensions, including native web research
 skills/                       # bundled setup and my-web-search skills
 docs/setup/                   # setup and operations guides
@@ -52,7 +50,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 npm install -g @earendil-works/pi-coding-agent
 
 # 2) Install one reviewed pi-setup release
-pi install git:github.com/irfansofyana/pi-setup@v0.5.2
+pi install git:github.com/irfansofyana/pi-setup@v0.5.3
 
 # 3) Start Pi
 pi
@@ -81,7 +79,7 @@ After installing the tagged package, ask Pi:
 The migration workflow must:
 
 1. Inventory `pi list`, legacy manual extensions/themes, global/project config, and selected theme.
-2. Verify the separately managed companion packages below and propose only missing or version-drifted installs.
+2. Verify the separately managed companion packages below and propose only missing or below-minimum installs.
 3. Distinguish duplicate loaders from user-owned config/state directories.
 4. Present numbered actions with private backups, rollback, and reload impact.
 5. Remove only explicitly approved duplicates after first-party resources are verified.
@@ -96,18 +94,15 @@ Global subagent templates still require reviewed, skill-managed deployment to `~
 
 The root `piSetup.requiredPackages` metadata is canonical. These packages are installed as separate Pi package sources by the approval-gated setup skill; the first-party package does not absorb their lifecycle scripts or resource paths.
 
-| Package | Version | Purpose |
+| Package | Minimum version | Purpose |
 | --- | --- | --- |
-| `@ff-labs/pi-fff` | `0.10.5` | FFF-powered specialist search |
-| `@gotgenes/pi-permission-system` | `24.0.0` | Approval gates |
-| `@juicesharp/rpiv-ask-user-question` | `2.4.0` | Structured questions |
-| `@juicesharp/rpiv-todo` | `2.4.0` | Task tracking |
-| `@tintinweb/pi-subagents` | `0.14.3` | Delegated agent workflows |
-| `context-mode` | `1.0.169` | Context-saving tools and skills |
-| `pi-9router-ext` | `0.2.3` | Model routing and legacy search coexistence during migration |
-| `pi-markdown-preview` | `0.11.3` | Markdown render/export |
-| `pi-mcp-adapter` | `2.21.1` | Standard MCP config and tools |
-| `pi-stats-ext` | `0.2.0` | Usage statistics |
+| `@ff-labs/pi-fff` | `>=0.10.5` | FFF-powered specialist search |
+| `@gotgenes/pi-permission-system` | `>=24.0.0` | Approval gates |
+| `@juicesharp/rpiv-ask-user-question` | `>=2.4.0` | Structured questions |
+| `@juicesharp/rpiv-todo` | `>=2.4.0` | Task tracking |
+| `@tintinweb/pi-subagents` | `>=0.14.3` | Delegated agent workflows |
+| `pi-mcp-adapter` | `>=2.21.1` | Standard MCP config and tools |
+| `pi-stats-ext` | `>=0.2.0` | Usage statistics |
 
 Use `pi list` to inspect package sources. These companion packages remain separate Pi-managed sources by design; their presence is expected, not a duplicate of the first-party package.
 
@@ -116,7 +111,7 @@ Use `pi list` to inspect package sources. These companion packages remain separa
 | Path | Scope | Purpose |
 | --- | --- | --- |
 | Installed first-party package | Pi-managed | Repository-owned extensions, themes, and skills |
-| Required companion packages | Pi-managed | MCP, permissions, context mode, subagents, routing, and utility extensions |
+| Required companion packages | Pi-managed | MCP, permissions, subagents, and utility extensions |
 | `~/.pi/agent/settings.json` | Global user | Theme and Pi settings |
 | `~/.pi/agent/extensions/` | Global user | Legacy/manual loaders and extension-local policy |
 | `~/.pi/agent/agents/` | Global user | Trusted reusable subagent roles |
@@ -154,12 +149,12 @@ Package updates replace package-owned code, not user-owned configuration. Preser
 - Approved removal candidates receive private backups and rollback steps.
 - Settings/config/state/secrets are never package-overwritten.
 - Existing theme changes are separate optional proposals.
-- Missing or version-drifted companions are changed only after approval.
+- Missing or below-minimum companions are changed only after approval.
 
 ## Core operating rules
 
 - Install the first-party package from a reviewed Git tag.
-- Install the ten required companions as separate Pi package sources through the approval-gated setup skill.
+- Install the seven required companions as separate Pi package sources through the approval-gated setup skill.
 - Do not manually copy package-owned extensions, themes, or bundled skills.
 - Install unrelated skills with `npx skills` or `npx skills@latest`.
 - Deploy reviewed global agent templates through the bundled skill because agents are not package resources.
