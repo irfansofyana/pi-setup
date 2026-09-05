@@ -112,6 +112,16 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     assert.equal(manifest.peerDependencies?.[name], undefined, `${name} must remain a separate Pi source`);
   }
   assert.deepEqual(manifest.piSetup.requiredPackages, expected);
+
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  const minimums = new Map(
+    [...readme.matchAll(/^\| `([^`]+)` \| `>=([^`]+)` \|/gm)].map((match) => [match[1], match[2]]),
+  );
+  for (const spec of expected) {
+    const match = spec.match(/^npm:(.+)@(\d+\.\d+\.\d+)$/);
+    assert.ok(match, `required companion must encode npm minimum: ${spec}`);
+    assert.equal(minimums.get(match[1]), match[2], `${match[1]} README minimum must match manifest`);
+  }
 });
 
 test("root Pi manifest loads only repository-owned package resources", async () => {

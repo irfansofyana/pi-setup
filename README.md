@@ -16,7 +16,7 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel while the main agent works |
 | Routing | Legacy search coexistence during migration |
-| Operations | Markdown preview, usage stats, `/context` diagnostics, and Caveman response mode |
+| Operations | Usage stats, `/context` diagnostics, and Caveman response mode |
 | Skills | Setup, `my-web-search`, MCP, and optional workflow skills |
 
 ### `irfan-sumi` preview
