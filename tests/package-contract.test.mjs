@@ -99,11 +99,8 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     "npm:pi-mcp-adapter@2.21.1",
     "npm:@tintinweb/pi-subagents@0.14.3",
     "npm:@gotgenes/pi-permission-system@24.0.0",
-    "npm:context-mode@1.0.169",
     "npm:@juicesharp/rpiv-ask-user-question@2.4.0",
-    "npm:pi-markdown-preview@0.11.3",
     "npm:@juicesharp/rpiv-todo@2.4.0",
-    "npm:pi-9router-ext@0.2.3",
     "npm:pi-stats-ext@0.2.0",
     "npm:@ff-labs/pi-fff@0.10.5",
   ];

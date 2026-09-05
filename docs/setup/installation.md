@@ -29,10 +29,10 @@ pi --version
 Install a reviewed release tag:
 
 ```bash
-pi install git:github.com/irfansofyana/pi-setup@v0.5.2
+pi install git:github.com/irfansofyana/pi-setup@v0.5.3
 ```
 
-Replace `v0.5.2` with a newer release only after reviewing it. One install provides:
+Replace `v0.5.3` with a newer release only after reviewing it. One install provides:
 
 - all declared repository extensions under `pi/extensions/`;
 - all themes under `pi/themes/`;
@@ -69,7 +69,7 @@ Inside Pi, authenticate and run the package commands:
 
 `/pi-setup-init` queues the bundled skill's setup/migration prompt. `/pi-setup-doctor` queues a strictly read-only audit. The commands do not mutate files or settings directly. `irfan-sumi` is the package's fresh-install setup metadata default; init should classify an absent theme selection as fresh, propose missing companion package installs and `irfan-sumi`, then wait for approval.
 
-For an approved companion proposal, the skill runs `pi install <exact-source>` using the value from `piSetup.requiredPackages`, one source at a time, and verifies it with `pi list`. Example shape: `pi install npm:pi-mcp-adapter@2.21.1`. It must not silently replace a different installed source.
+For an approved companion proposal, the skill runs `pi install <source>` using the value from `piSetup.requiredPackages`, one source at a time, and verifies it with `pi list`. Companion requirements are minimum versions documented by this repository; any installed version at or above minimum satisfies the audit. Use unversioned npm source for new installs so Pi resolves a current release. It must not silently replace a different installed source.
 
 Continue with the relevant proposals and topic docs:
 
