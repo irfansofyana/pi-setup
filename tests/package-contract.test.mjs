@@ -14,35 +14,38 @@ test("root manifest exposes the repository as one installable Pi package", async
 
   assert.equal(manifest.name, "@irfansofyana/pi-setup");
   assert.equal(manifest.private, true);
-  assert.equal(manifest.engines.pi, ">=0.84.1");
+  assert.equal(manifest.engines.pi, ">=1.0.0");
   assert.ok(manifest.keywords.includes("pi-package"));
-  assert.ok(manifest.pi.extensions.includes("./pi/extensions/pi-signature.ts"));
-  assert.ok(manifest.pi.extensions.includes("./pi/themes/irfan-sumi/index.ts"));
+  assert.ok(!manifest.pi.extensions.includes("./pi/extensions/pi-signature.ts"), "standalone Signature extension must not return");
+  assert.ok(manifest.pi.extensions.includes("./pi/themes/pi-irfan-devs/index.ts"));
   assert.ok(manifest.pi.extensions.includes("./pi/extensions/*/index.ts"));
   assert.ok(manifest.pi.skills.includes("./skills"));
   assert.deepEqual(manifest.pi.prompts, ["./pi/prompts/*.md"]);
-  assert.deepEqual(manifest.pi.themes, ["./pi/themes/*.json", "./pi/themes/irfan-sumi/theme.json"]);
+  assert.deepEqual(manifest.pi.themes, ["./pi/themes/*.json", "./pi/themes/pi-irfan-devs/theme.json"]);
 });
 
 test("package manifest ships every declared resource path", async () => {
   const manifest = await readJson("package.json");
 
   for (const requiredPath of [
-    "pi/extensions/pi-signature.ts",
-    "pi/themes/irfan-sumi/index.ts",
+    "pi/themes/pi-irfan-devs/index.ts",
+    "pi/themes/pi-irfan-devs/signature.ts",
+    "pi/themes/pi-irfan-devs/signature.test.ts",
     "skills/pi-setup/SKILL.md",
     "skills/my-web-search/SKILL.md",
     "skills/my-web-search/references/source-hierarchy.md",
     "skills/my-web-search/references/templates.md",
     "pi/extensions/web-research/package.json",
     "pi/extensions/web-research/evaluation-cases.json",
-    "pi/themes/irfan-sumi/theme.json",
+    "pi/themes/pi-irfan-devs/theme.json",
     "pi/prompts/research.md",
     "pi/prompts/push-changes.md",
   ]) {
     await access(path.join(root, requiredPath));
   }
   await assert.rejects(access(path.join(root, "pi/extensions/command-deck/index.ts")), { code: "ENOENT" });
+  await assert.rejects(access(path.join(root, "pi/extensions/pi-signature.ts")), { code: "ENOENT" });
+  await assert.rejects(access(path.join(root, "pi/extensions/pi-signature.test.ts")), { code: "ENOENT" });
 
   assert.ok(manifest.files.includes("pi/extensions"));
   assert.ok(manifest.files.includes("pi/themes"));
@@ -97,23 +100,39 @@ test("web-research evaluation corpus freezes every required benchmark dimension"
   assert.ok(corpus.comparisonModes.some((mode) => mode.includes("Ciung")));
 });
 
-test("irfan-sumi ships its theme and editor together without mutating settings on install", async () => {
+test("pi-irfan-devs ships its editor and has no install mutation", async () => {
   const manifest = await readJson("package.json");
 
-  assert.equal(manifest.piSetup.defaultTheme, "irfan-sumi");
-  assert.ok(manifest.pi.themes.includes("./pi/themes/irfan-sumi/theme.json"));
-  assert.ok(manifest.pi.extensions.includes("./pi/themes/irfan-sumi/index.ts"));
+  assert.equal(manifest.piSetup.defaultTheme, "pi-irfan-devs");
+  assert.ok(manifest.pi.themes.includes("./pi/themes/pi-irfan-devs/theme.json"));
+  assert.ok(manifest.pi.extensions.includes("./pi/themes/pi-irfan-devs/index.ts"));
   for (const hook of ["preinstall", "install", "postinstall", "prepare"]) {
     assert.equal(manifest.scripts[hook], undefined, `package must not define ${hook}`);
+  }
+});
+
+test("Irfan Devs palette keeps readable dim text", async () => {
+  const theme = await readJson("pi/themes/pi-irfan-devs/theme.json");
+  assert.equal(theme.name, "pi-irfan-devs");
+  assert.equal(theme.appearance, "dark");
+  assert.equal(theme.vars.phosphor, "#36ff7a");
+  const luminance = (hex) => {
+    const rgb = hex.slice(1).match(/../g).map((pair) => parseInt(pair, 16) / 255);
+    return rgb.map((c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+      .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+  };
+  const resolve = (color) => color.startsWith("#") ? color : theme.vars[color];
+  const dim = luminance(resolve(theme.colors.dim));
+  for (const background of [theme.vars.terminal, theme.colors.userMessageBg, theme.colors.toolPendingBg, theme.colors.toolSuccessBg, theme.colors.toolErrorBg]) {
+    const bg = luminance(resolve(background));
+    assert.ok((Math.max(dim, bg) + 0.05) / (Math.min(dim, bg) + 0.05) >= 4.5, `dim contrast below 4.5 on ${background}`);
   }
 });
 
 test("setup metadata keeps third-party Pi packages separately managed", async () => {
   const manifest = await readJson("package.json");
   const expected = [
-    "npm:pi-mcp-adapter@2.21.1",
     "npm:@tintinweb/pi-subagents@0.14.3",
-    "npm:@gotgenes/pi-permission-system@24.0.0",
     "npm:@juicesharp/rpiv-ask-user-question@2.4.0",
     "npm:@juicesharp/rpiv-todo@2.4.0",
     "npm:pi-stats-ext@0.2.0",
@@ -127,6 +146,8 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     assert.equal(manifest.peerDependencies?.[name], undefined, `${name} must remain a separate Pi source`);
   }
   assert.deepEqual(manifest.piSetup.requiredPackages, expected);
+  assert.equal(expected.length, 5);
+  assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("pi-permission-system")), "removed permission-system must not return as a requirement");
 
   const readme = await readFile(path.join(root, "README.md"), "utf8");
   const minimums = new Map(
@@ -139,11 +160,28 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
   }
 });
 
+test("native MCP guidance uses Pi-owned paths and native server fields", async () => {
+  const guide = await readFile(path.join(root, "docs/setup/mcp.md"), "utf8");
+  assert.match(guide, /~\/\.pi\/agent\/mcp\.json/);
+  assert.match(guide, /`\.pi\/mcp\.json`/);
+  assert.match(guide, /\/mcp login work-api/);
+  assert.doesNotMatch(guide, /\/mcp setup|\/mcp tools|\/mcp-auth/);
+  const allowed = new Set(["command", "args", "env", "cwd", "url", "headers", "oauth", "timeout", "enabled", "exposure", "toolExposure", "description", "type"]);
+  const examples = [...guide.matchAll(/```json\n([\s\S]*?)\n```/g)];
+  assert.ok(examples.length >= 3);
+  for (const [, block] of examples) {
+    const config = JSON.parse(block);
+    assert.ok(config.mcpServers);
+    for (const server of Object.values(config.mcpServers)) {
+      assert.ok(Object.keys(server).every((key) => allowed.has(key)), "MCP example includes a non-native server field");
+    }
+  }
+});
+
 test("root Pi manifest loads only repository-owned package resources", async () => {
   const manifest = await readJson("package.json");
   assert.deepEqual(manifest.pi.extensions, [
-    "./pi/extensions/pi-signature.ts",
-    "./pi/themes/irfan-sumi/index.ts",
+    "./pi/themes/pi-irfan-devs/index.ts",
     "./pi/extensions/*/index.ts",
   ]);
   assert.deepEqual(manifest.pi.skills, ["./skills"]);

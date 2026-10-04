@@ -1,6 +1,6 @@
 {
   "name": "@irfansofyana/pi-setup",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "private": true,
   "description": "Irfan's installable Pi coding-agent setup",
   "type": "module",
@@ -20,20 +20,20 @@
   ],
   "engines": {
     "node": ">=22.19.0",
-    "pi": ">=0.84.1"
+    "pi": ">=1.0.0"
   },
   "scripts": {
     "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:signature && npm run test:agents",
     "test:package": "node --test tests/package-contract.test.mjs",
     "test:prompts": "node --test tests/prompt-templates.test.mjs",
     "test:extensions": "node --test pi/extensions/*/*.test.ts",
-    "test:signature": "node --test pi/extensions/pi-signature.test.ts",
-    "test:agents": "node --test pi/agents/agent-templates.test.ts"
+    "test:signature": "node --test pi/themes/pi-irfan-devs/*.test.ts",
+    "test:agents": "node --test pi/agents/agent-templates.test.ts",
+    "test:themes": "node pi/themes/pi-irfan-devs/smoke-test.mjs"
   },
   "pi": {
     "extensions": [
-      "./pi/extensions/pi-signature.ts",
-      "./pi/themes/irfan-sumi/index.ts",
+      "./pi/themes/pi-irfan-devs/index.ts",
       "./pi/extensions/*/index.ts"
     ],
     "skills": [
@@ -44,15 +44,13 @@
     ],
     "themes": [
       "./pi/themes/*.json",
-      "./pi/themes/irfan-sumi/theme.json"
+      "./pi/themes/pi-irfan-devs/theme.json"
     ]
   },
   "piSetup": {
-    "defaultTheme": "irfan-sumi",
+    "defaultTheme": "pi-irfan-devs",
     "requiredPackages": [
-      "npm:pi-mcp-adapter@2.21.1",
       "npm:@tintinweb/pi-subagents@0.14.3",
-      "npm:@gotgenes/pi-permission-system@24.0.0",
       "npm:@juicesharp/rpiv-ask-user-question@2.4.0",
       "npm:@juicesharp/rpiv-todo@2.4.0",
       "npm:pi-stats-ext@0.2.0",

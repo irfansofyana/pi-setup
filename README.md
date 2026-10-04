@@ -7,11 +7,11 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | Area | Included |
 | --- | --- |
 | Core agent | Pi coding agent with provider login through `/login` |
-| Theme/UI | `irfan-sumi` with integrated editor and Pi Signature |
+| Theme/UI | `pi-irfan-devs` green palette, editor, and integrated Signature UI |
 | Web research | Native `web_search`/`web_fetch`, Tavily-first routing, Exa selection, and bundled `my-web-search` methodology |
-| MCP | MCP adapter plus optional/legacy search, OAuth, and bearer patterns |
+| MCP | Native Pi servers, OAuth sign-in and environment-based bearer headers |
 | Delegation | Ciung research, Laya code mapping, Sangkur worktree builds, and Prabu review |
-| Guardrails | Permission gates, todos, persisted goals, and prompt loops |
+| Workflow controls | Reviewed setup proposals, todos, persisted goals, prompt loops |
 | Context | Headroom native OpenAI/Anthropic proxy routing by default, with legacy local tool-result compression/retrieval as an opt-in |
 | Memory | Local Hindsight adapter and generated managed skills |
 | Side questions | Local `/btw` channel while the main agent works |
@@ -20,11 +20,9 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | Skills | Setup, `my-web-search`, MCP, and optional workflow skills |
 | Prompts | Seven packaged research, planning, debugging, review, and push workflows |
 
-### `irfan-sumi` preview
+### Theme UI
 
-![Pi using the minimalist irfan-sumi theme](docs/images/irfan-sumi-preview.png)
-
-`irfan-sumi` is the fresh-install setup default: warm, quiet, and compact. Package installation does not rewrite `~/.pi/agent/settings.json`; changing an existing device's selected theme requires explicit approval. See [Configuration](docs/setup/configuration.md#theme-and-signature-ui).
+`pi-irfan-devs` is the recommended fresh-install setup default: phosphor palette, minimal header, interactive 3D π welcome panel, integrated editor and footer. Package installation does not rewrite `~/.pi/agent/settings.json`; changing an existing device's selected theme requires explicit approval. See [Configuration](docs/setup/configuration.md#theme-and-signature-ui).
 
 ## Repository layout
 
@@ -33,7 +31,7 @@ package.json                  # Pi resources + exact companion package metadata
 pi/
   agents/                     # reviewed templates; deployed separately
   prompts/                    # seven package-loaded slash commands
-  themes/                     # irfan-sumi bundle
+  themes/                     # pi-irfan-devs bundle + compatibility palettes
   extensions/                 # repo-owned package extensions, including native web research
 skills/                       # bundled setup and my-web-search skills
 docs/setup/                   # setup and operations guides
@@ -43,7 +41,7 @@ Pi loads declared extensions, themes, skills, and prompt templates from the inst
 
 ## Fresh-machine bootstrap
 
-Prerequisites: Node.js `>=22.19.0`, Pi `>=0.84.1`, npm, Git, optional `pipx` or `uv`, and provider credentials supplied through `/login` or environment variables.
+Prerequisites: Node.js `>=22.19.0`, Pi `>=1.0.0`, npm, Git, optional `pipx` or `uv`, and provider credentials supplied through `/login` or environment variables.
 
 ```bash
 # 1) Install Pi
@@ -52,7 +50,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 npm install -g @earendil-works/pi-coding-agent
 
 # 2) Install one reviewed pi-setup release
-pi install git:github.com/irfansofyana/pi-setup@v0.5.4
+pi install git:github.com/irfansofyana/pi-setup@v0.6.0
 
 # 3) Start Pi
 pi
@@ -66,7 +64,7 @@ Use the reviewed release tag you intend to run. Inside Pi:
 /pi-setup-doctor
 ```
 
-`/pi-setup-init` queues the bundled skill's audit/proposal prompt; `/pi-setup-doctor` queues a strictly read-only health audit. Neither command mutates files or settings directly. On a fresh device, init proposes the required companion packages and `irfan-sumi`, then waits for numbered approval.
+`/pi-setup-init` queues the bundled skill's audit/proposal prompt; `/pi-setup-doctor` queues a strictly read-only health audit. Neither command mutates files or settings directly. On a fresh device, init proposes the required companion packages and the manifest default theme (`pi-irfan-devs`), then waits for numbered approval.
 
 ## Existing-device migration
 
@@ -99,11 +97,9 @@ The root `piSetup.requiredPackages` metadata is canonical. These packages are in
 | Package | Minimum version | Purpose |
 | --- | --- | --- |
 | `@ff-labs/pi-fff` | `>=0.10.5` | FFF-powered specialist search |
-| `@gotgenes/pi-permission-system` | `>=24.0.0` | Approval gates |
 | `@juicesharp/rpiv-ask-user-question` | `>=2.4.0` | Structured questions |
 | `@juicesharp/rpiv-todo` | `>=2.4.0` | Task tracking |
 | `@tintinweb/pi-subagents` | `>=0.14.3` | Delegated agent workflows |
-| `pi-mcp-adapter` | `>=2.21.1` | Standard MCP config and tools |
 | `pi-stats-ext` | `>=0.2.0` | Usage statistics |
 
 Use `pi list` to inspect package sources. These companion packages remain separate Pi-managed sources by design; their presence is expected, not a duplicate of the first-party package.
@@ -113,7 +109,7 @@ Use `pi list` to inspect package sources. These companion packages remain separa
 | Path | Scope | Purpose |
 | --- | --- | --- |
 | Installed first-party package | Pi-managed | Repository-owned extensions, themes, skills, and prompts |
-| Required companion packages | Pi-managed | MCP, permissions, subagents, and utility extensions |
+| Required companion packages | Pi-managed | MCP, subagents, and utility extensions |
 | `~/.pi/agent/settings.json` | Global user | Theme and Pi settings |
 | `~/.pi/agent/extensions/` | Global user | Legacy/manual loaders and extension-local policy |
 | `~/.pi/agent/agents/` | Global user | Trusted reusable subagent roles |
@@ -123,9 +119,9 @@ Use `pi list` to inspect package sources. These companion packages remain separa
 | `~/.pi/agent/managed-skills/` | Global user | Generated skills |
 | `~/.pi/agent/btw/config.json` | Global user | BTW config |
 | `~/.pi/agent/goal-loop/` | Global user | Goal config, state, archive, logs |
-| `~/.config/mcp/mcp.json` | Global shared | Preferred shared MCP config |
-| `~/.pi/agent/mcp.json` | Global Pi | Pi-specific MCP override |
-| `.mcp.json` | Project-local | Project MCP servers |
+| `~/.config/mcp/mcp.json` | Other clients/legacy | Shared config; not loaded by native Pi |
+| `~/.pi/agent/mcp.json` | Global Pi | Native Pi personal MCP servers |
+| `.pi/mcp.json` | Project-local | Native Pi project MCP servers |
 
 Package updates replace package-owned code, not user-owned configuration. Preserve unknown keys during approved config edits. Never commit credentials; use `/login`, environment variables, or provider profiles.
 
@@ -136,7 +132,7 @@ Package updates replace package-owned code, not user-owned configuration. Preser
 | [Installation](docs/setup/installation.md) | Package install, fresh setup, migration, rollback |
 | [Configuration](docs/setup/configuration.md) | Ownership, paths, auth, themes, signature UI |
 | [MCP](docs/setup/mcp.md) | Global/project config, search, OAuth, bearer auth |
-| [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
+| [Permissions](docs/setup/permissions.md) | Trust boundaries and explicit approval procedures |
 | [Subagent team](docs/setup/subagents.md) | Team roles, reviewed deployment, trust boundary |
 | [Agent packaging research](docs/setup/agent-packaging-research.md) | Why package upgrades do not auto-deploy global agents |
 | [Local extensions](docs/setup/local-extensions.md) | Component behavior and user-owned config/state |
@@ -157,7 +153,7 @@ Package updates replace package-owned code, not user-owned configuration. Preser
 ## Core operating rules
 
 - Install the first-party package from a reviewed Git tag.
-- Install the seven required companions as separate Pi package sources through the approval-gated setup skill.
+- Install the five required companions as separate Pi package sources through the approval-gated setup skill.
 - Do not manually copy package-owned extensions, themes, or bundled skills.
 - Install unrelated skills with `npx skills` or `npx skills@latest`.
 - Deploy reviewed global agent templates through the bundled skill because agents are not package resources.
@@ -181,12 +177,11 @@ Inside Pi:
 /reload
 /context
 /mcp
-/mcp tools
 /agents
 /settings
 ```
 
-Confirm the first-party package and companion package sources, expected commands/tools/skills/themes/prompts, current selected theme, and permission prompts. Existing devices should also confirm that no command or tool is registered twice. See [Operations](docs/setup/operations.md).
+Confirm the first-party package and companion package sources, expected commands/tools/skills/themes/prompts, current selected theme, and explicit setup approvals. Existing devices should also confirm that no command or tool is registered twice. See [Operations](docs/setup/operations.md).
 
 ## Updating setup
 

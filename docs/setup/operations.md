@@ -8,9 +8,8 @@
 | Configure providers | `/login` |
 | Switch model | `/model` |
 | MCP status | `/mcp` |
-| MCP setup | `/mcp setup` |
-| MCP tools | `/mcp tools` |
-| Permissions UI | `/permission-system` |
+| Native MCP setup (shell) | `pi mcp add <name> -- <command> [args...]` |
+| MCP tools/exposure | `/mcp`, then select a server |
 | Subagent team/status/settings | `/agents` |
 | Allowed subagent models | `/scoped-models` |
 | Headroom status | `/headroom status` |
@@ -74,7 +73,6 @@ Inside Pi:
 /reload
 /context
 /mcp
-/mcp tools
 /agents
 /scoped-models
 /settings
@@ -88,7 +86,7 @@ Smoke-test prompts:
 /btw what is current task context?
 Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
 Run Ciung (`researcher`) and Laya (`code-mapper`) in parallel for this task, then reconcile their findings before proposing changes.
-Use my-web-search to find current Pi MCP adapter docs.
+Use my-web-search to find current native Pi MCP docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
 ```
@@ -112,14 +110,14 @@ Use the notion-cli skill to list Notion API endpoints.
 | --- | --- |
 | Pi cannot find npm command | Check `npm bin -g`, `PATH`, restart shell |
 | MCP server does not start | Run `/mcp`, inspect error, verify env keys |
-| OAuth server unauthorized | Run `/mcp-auth <server-name>` |
+| OAuth server unauthorized | Run `/mcp login <server-name>` |
 | Direct MCP tools missing | Run `/mcp reconnect <server-name>`, then `/reload` |
-| Too many MCP tools in context | Remove `directTools: true` or list selected tools only |
+| Too many MCP tools in context | Use native `codemode` or `deferred` exposure; reserve `direct` for small tool sets |
 | Skills do not trigger | Restart Pi or `/reload`; confirm skill in startup header |
 | Headroom offline | Run `/headroom doctor`, then `/headroom start` |
 | Hindsight offline | Run `/hindsight diagnose`, check daemon port/config |
 | Duplicate command/tool such as `/caveman` | Use the bundled `pi-setup` skill to identify first-party package and manual loaders; back up and remove only the explicitly approved manual duplicate |
-| Transcript blinks or will not scroll | Update `pi-signature.ts`; offscreen header animation must pause to preserve scrollback |
+| Transcript blinks or will not scroll | Update theme-owned `signature.ts`; offscreen header animation must pause to preserve scrollback |
 | Theme not applied | Confirm the first-party package exposes the theme and inspect `/settings`; do not overwrite settings or copy a theme manually |
 
 ## Maintenance

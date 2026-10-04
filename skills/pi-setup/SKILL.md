@@ -23,7 +23,7 @@ Call the verified directory `PACKAGE_ROOT`. Resolve all docs and templates from 
 
 Before auditing:
 
-1. Read `PACKAGE_ROOT/package.json` for companion sources in `piSetup.requiredPackages`, package resources, and setup metadata. For each versioned npm source, treat its version suffix as the minimum floor; do not use README prose as audit input.
+1. Read `PACKAGE_ROOT/package.json` for companion sources in `piSetup.requiredPackages`, package resources, and `piSetup.defaultTheme`. Read the desired theme from this metadata rather than hardcoding a theme name. For each versioned npm source, treat its version suffix as the minimum floor; do not use README prose as audit input.
 2. Read `PACKAGE_ROOT/AGENTS.md` and `PACKAGE_ROOT/README.md`.
 3. Read only relevant topic docs:
    - package install and migration: `docs/setup/installation.md`
@@ -44,8 +44,9 @@ Distinguish every target:
 - **Package-owned:** repository code, themes, skills, and prompt templates loaded from the installed first-party package, including `web-research` and `my-web-search`.
 - **Companion package-owned:** the separate Pi package sources named by `piSetup.requiredPackages`; versioned npm source suffixes define minimum floors, and newer installed versions satisfy them.
 - **Global user-owned:** settings, manual loaders, agents, component config/state/logs, generated skills, and Pi-specific MCP under `~/.pi/agent/`.
-- **Global shared MCP:** `~/.config/mcp/mcp.json`.
-- **Project-local:** `.mcp.json` and trusted project-owned Pi files.
+- **Native Pi MCP:** `~/.pi/agent/mcp.json` for personal servers and `.pi/mcp.json` for trusted projects; no companion is required.
+- **Other-client/legacy shared MCP:** `~/.config/mcp/mcp.json` and `.mcp.json`; native Pi does not auto-load them. Preserve these files unless conversion/cleanup is separately approved.
+- **Project-local:** trusted project-owned Pi files.
 - **External services:** provider auth, Headroom CLI/proxy, Hindsight profiles/daemon, and other tools not installed by the Pi package.
 
 Package ownership never implies ownership of similarly named user config/state directories. Ask which machine, home, and project root apply only when genuinely ambiguous.
@@ -64,7 +65,7 @@ Audit relevant surfaces:
 - Potential custom-editor claimants among enabled, resolved package entrypoints. Inspect effective load order plus runtime feature/config evidence. Report static `setEditorComponent()` matches as potential claimants; call them effective owners only when proven, otherwise classify ownership as `blocked`. Never reorder packages during audit.
 - Manually copied package themes under `~/.pi/agent/themes/`.
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
-- Component config/state for Web Research artifacts, Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, permissions, and MCP.
+- Component config/state for Web Research artifacts, Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, and MCP. This repository does not manage a permission-system companion or generate a replacement policy.
 - Trusted global subagent templates and `subagents.json`; compare installed Ciung against the native `web-research`/`my-web-search` source template and remember package resources do not natively activate agents.
 - Separately installed `9router-web-researcher`, legacy 9router web routes, and Tavily/Exa MCP entries as distinct coexistence/removal targets; do not infer removal approval from native resource health.
 - Requested optional skills/tools and external service prerequisites.
@@ -88,7 +89,8 @@ Report paths, package sources, and redacted evidence. Never display credential v
 Treat `piSetup.defaultTheme` in `package.json` as desired setup metadata, not permission to mutate settings.
 
 - If no existing settings/theme choice exists, classify the device as fresh for theme purposes and propose the manifest default.
-- If any theme is already selected, preserve it. Offer a switch to `irfan-sumi` only as a separate optional proposal.
+- If any theme is already selected, preserve it. Offer a switch to the manifest default only as a separate optional proposal.
+- Repository implementation approval does not authorize local activation. Audit editor loading against the canonical entrypoint declared in the manifest; no compatibility theme or adapter is required.
 - Never replace the whole settings file to change the theme; preserve every unrelated key.
 
 ## 6. Present numbered proposals
@@ -149,6 +151,8 @@ Repeat relevant read-only checks and report:
 Do not claim success when verification is incomplete. Keep backups until the user accepts the migrated setup.
 
 ## Safety invariants
+
+- A removed permission-system companion is not a setup requirement; do not restore it or mutate residual user-owned policy files without new explicit approval.
 
 - Package install is not migration approval.
 - Existing files are preserved by default.

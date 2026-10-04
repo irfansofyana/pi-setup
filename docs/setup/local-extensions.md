@@ -19,35 +19,28 @@ Fallback is allowed only after an empty/all-failed response or an exhausted retr
 
 Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and rollback purposes, but the native tools do not call them. Do not remove legacy packages, skills, MCP configuration, credentials, caches, or logs until the migration gate is separately approved. Run `/reload` after package updates, then verify both tools and Ciung as described in [Subagent Team](subagents.md#verification).
 
-## Irfan Sumi theme editor
+## Irfan Devs theme bundle
 
-Purpose: provide `irfan-sumi` colors and compact chat input as one package-owned theme bundle without patching Pi or `@earendil-works/pi-tui`.
+Package-owned `pi/themes/pi-irfan-devs/` combines palette, editor and Signature UI without patching Pi or `@earendil-works/pi-tui`.
 
-Features:
+- `theme.json`: phosphor green, amber/gold/cyan accents and dark panels; no CSS effects or font control.
+- `index.ts`: one manifest-loaded UI entrypoint registering editor and Signature.
+- `signature.ts`: centered phosphor block `π` with a gentle 3.2-second brightness pulse and stationary credit; compact pulsing mark below 40 columns or 24 rows. Runtime also owns the working indicator, footer usage/statuses and terminal title. Legacy palettes retain their prior Signature styles. Set `PI_SIGNATURE_ANIMATION=0` before startup for a static header.
+- Editor: placeholder, state labels, spinner, scroll indicators and input hints. Rounded frame at 34+ columns and 18+ rows; otherwise compact rail. Stock autocomplete, IME markers, mouse click geometry and drag selection remain supported.
 
-- Borderless prompt rail with `Ask, build, or investigate…` placeholder
-- Ready, thinking, tools, error, and bash state labels
-- Spinner, scroll indicators, and responsive narrow-terminal fallback
-- `@` file, `/` command, and newline hints
+Requires Pi `>=1.0.0`; tested against `1.0.2`. Pi supplies host modules; no extra runtime dependency. Editor activates only for `pi-irfan-devs`. No compatibility palette or standalone Signature adapter is shipped; tests live beside runtime in the theme bundle. Run `/reload` after package updates or theme switches.
 
-Requires Pi `>=0.84.1`. Pi supplies `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`; no extra runtime package is required.
+Legacy `~/.pi/agent/extensions/command-deck` may be a duplicate-loader candidate; verify loading and use [approval-gated migration](installation.md#existing-device-migration) before removal. Pi has one editor slot: collisions warn, last-loaded wins, and this bundle never forcefully reclaims another editor. Palette and Signature remain available independently of editor ownership.
 
-`pi/themes/irfan-sumi/` directly contains `theme.json`, editor code, tests, and component documentation. Pi loads JSON and executable TypeScript through separate manifest fields, but both resources install and update together. The editor activates only when `irfan-sumi` is selected at session start. Run `/reload` after package installation or a theme switch.
+Old `pi-fff@0.1.12` may claim the editor through its **Autocomplete** feature; disable only that feature in `/fff-features` when necessary. Current `@ff-labs/pi-fff` uses `ctx.ui.addAutocompleteProvider(...)` and does not need its autocomplete disabled. Doctor must audit enabled entrypoints, load order and runtime feature/config evidence; static matches alone are potential claimants, not proven conflicts. Never reorder packages during audit.
 
-A legacy manual copy at `~/.pi/agent/extensions/command-deck` remains a duplicate-loader candidate, but may be backed up and removed only through an approved migration proposal.
-
-Pi has one custom-editor slot. If Sumi loads after an earlier claimant, normal load order makes the Sumi editor active and emits a warning. If a later extension replaces it, Sumi warns on the next agent start, stops its animation, and never reclaims the slot. Its palette and Pi Signature remain active because theme selection is separate from editor ownership.
-
-For `pi-fff@0.1.12`, disable only its **Autocomplete** feature with `/fff-features` to keep the Sumi editor active while retaining FFF tools, read, and grep behavior. Fuzzy FFF `@` completion then falls back to Pi's built-in completion. Full order-independent coexistence requires `pi-fff` to register its wrapper through `ctx.ui.addAutocompleteProvider(...)` instead of claiming the editor slot. `/pi-setup-doctor` audits enabled, resolved package entrypoints without reordering them. Static `setEditorComponent()` matches are potential claimants; doctor reports an effective conflict only when load order and runtime feature/config evidence prove it, otherwise ownership stays `blocked`.
-
-Smoke test from repository root:
+Run the real-Pi smoke test from repository root:
 
 ```bash
-PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent" \
-  node pi/themes/irfan-sumi/smoke-test.mjs
+PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent" npm run test:themes
 ```
 
-Set `PI_ROOT` explicitly when Pi is installed elsewhere.
+Set `PI_ROOT` explicitly for non-npm installations. Tests cover widths, Unicode/IME, mouse geometry, lifecycle/collisions, integrated Signature, footer cleanup and live header theme switches.
 
 ## Context diagnostics
 

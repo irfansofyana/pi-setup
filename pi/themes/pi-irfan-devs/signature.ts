@@ -3,10 +3,13 @@ import { userInfo } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme, WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { createWatermarkPresentation } from "./watermark-ui.ts";
+
+type WatermarkPresentation = ReturnType<typeof createWatermarkPresentation>;
 
 const AUTHOR_CREDIT = "crafted from Irfan's Pi setup";
-const MINIMAL_THEME = "irfan-sumi";
+const IRFAN_DEVS_THEME = "pi-irfan-devs";
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 
@@ -32,9 +35,6 @@ const PI_LINES = [
 const ORBIT_WIDTH = 30;
 const ORBIT_HEIGHT = 9;
 const ORBIT_INTERVAL_MS = 140;
-const SUMI_BREATH_PERIOD = 24;
-const SUMI_BREATH_DIM: Rgb = [164, 113, 64];
-const SUMI_BREATH_BRIGHT: Rgb = [224, 163, 106];
 type OrbitPoint = readonly [x: number, y: number];
 
 function buildOrbitPath(): OrbitPoint[] {
@@ -139,16 +139,6 @@ function fg([r, g, b]: Rgb, text: string) {
 	return `\x1b[38;2;${r};${g};${b}m${text}${RESET}`;
 }
 
-function sumiBreathColor(frame: number): Rgb {
-	const phase = ((frame % SUMI_BREATH_PERIOD) + SUMI_BREATH_PERIOD) % SUMI_BREATH_PERIOD;
-	const intensity = (1 - Math.cos((phase / SUMI_BREATH_PERIOD) * Math.PI * 2)) / 2;
-	return [
-		mix(SUMI_BREATH_DIM[0], SUMI_BREATH_BRIGHT[0], intensity),
-		mix(SUMI_BREATH_DIM[1], SUMI_BREATH_BRIGHT[1], intensity),
-		mix(SUMI_BREATH_DIM[2], SUMI_BREATH_BRIGHT[2], intensity),
-	];
-}
-
 function gradientText(text: string, phase: number) {
 	const chars = [...text];
 	const span = Math.max(chars.length - 1, 1);
@@ -176,20 +166,20 @@ function orbitLogoLines(frame: number, width: number): string[] {
 	return canvas.map((row, rowIndex) => center(gradientText(row.join(""), rowIndex * 0.025), width));
 }
 
-function signatureLines(owner: string, theme: Theme, width: number, frame = 0): string[] {
+function devSignatureLines(theme: Theme, width: number, cwd: string): string[] {
+	const path = formatCwdForFooter(cwd, process.env.HOME || process.env.USERPROFILE);
+	const mark = theme.bold(theme.fg("accent", "π"));
+	return [truncateToWidth(`${mark} ${theme.fg("muted", IRFAN_DEVS_THEME)} ${theme.fg("dim", `· ${path}`)}`, width, "")];
+}
+
+function signatureLines(owner: string, theme: Theme, width: number, frame = 0, cwd = process.cwd()): string[] {
 	const title = `${BOLD}${theme.fg("accent", owner)}${RESET}`;
 	const credit = theme.fg("muted", AUTHOR_CREDIT);
-
-	if (theme.name === MINIMAL_THEME) {
-		const mark = `${BOLD}${fg(sumiBreathColor(frame), "π")}${RESET}`;
-		return [truncateToWidth(` ${mark}  ${title} ${theme.fg("dim", "·")} ${credit}`, width, "")];
-	}
-
+	if (theme.name === IRFAN_DEVS_THEME) return devSignatureLines(theme, width, cwd);
 	if (width < 34) {
 		const mark = theme.bold(theme.fg("accent", "π"));
 		return [center(`${mark} ${title}`, width), center(credit, width)];
 	}
-
 	return [...orbitLogoLines(frame, width), center(title, width), center(credit, width)];
 }
 
@@ -200,34 +190,60 @@ function cachedRenderedLineCount(tui: TUI): number | undefined {
 	return Array.isArray(renderedLines) ? renderedLines.length : undefined;
 }
 
-function signatureHeader(owner: string) {
+function signatureHeader(owner: string, ctx: ExtensionContext, presentation: WatermarkPresentation) {
 	return (tui: TUI, theme: Theme) => {
 		let frame = 0;
 		let animationVisible = true;
-		const timer = setInterval(() => {
-			const renderedLineCount = cachedRenderedLineCount(tui);
-			// Updating an offscreen header makes Pi fully redraw and clear terminal scrollback.
-			// Fail closed if Pi TUI stops exposing cached render lines; disabling animation is
-			// safer than bringing back full offscreen redraws on an unsupported version.
-			const headerInLiveViewport = renderedLineCount !== undefined && renderedLineCount <= tui.terminal.rows;
-			if (!animationVisible || !headerInLiveViewport) return;
+		let timer: ReturnType<typeof setInterval> | undefined;
+		let timerInterval: number | undefined;
+		let disposed = false;
+		const stopAnimation = () => {
+			if (timer) clearInterval(timer);
+			timer = undefined;
+			timerInterval = undefined;
+		};
+		// Theme is a live proxy. Reconcile cadence on /settings changes.
+		function syncAnimation() {
+			if (disposed || theme.name === IRFAN_DEVS_THEME || process.env.PI_SIGNATURE_ANIMATION === "0") {
+				stopAnimation();
+				return;
+			}
+			const interval = ORBIT_INTERVAL_MS;
+			if (timer && timerInterval === interval) return;
+			stopAnimation();
+			timerInterval = interval;
+			timer = setInterval(() => {
+				const renderedLineCount = cachedRenderedLineCount(tui);
+				// Never poll the full render tree or animate an offscreen header.
+				// Missing private cache fails closed on unsupported Pi versions.
+				const headerInLiveViewport = renderedLineCount !== undefined && renderedLineCount <= tui.terminal.rows;
+				if (!animationVisible || !headerInLiveViewport) return;
 
-			frame += 1;
-			tui.requestRender();
-		}, ORBIT_INTERVAL_MS);
+				frame += 1;
+				tui.requestRender();
+			}, interval);
+		}
+		syncAnimation();
 
-		return {
+		const component = {
 			render(width: number): string[] {
-				const minimal = theme.name === MINIMAL_THEME;
-				animationVisible = minimal || width >= 34;
-				const lines = signatureLines(owner, theme, width, frame);
-				return minimal ? lines : ["", ...lines, ""];
+				syncAnimation();
+				const devs = theme.name === IRFAN_DEVS_THEME;
+				animationVisible = !devs && width >= 34;
+				const lines = signatureLines(owner, theme, width, frame, ctx.cwd);
+				const rendered = devs ? lines : ["", ...lines, ""];
+				presentation.header(component, rendered.length, tui, theme);
+				return rendered;
 			},
-			invalidate() {},
+			invalidate() { syncAnimation(); presentation.invalidate(); },
 			dispose() {
-				clearInterval(timer);
+				disposed = true;
+				stopAnimation();
+				presentation.dispose();
 			},
 		};
+		presentation.header(component, 0, tui, theme);
+		return component;
 	};
 }
 
@@ -256,7 +272,7 @@ function funnySpinner(theme: Theme): WorkingIndicatorOptions {
 }
 
 function workingIndicator(theme: Theme): WorkingIndicatorOptions {
-	if (theme.name !== MINIMAL_THEME) return funnySpinner(theme);
+	if (theme.name !== IRFAN_DEVS_THEME) return funnySpinner(theme);
 	return {
 		frames: ["·", "∙", "•", "∙"].map((mark) => `${theme.fg("accent", mark)} ${theme.fg("muted", "working")}`),
 		intervalMs: 220,
@@ -397,10 +413,10 @@ function footerStatusLine(footerData: ReadonlyFooterDataProvider, theme: Theme, 
 	return truncateToWidth(theme.fg("dim", "• ") + chips.join(theme.fg("dim", " · ")), width, theme.fg("dim", "…"));
 }
 
-function compactFooter(ctx: ExtensionContext) {
+function compactFooter(ctx: ExtensionContext, presentation: WatermarkPresentation) {
 	return (tui: { requestRender: () => void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 		const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
-		return {
+		const component = {
 			dispose: unsubscribe,
 			invalidate() {},
 			render(width: number): string[] {
@@ -414,26 +430,60 @@ function compactFooter(ctx: ExtensionContext) {
 				const lines = [pathLine, footerStatsLine(ctx, theme, footerData, width)];
 				const statuses = footerStatusLine(footerData, theme, width);
 				if (statuses) lines.push(statuses);
-				return lines;
+				const rendered = theme.name === IRFAN_DEVS_THEME ? lines.map((line) => {
+					const clipped = truncateToWidth(line, width, "");
+					return theme.bg("toolPendingBg", clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped))));
+				}) : lines;
+				presentation.footer(component, rendered.length);
+				return rendered;
 			},
 		};
+		// This owned footer is bounded to three rows before first measurement.
+		presentation.footer(component, 3);
+		return component;
 	};
 }
 
 export default function piSignature(pi: ExtensionAPI) {
-	pi.on("session_start", async (_event, ctx) => {
+	let presentation: WatermarkPresentation | undefined;
+	pi.on("session_start", async (event, ctx) => {
+		presentation?.dispose();
+		presentation = undefined;
 		if (ctx.mode !== "tui") return;
-
+		presentation = createWatermarkPresentation(ctx, event.reason);
 		const owner = detectOwner(ctx);
-		ctx.ui.setHeader(signatureHeader(owner));
+		ctx.ui.setHeader(signatureHeader(owner, ctx, presentation));
 		ctx.ui.setWorkingMessage("");
 		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
-		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx));
+		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx, presentation));
+		presentation.install();
 		ctx.ui.setTitle(`π · ${owner} · Irfan's Pi setup`);
 	});
-
 	pi.on("agent_start", async (_event, ctx) => {
+		presentation?.retire();
 		if (ctx.mode !== "tui") return;
 		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
 	});
+	pi.on("input", () => { presentation?.retire(); return undefined; });
+	pi.on("message_start", () => { presentation?.retire(); });
+	pi.on("user_bash", () => { presentation?.retire(); return undefined; });
+	pi.on("session_tree", () => { presentation?.retire(); });
+	pi.on("session_shutdown", () => { presentation?.dispose(); presentation = undefined; });
+	pi.registerCommand("pi-watermark", {
+		description: "Replay Pi welcome artwork, or inspect visibility with status",
+		handler: async (args, ctx) => {
+			if (args.trim() === "status") {
+				ctx.ui.notify(presentation?.status() ?? "Welcome panel inactive: terminal UI required.", "info");
+				return;
+			}
+			if (args.trim() && args.trim() !== "replay") {
+				ctx.ui.notify("Usage: /pi-watermark [replay|status]", "info");
+				return;
+			}
+			if (!presentation?.replay()) ctx.ui.notify(presentation?.status() ?? "Welcome panel inactive: terminal UI required.", "info");
+		},
+	});
+	return (editor: Component & { focused?: boolean; isShowingAutocomplete?(): boolean }, rows: number) => {
+		presentation?.editor(editor, rows);
+	};
 }

@@ -101,7 +101,7 @@ The coordinator evaluates every settled autonomous run, including worker `contin
 }
 ```
 
-The extension does not bypass Pi permissions. Pi permissions remain authoritative; keep `pi-permission-system` enabled so writes, shell commands, MCP calls, and external directories stay gated by your policy.
+Goal-loop does not install or bypass tool-execution controls. Any controls supplied by the client or environment remain authoritative; this package does not guarantee approval prompts for writes, shell commands, MCP calls or external-directory access.
 
 ## Limitations
 

@@ -12,7 +12,7 @@ Turn this repository into one installable Pi package. A tagged release is instal
 pi install git:github.com/irfansofyana/pi-setup@v0.1.0
 ```
 
-The root Pi manifest exposes only repository-owned extensions, themes, and skills. **Separately managed companion packages** are pinned in `piSetup.requiredPackages` and installed by the setup skill after approval. This keeps third-party ownership, lifecycle scripts, and updates outside the first-party package. Fresh installations use `irfan-sumi` as setup metadata default. Installation itself remains non-destructive: it has no postinstall mutation and does not rewrite Pi settings, configuration, state, or secrets.
+The root Pi manifest exposes only repository-owned extensions, themes, and skills. **Separately managed companion packages** are pinned in `piSetup.requiredPackages` and installed by the setup skill after approval. This keeps third-party ownership, lifecycle scripts, and updates outside the first-party package. Fresh installations use `pi-irfan-devs` as setup metadata default. Installation itself remains non-destructive: it has no postinstall mutation and does not rewrite Pi settings, configuration, state, or secrets.
 
 Existing devices migrate through the bundled `pi-setup` skill. The skill audits first, identifies duplicate legacy resources, presents a numbered proposal with backups and rollback, and changes only explicitly approved items. Global subagent templates remain a separate skill-managed deployment because Pi package resources do not natively include agents.
 
@@ -38,7 +38,7 @@ This creates avoidable drift and duplicate registration risk for repository-owne
 6. Detect legacy manual extension copies plus missing or version-drifted companion packages.
 7. Back up removal candidates privately and remove them only after explicit approval.
 8. Keep global subagent template deployment reviewed, backup-backed, and skill-managed.
-9. Make `irfan-sumi` the fresh-install setup default without silently changing an existing theme.
+9. Make `pi-irfan-devs` the fresh-install setup default without silently changing an existing theme.
 
 ## Non-goals
 
@@ -53,28 +53,25 @@ This creates avoidable drift and duplicate registration risk for repository-owne
 
 The root package is `@irfansofyana/pi-setup`. Its Pi manifest declares:
 
-- repository-owned `pi/extensions/pi-signature.ts`;
-- repository-owned `pi/themes/irfan-sumi/index.ts` integrated editor;
+- repository-owned `pi/themes/pi-irfan-devs/index.ts` integrated editor and Signature entrypoint;
 - repository-owned `pi/extensions/*/index.ts` resources;
 - repository-owned `skills/`;
-- repository-owned `pi/themes/*.json` plus `pi/themes/irfan-sumi/theme.json`;
-- `piSetup.defaultTheme: "irfan-sumi"` as setup metadata.
+- repository-owned `pi/themes/*.json` plus `pi/themes/pi-irfan-devs/theme.json`;
+- `piSetup.defaultTheme: "pi-irfan-devs"` as setup metadata.
 - `piSetup.requiredPackages` as the exact companion-package manifest.
 
-The package requires Node.js `>=22.19.0` and Pi `>=0.84.1`.
+The package requires Node.js `>=22.19.0` and Pi `>=1.0.0`.
 
 The exact separately managed companion packages are:
 
 | Package | Version |
 | --- | --- |
-| `@gotgenes/pi-permission-system` | `24.0.0` |
 | `@juicesharp/rpiv-ask-user-question` | `2.4.0` |
 | `@juicesharp/rpiv-todo` | `2.4.0` |
 | `@tintinweb/pi-subagents` | `0.14.3` |
 | `context-mode` | `1.0.169` |
 | `pi-9router-ext` | `0.2.3` |
 | `pi-markdown-preview` | `0.11.3` |
-| `pi-mcp-adapter` | `2.21.1` |
 | `pi-stats-ext` | `0.2.0` |
 
 The package has no `postinstall` settings migration and no third-party npm dependencies. Pi owns first-party package installation and loading; the setup skill manages companion Pi package sources after approval, while user-owned files remain separate.
@@ -86,7 +83,7 @@ The package has no `postinstall` settings migration and no third-party npm depen
 3. Start or reload Pi.
 4. Ask Pi to use the bundled `pi-setup` skill to audit and propose setup.
 5. Approve only desired proposal numbers, including missing companion package installs.
-6. The skill treats absent settings as a fresh setup and proposes `irfan-sumi`; it does not write the theme before approval.
+6. The skill treats absent settings as a fresh setup and proposes `pi-irfan-devs`; it does not write the theme before approval.
 7. Configure optional external services such as Headroom or Hindsight separately.
 8. Review and approve deployment of global subagent templates if wanted.
 
@@ -153,9 +150,9 @@ Reload or restart Pi, then verify package sources, commands, tools, skills, them
 
 ## Theme behavior
 
-`irfan-sumi` is the desired default for a fresh setup and is recorded in package metadata. This metadata is not permission to rewrite `~/.pi/agent/settings.json`.
+`pi-irfan-devs` is the desired default for a fresh setup and is recorded in package metadata. This metadata is not permission to rewrite `~/.pi/agent/settings.json`.
 
-- If no existing theme choice exists, the skill proposes `irfan-sumi` as the fresh default.
+- If no existing theme choice exists, the skill proposes `pi-irfan-devs` as the fresh default.
 - If a theme is already selected, it remains selected unless the user explicitly approves the theme proposal.
 - Rollback changes only the theme field or uses `/settings`; other settings are preserved.
 
@@ -203,7 +200,7 @@ The bundled skill must:
 - Existing-device guidance detects legacy manual loaders and missing/version-drifted companion packages.
 - Cleanup requires explicit proposal-number approval and private backups.
 - Existing themes remain unchanged without explicit approval.
-- `irfan-sumi` is documented as fresh-install default metadata.
+- `pi-irfan-devs` is documented as fresh-install default metadata.
 - Global agent templates remain skill-managed and are not claimed as package resources.
 - `/pi-setup-init` and `/pi-setup-doctor` exist, are tested, and delegate to the bundled skill without granting mutation approval.
 - README remains within its 180–250 line repository limit.
