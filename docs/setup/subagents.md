@@ -227,7 +227,7 @@ From the repository root:
 ```bash
 node --test pi/agents/agent-templates.test.ts
 node --test pi/extensions/*/*.test.ts
-npx -y tsx --test pi/extensions/pi-signature.test.ts
+npm run test:signature
 ```
 
 Inside Pi:

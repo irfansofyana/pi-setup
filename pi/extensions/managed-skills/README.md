@@ -183,7 +183,7 @@ The extension enforces:
 - `learn` redacts common secret patterns before retaining to Hindsight
 - `learn` enforces `maxMemoryChars` for memory and context
 
-Keep `pi-permission-system` enabled and leave `manage_skill` and `learn` gated as `ask` if you want approval before writes/retention.
+`manage_skill` writes files and `learn` retains memory. This package does not install an automatic permission gate; use explicit approvals and any separate controls supplied by your client or environment. Never retain secrets.
 
 ## Limitations
 

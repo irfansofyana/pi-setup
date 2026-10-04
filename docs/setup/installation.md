@@ -1,12 +1,12 @@
 # Installation
 
-Install this repository as one first-party Pi package. It declares repository-owned extensions, themes, and skills. The exact [required companion packages](../../README.md#required-npm-package-manifest) remain separate Pi package sources and are installed by the setup skill only after approval.
+Install this repository as one first-party Pi package. It declares repository-owned extensions, themes, skills, and prompt templates. The exact [required companion packages](../../README.md#required-npm-package-manifest) remain separate Pi package sources and are installed by the setup skill only after approval.
 
 ## Prerequisites
 
 - Node.js `>=22.19.0` and npm on `PATH`
 - Git
-- Pi coding agent `>=0.84.1`
+- Pi coding agent `>=1.0.0`
 - `pipx` or `uv` for optional Headroom/Hindsight helper tools
 - Provider credentials through `/login`, environment variables, or provider profiles
 
@@ -29,15 +29,17 @@ pi --version
 Install a reviewed release tag:
 
 ```bash
-pi install git:github.com/irfansofyana/pi-setup@v0.5.3
+pi install git:github.com/irfansofyana/pi-setup@v0.6.0
 ```
 
-Replace `v0.5.3` with a newer release only after reviewing it. One install provides:
+Replace `v0.6.0` with a newer release only after reviewing it. One install provides:
 
 - all declared repository extensions under `pi/extensions/`;
-- all themes under `pi/themes/`;
+- themes under `pi/themes/`, including recommended `pi-irfan-devs` and unrelated blue/Gruvbox alternatives;
+- integrated editor and Signature from `pi/themes/pi-irfan-devs/index.ts` only, with no compatibility or standalone Signature adapter;
+- seven prompt templates under `pi/prompts/`, loaded as slash commands;
 - the bundled `pi-setup` skill;
-- metadata listing the seven companion package sources and their minimum version floors for the setup skill.
+- metadata listing the three companion package sources and their minimum version floors for the setup skill;
 
 Do not clone the repository, install the setup skill separately, or copy package resources into `~/.pi/agent/` for a normal fresh setup. Companion packages are installed separately because they retain independent ownership, updates, and lifecycle scripts.
 
@@ -67,7 +69,7 @@ Inside Pi, authenticate and run the package commands:
 /pi-setup-doctor
 ```
 
-`/pi-setup-init` queues the bundled skill's setup/migration prompt. `/pi-setup-doctor` queues a strictly read-only audit. The commands do not mutate files or settings directly. `irfan-sumi` is the package's fresh-install setup metadata default; init should classify an absent theme selection as fresh, propose missing companion package installs and `irfan-sumi`, then wait for approval.
+`/pi-setup-init` queues the bundled skill's setup/migration prompt. `/pi-setup-doctor` queues a strictly read-only audit. The commands do not mutate files or settings directly. `pi-irfan-devs` is the recommended fresh-install default. Init reads `piSetup.defaultTheme` from the manifest, classifies an absent theme selection as fresh, proposes missing companion package installs and that theme, then waits for approval. Repository implementation approval does not authorize changes to local settings.
 
 For an approved companion proposal, the skill runs `pi install <source>` using the value from `piSetup.requiredPackages`, one source at a time, and verifies it with `pi list`. Companion requirements are minimum versions documented by this repository; any installed version at or above minimum satisfies the audit. Use unversioned npm source for new installs so Pi resolves a current release. It must not silently replace a different installed source.
 
@@ -75,7 +77,7 @@ Continue with the relevant proposals and topic docs:
 
 - [Configuration](configuration.md)
 - [MCP](mcp.md)
-- [Permissions](permissions.md)
+- [Permissions and trust](permissions.md): explicit approvals and extension authority; no permission-system companion is installed.
 - [Subagent team](subagents.md)
 - [Local extensions](local-extensions.md)
 - [Skills and tools](skills-and-tools.md)
@@ -118,9 +120,11 @@ The audit must cover:
 - selected theme and unrelated keys in `~/.pi/agent/settings.json`;
 - component config/state paths listed in [Configuration](configuration.md);
 - global and project MCP configuration;
+- any installed `npm:@juicesharp/rpiv-todo` source as a separate duplicate-tool candidate now that Todos is package-owned; no automatic data migration or settings activation;
+- duplicate `ask_user_question` registrations from separately loaded extensions; source removal and configuration cleanup need separate explicit approval; do not edit local settings during repository implementation;
 - separately installed `9router-web-researcher`, Tavily/Exa MCP definitions, and legacy 9router web routes as distinct migration targets;
 - trusted global agents and subagent defaults;
-- the installed Ciung template and permission entries for old versus native web tools;
+- installed Ciung template tool restrictions for old versus native web tools;
 - credential references by name only, with values redacted.
 
 A matching name is not enough to delete a path. The skill must distinguish a duplicate code loader from user-owned config/state. For example, `~/.pi/agent/hindsight/config.json` remains user-owned even after Hindsight code loads from the package.
@@ -137,7 +141,7 @@ Each proposed mutation must include:
 6. exact rollback steps;
 7. required `/reload`, shell restart, daemon restart, or Pi restart.
 
-Review required duplicate cleanup separately from optional configuration changes. On an existing device, changing the selected theme to `irfan-sumi` is always an optional, separately numbered proposal.
+Review required duplicate cleanup separately from optional configuration changes. On an existing device, changing the selected theme to `pi-irfan-devs` is always an optional, separately numbered proposal.
 
 ### 4. Approve narrowly
 
@@ -151,7 +155,9 @@ The cleanup order is:
 4. reload/restart Pi;
 5. verify the component before continuing.
 
-Companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates.
+The three current companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates. The retired `npm:@juicesharp/rpiv-todo` source is different: verify bundled Todos first, then remove the old source only after separate explicit approval to avoid duplicate tools. Preserve its data and settings; no rpiv-todo migration or local settings activation is part of package installation. See [Todos](local-extensions.md#todos).
+
+Structured questions are package-owned. Verify `ask_user_question` is registered once before proposing duplicate-source removal. Preserve user-owned configuration unless its cleanup is separately approved; package installation changes no local settings. See [Structured questions](local-extensions.md#structured-questions) for interactive checks and session-result privacy.
 
 Do not delete configuration/state directories when removing loader duplicates. Do not replace the whole settings file to change one key. Never copy, print, or migrate credentials.
 
@@ -168,12 +174,11 @@ Inside Pi:
 ```text
 /reload
 /mcp
-/mcp tools
 /agents
 /settings
 ```
 
-Verify expected commands, tools, skills, and themes once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context Ciung run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
+Verify expected commands, tools, skills, themes, and prompt templates once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context Ciung run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
 
 ## Global subagent templates
 

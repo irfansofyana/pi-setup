@@ -1,82 +1,27 @@
-# Permissions
+# Permissions and trust
 
-The permission extension is a separately managed [required companion package](../../README.md#required-npm-package-manifest). The setup skill proposes its exact source on a fresh setup and waits for approval.
+This repository does not install or manage a permission-system companion. The required companion list is owned by `piSetup.requiredPackages` in root `package.json`; do not reinstall a removed permission extension during setup or migration.
 
-## Global policy path
+## What still requires approval
 
-```text
-~/.pi/agent/extensions/pi-permission-system/config.json
-```
+The bundled setup skill remains proposal-first:
 
-Create policy directory and edit file:
+- Audit before changing settings, package sources, loaders, agents or configuration.
+- Present numbered proposals; apply only explicitly approved actions.
+- Re-read targets, stop on drift, and back up privately before mutation.
+- Preserve unrelated settings, state, credentials and unknown keys.
+- Keep existing theme selection unless a separate switch is approved.
 
-```bash
-mkdir -p ~/.pi/agent/extensions/pi-permission-system
-$EDITOR ~/.pi/agent/extensions/pi-permission-system/config.json
-```
+These are procedural instructions, not automatic tool-execution gates or a sandbox. This package does not promise approval prompts for every shell command, file write, MCP call or memory retention operation. Any controls supplied by the surrounding client, OS or user configuration remain separate.
 
-Back up existing policy first. Preserve unknown keys unless migration requires removal.
+## Extension and project trust
 
-## Recommended policy
+Pi extensions execute inside the Pi process with its operating-system permissions. Review sources before installing packages or trusting project resources; tool allowlists and agent instructions are not an OS security boundary.
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/gotgenes/pi-permission-system/main/schemas/permissions.schema.json",
-  "permissionReviewLog": true,
-  "permission": {
-    "*": "ask",
-    "read": "allow",
-    "grep": "allow",
-    "find": "allow",
-    "ls": "allow",
-    "web_search": "allow",
-    "web_fetch": "allow",
-    "tavily_*": "allow",
-    "exa_*": "allow",
-    "brave_search_*": "allow",
-    "ask_user_question": "allow",
-    "todo": "allow",
-    "write": "ask",
-    "edit": "ask",
-    "manage_skill": "ask",
-    "learn": "ask",
-    "subagent": "ask",
-    "bash": {
-      "*": "ask",
-      "git*": "allow"
-    },
-    "mcp": {
-      "*": "ask",
-      "tavily": "allow",
-      "tavily:*": "allow",
-      "tavily_*": "allow",
-      "exa": "allow",
-      "exa:*": "allow",
-      "exa_*": "allow",
-      "brave-search": "allow",
-      "brave-search:*": "allow",
-      "brave-search_*": "allow",
-      "brave_search_*": "allow"
-    },
-    "skill": {
-      "*": "allow"
-    },
-    "external_directory": "ask"
-  }
-}
-```
+Use reviewed global agent templates. Do not invoke agent definitions from an untrusted repository. Keep credentials in `/login`, environment variables or provider profiles, not repository files.
 
-Policy intent:
+## Existing configurations
 
-- Read-only local tools allowed.
-- Native read-only `web_search` and provider-backed `web_fetch` allowed without approval.
-- Legacy Tavily/Exa/Brave direct tools remain allowed only for side-by-side migration; remove those entries separately after the old integrations are explicitly retired.
-- Structured questions, todos, and skill loading allowed.
-- Mutating/retention tools (`write`, `edit`, `manage_skill`, `learn`) gated.
-- Shell defaults gated; Git commands allowed.
-- MCP defaults gated except the temporarily approved legacy search providers.
-- External-directory access gated.
+Removing an extension source does not authorize deleting its configuration, logs or state. Leave residual user-owned policy files untouched unless cleanup is separately approved. Setup must not restore the removed extension or generate a replacement policy.
 
-Remove or migrate legacy `~/.pi/agent/pi-permissions.jsonc` if warnings appear.
-
-Run `/reload`, then inspect `/permission-system` and test both read-only and mutating prompts.
+Run `/reload` or restart Pi after approved package/configuration changes. See [Installation](installation.md#existing-device-migration) for audit, backups and rollback.
