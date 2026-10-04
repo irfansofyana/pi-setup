@@ -35,6 +35,14 @@ test("package manifest ships every declared resource path", async () => {
     "skills/my-web-search/SKILL.md",
     "skills/my-web-search/references/source-hierarchy.md",
     "skills/my-web-search/references/templates.md",
+    "pi/extensions/ask-user-question/index.ts",
+    "pi/extensions/ask-user-question/model.ts",
+    "pi/extensions/ask-user-question/ui.ts",
+    "pi/extensions/ask-user-question/README.md",
+    "docs/setup/ask-user-question-research.md",
+    "pi/extensions/todos/index.ts",
+    "pi/extensions/todos/LICENSE",
+    "pi/extensions/todos/README.md",
     "pi/extensions/web-research/package.json",
     "pi/extensions/web-research/evaluation-cases.json",
     "pi/themes/pi-irfan-devs/theme.json",
@@ -133,8 +141,6 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
   const manifest = await readJson("package.json");
   const expected = [
     "npm:@tintinweb/pi-subagents@0.14.3",
-    "npm:@juicesharp/rpiv-ask-user-question@2.4.0",
-    "npm:@juicesharp/rpiv-todo@2.4.0",
     "npm:pi-stats-ext@0.2.0",
     "npm:@ff-labs/pi-fff@0.10.5",
   ];
@@ -146,10 +152,14 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     assert.equal(manifest.peerDependencies?.[name], undefined, `${name} must remain a separate Pi source`);
   }
   assert.deepEqual(manifest.piSetup.requiredPackages, expected);
-  assert.equal(expected.length, 5);
+  assert.equal(expected.length, 3);
+  assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("rpiv-todo")), "todos must be package-owned");
+  assert.equal(manifest.peerDependencies.typebox, "*", "use Pi's host schema library");
   assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("pi-permission-system")), "removed permission-system must not return as a requirement");
 
   const readme = await readFile(path.join(root, "README.md"), "utf8");
+  const readmeLines = readme.trimEnd().split("\n").length;
+  assert.ok(readmeLines >= 90 && readmeLines <= 130, "keep README short; details belong in docs/setup");
   const minimums = new Map(
     [...readme.matchAll(/^\| `([^`]+)` \| `>=([^`]+)` \|/gm)].map((match) => [match[1], match[2]]),
   );

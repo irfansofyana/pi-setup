@@ -62,11 +62,10 @@ The root package is `@irfansofyana/pi-setup`. Its Pi manifest declares:
 
 The package requires Node.js `>=22.19.0` and Pi `>=1.0.0`.
 
-The exact separately managed companion packages are:
+The separately managed companion packages in this historical proposal are listed below. Structured questions are now package-owned; consult root metadata for current companion sources.
 
 | Package | Version |
 | --- | --- |
-| `@juicesharp/rpiv-ask-user-question` | `2.4.0` |
 | `@juicesharp/rpiv-todo` | `2.4.0` |
 | `@tintinweb/pi-subagents` | `0.14.3` |
 | `context-mode` | `1.0.169` |

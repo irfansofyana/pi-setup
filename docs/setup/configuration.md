@@ -13,6 +13,7 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
 | `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
 | `~/.pi/agent/prompts/` | Global Pi | User-owned prompt templates; separate from package prompts |
+| `<project>/.pi/todos/` | Project-local | Default Todos files and store-local `settings.json`; `PI_TODO_PATH` can override |
 | `<project>/.pi/prompts/` | Project-local | Project prompt templates; review before granting trust |
 | `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
 | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/` | Global Pi | Owner-only bounded native-web artifacts; package code owns format, user owns retained state |
@@ -34,6 +35,12 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `~/.pi/agent/mcp.json` | Pi global | Native Pi personal MCP servers |
 
 Package-owned code may read user-owned paths, but updates must not replace them. Global configuration applies across projects; project subagent settings override global keys. Treat project agent definitions as executable-capability configuration and load only trusted repositories; see [Subagent team](subagents.md). Native project MCP uses `.pi/mcp.json` after project trust. See [MCP](mcp.md) for examples.
+
+## Todos storage
+
+Package-owned `pi/extensions/todos/index.ts` uses `.pi/todos` under Pi's current working directory by default. `PI_TODO_PATH` overrides it: relative values resolve against that cwd; absolute values are used directly. Restart Pi after changing the environment.
+
+The resolved store owns its `settings.json` and todo files, not the installed package. Local safety defaults are `gc: false` and `gcDays: 7`; startup garbage collection is optional and opt-in. Enabling it can delete closed todos based on `created_at`, not closure time. Do not enable it or migrate old rpiv-todo data as part of installation. See [Todos behavior and storage](local-extensions.md#todos) before approving cleanup settings.
 
 ## Secrets and authentication
 

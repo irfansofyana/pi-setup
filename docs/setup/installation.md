@@ -6,7 +6,7 @@ Install this repository as one first-party Pi package. It declares repository-ow
 
 - Node.js `>=22.19.0` and npm on `PATH`
 - Git
-- Pi coding agent `>=0.84.1`
+- Pi coding agent `>=1.0.0`
 - `pipx` or `uv` for optional Headroom/Hindsight helper tools
 - Provider credentials through `/login`, environment variables, or provider profiles
 
@@ -39,7 +39,7 @@ Replace `v0.6.0` with a newer release only after reviewing it. One install provi
 - integrated editor and Signature from `pi/themes/pi-irfan-devs/index.ts` only, with no compatibility or standalone Signature adapter;
 - seven prompt templates under `pi/prompts/`, loaded as slash commands;
 - the bundled `pi-setup` skill;
-- metadata listing the five companion package sources and their minimum version floors for the setup skill;
+- metadata listing the three companion package sources and their minimum version floors for the setup skill;
 
 Do not clone the repository, install the setup skill separately, or copy package resources into `~/.pi/agent/` for a normal fresh setup. Companion packages are installed separately because they retain independent ownership, updates, and lifecycle scripts.
 
@@ -120,6 +120,8 @@ The audit must cover:
 - selected theme and unrelated keys in `~/.pi/agent/settings.json`;
 - component config/state paths listed in [Configuration](configuration.md);
 - global and project MCP configuration;
+- any installed `npm:@juicesharp/rpiv-todo` source as a separate duplicate-tool candidate now that Todos is package-owned; no automatic data migration or settings activation;
+- duplicate `ask_user_question` registrations from separately loaded extensions; source removal and configuration cleanup need separate explicit approval; do not edit local settings during repository implementation;
 - separately installed `9router-web-researcher`, Tavily/Exa MCP definitions, and legacy 9router web routes as distinct migration targets;
 - trusted global agents and subagent defaults;
 - installed Ciung template tool restrictions for old versus native web tools;
@@ -153,7 +155,9 @@ The cleanup order is:
 4. reload/restart Pi;
 5. verify the component before continuing.
 
-Companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates.
+The three current companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates. The retired `npm:@juicesharp/rpiv-todo` source is different: verify bundled Todos first, then remove the old source only after separate explicit approval to avoid duplicate tools. Preserve its data and settings; no rpiv-todo migration or local settings activation is part of package installation. See [Todos](local-extensions.md#todos).
+
+Structured questions are package-owned. Verify `ask_user_question` is registered once before proposing duplicate-source removal. Preserve user-owned configuration unless its cleanup is separately approved; package installation changes no local settings. See [Structured questions](local-extensions.md#structured-questions) for interactive checks and session-result privacy.
 
 Do not delete configuration/state directories when removing loader duplicates. Do not replace the whole settings file to change one key. Never copy, print, or migrate credentials.
 

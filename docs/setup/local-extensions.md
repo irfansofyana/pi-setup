@@ -2,6 +2,37 @@
 
 The first-party Pi package loads repository-owned extensions directly. Required third-party companions remain separate Pi-managed sources declared in `piSetup.requiredPackages`. Do not manually copy first-party code into `~/.pi/agent/extensions/`. This guide owns component behavior and user-owned configuration/state; see [Installation](installation.md#existing-device-migration) for approval-gated legacy cleanup.
 
+## Todos
+
+Package-owned `pi/extensions/todos/index.ts` replaces the former `npm:@juicesharp/rpiv-todo` companion. Inspired by Armin Ronacher's (`mitsuhiko`) Todos extension in [agent-stuff](https://github.com/mitsuhiko/agent-stuff), licensed Apache-2.0. The [component README](../../pi/extensions/todos/README.md) owns the exact upstream commit reference.
+
+- `todo` actions: `list`, `list-all`, `get`, `create`, `update`, `append`, `delete`, `claim`, `release`.
+- `/todos` opens an interactive, searchable manager for project tasks.
+- Default store: `.pi/todos` under Pi's current working directory. `PI_TODO_PATH` can select another store; relative values resolve against cwd, absolute values are used directly.
+- Todo IDs use `TODO-` followed by eight hexadecimal characters (`TODO-8hex`). Files contain JSON frontmatter plus a Markdown body.
+- Transient `.lock` files serialize individual edits; persistent session claims record task ownership across edits. A completed write does not release a session claim. Use `claim`/`release` for ownership rather than treating an edit lock as a claim.
+- Claims coordinate work, not enforce permissions on every edit. Stale locks fail closed; verify no session is editing before manual cleanup. New task files use `0600`; updates preserve file permissions.
+
+Store-local `settings.json` controls optional startup garbage collection. Local adaptation defaults to **`gc: false`** for safety, with **`gcDays: 7`**. Only JSON boolean `true` enables startup GC of closed todos; malformed settings fail closed and locked files are skipped. Age uses **`created_at`**, not closure time: closing an old task can make it eligible immediately at the next GC run. Preserve files and review retention before enabling deletion.
+
+Package installation does not activate cleanup settings or migrate rpiv-todo data. If the old external source remains installed, verify bundled Todos and propose its removal separately; remove only with explicit approval to avoid duplicate tools. Preserve old data/settings unless a separate migration or cleanup is approved. Run `/reload` after approved package/source/config changes; restart Pi after changing `PI_TODO_PATH`.
+
+## Structured questions
+
+Package-owned `pi/extensions/ask-user-question/index.ts` provides an original Claude Code-style `ask_user_question`; no question-tool companion is required. It is not an exact clone or a claim of copied upstream source/license. See the [component README](../../pi/extensions/ask-user-question/README.md) for implementation behavior and [design research](ask-user-question-research.md) for evidence and trade-offs.
+
+- API: 1–4 questions, each with a `question`, `header` of at most 16 characters, and 2–4 options with `label` and `description`.
+- Optional `multiSelect` permits multiple choices. Optional option `preview` is supported only for single-select questions.
+- Every question appends a custom-answer row; callers must not add their own reserved row.
+- Arrow/number keys choose options; Space toggles multi-select choices. Enter advances to the next question, then final review and submission. Tab/ShiftTab changes question.
+- Esc cancels the entire questionnaire without returning partial answers. Final review precedes submission.
+- Wide terminals show previews side by side; narrow terminals stack them.
+- RPC uses native select/input dialogs and a final review. Print/JSON modes fail clearly because an interactive UI is required; the tool never fabricates an answer.
+
+`/ask-demo` opens a disposable, user-invoked smoke UI. It does not auto-submit a model turn or write state files. The extension adds no runtime package, configuration, external state, or telemetry.
+
+Answers live in normal session tool results. Do not enter secrets; this tool is not a permission/security gate. If the retired source remains installed, verify the included tool and propose old-source removal separately to avoid duplicate `ask_user_question` registrations. Old config cleanup also requires separate approval; preserve local settings. Run `/reload` or restart Pi after approved package/source changes.
+
 ## Native web research
 
 The package-owned [`web-research`](../../pi/extensions/web-research/README.md) extension exposes two read-only primitives:
