@@ -23,6 +23,40 @@
 | Update extensions | `pi update --extensions` |
 | List packages | `pi list` |
 
+## Packaged prompt templates
+
+The root manifest loads `pi/prompts/*.md` directly from the installed package. Templates expand into prompts, not executable lifecycle hooks. Package updates refresh them after `/reload`; do not copy them into `~/.pi/agent/prompts/`. Pinned release tags move only when you select a newer reviewed release.
+
+| Command | Purpose | Default boundary |
+| --- | --- | --- |
+| `/research <topic>` | 2–3 parallel Ciung lanes, focused queries, fetched evidence | Findings in chat; no edits |
+| `/research-fit <capability>` | Ciung public constraints + Laya local feasibility | Proposal only |
+| `/research-gap <feature and references>` | User-visible parity and gap matrix | Analysis only |
+| `/plan-change <change>` | Acceptance criteria, vertical slices, verification, risks | Wait for implementation approval |
+| `/debug <symptom>` | Reproduction, discriminating checks, root-cause evidence | Diagnosis only unless a fix is requested |
+| `/review-change [base or focus]` | Independent Prabu standards/spec lanes | Read-only; parent owns test execution |
+| `/push-changes [scope and destination]` | Scoped commit and ordinary branch push | No PR/MR unless explicitly requested |
+
+Research, planning, mapping, and review lanes require the reviewed global roles from [Subagent team](subagents.md); package prompts do not deploy agents. Follow that guide's isolation requirements before invoking specialists in an untrusted repository. Research uses bundled `my-web-search`; `diagnosing-bugs` and `pr` are optional installed skills, not new package requirements. Templates do not change permission policy; their instructions are not a sandbox or enforced security boundary. Missing CLIs or skills are not installed implicitly.
+
+Examples:
+
+```text
+/research Ways to evaluate agent setup bloat repeatedly
+/research-fit Add provider-backed capability discovery
+/research-gap Our goal loop versus public reference implementations
+/plan-change Add a bounded cancellation path
+/debug Extension fails when optional provider config is missing
+/review-change main, focus on cancellation and lifecycle behavior
+/push-changes Current task changes only; push to the agreed feature branch
+/push-changes Current task changes; create a GitHub PR against main
+/push-changes Current task changes; create a GitLab MR against develop
+```
+
+`/push-changes` keeps Git mutations in the parent session. It checks file scope, outgoing history, destination, secrets, and verification before committing/pushing; it preserves unrelated staged changes and stops on ambiguity or failures. Git alone handles commit/push. An explicitly requested GitHub PR uses `gh`; a GitLab MR uses `glab`. The selected remote determines the provider, including reviewed self-hosted configuration. Existing matching requests are reused. No force-push, history rewrite, publishing, releases, tags, deployment, or automatic merging is authorized.
+
+After updating the package, run `/reload` and confirm all seven commands appear in completion. A harmless smoke test is `/plan-change Explain the change surface for adding another prompt, without implementation`. Adding the templates does not itself commit or push this repository.
+
 ## Verify setup
 
 From shell:
@@ -96,9 +130,9 @@ pi update --extensions
 pi list
 ```
 
-After changing extensions, themes, MCP config, permission policy, or skills: run `/reload` or restart Pi. After changing environment variables, restart Pi so process inherits new values; `/reload` alone does not refresh shell environment.
+After changing extensions, themes, prompt templates, MCP config, permission policy, or skills: run `/reload` or restart Pi. After changing environment variables, restart Pi so process inherits new values; `/reload` alone does not refresh shell environment.
 
-First-party package updates change repository-owned extensions, themes, and skills. Companion packages update independently. Neither path should rewrite user-owned settings/config/state; re-run the bundled `pi-setup` audit and approve any migration separately.
+First-party package updates change repository-owned extensions, themes, skills, and prompt templates. Companion packages update independently. Neither path should rewrite user-owned settings/config/state; re-run the bundled `pi-setup` audit and approve any migration separately.
 
 ## Migration rollback
 

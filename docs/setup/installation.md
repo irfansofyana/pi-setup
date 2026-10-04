@@ -1,6 +1,6 @@
 # Installation
 
-Install this repository as one first-party Pi package. It declares repository-owned extensions, themes, and skills. The exact [required companion packages](../../README.md#required-npm-package-manifest) remain separate Pi package sources and are installed by the setup skill only after approval.
+Install this repository as one first-party Pi package. It declares repository-owned extensions, themes, skills, and prompt templates. The exact [required companion packages](../../README.md#required-npm-package-manifest) remain separate Pi package sources and are installed by the setup skill only after approval.
 
 ## Prerequisites
 
@@ -29,13 +29,14 @@ pi --version
 Install a reviewed release tag:
 
 ```bash
-pi install git:github.com/irfansofyana/pi-setup@v0.5.3
+pi install git:github.com/irfansofyana/pi-setup@v0.5.4
 ```
 
-Replace `v0.5.3` with a newer release only after reviewing it. One install provides:
+Replace `v0.5.4` with a newer release only after reviewing it. One install provides:
 
 - all declared repository extensions under `pi/extensions/`;
 - all themes under `pi/themes/`;
+- seven prompt templates under `pi/prompts/`, loaded as slash commands;
 - the bundled `pi-setup` skill;
 - metadata listing the seven companion package sources and their minimum version floors for the setup skill.
 
@@ -173,7 +174,7 @@ Inside Pi:
 /settings
 ```
 
-Verify expected commands, tools, skills, and themes once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context Ciung run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
+Verify expected commands, tools, skills, themes, and prompt templates once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context Ciung run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
 
 ## Global subagent templates
 

@@ -20,6 +20,7 @@ test("root manifest exposes the repository as one installable Pi package", async
   assert.ok(manifest.pi.extensions.includes("./pi/themes/irfan-sumi/index.ts"));
   assert.ok(manifest.pi.extensions.includes("./pi/extensions/*/index.ts"));
   assert.ok(manifest.pi.skills.includes("./skills"));
+  assert.deepEqual(manifest.pi.prompts, ["./pi/prompts/*.md"]);
   assert.deepEqual(manifest.pi.themes, ["./pi/themes/*.json", "./pi/themes/irfan-sumi/theme.json"]);
 });
 
@@ -36,6 +37,8 @@ test("package manifest ships every declared resource path", async () => {
     "pi/extensions/web-research/package.json",
     "pi/extensions/web-research/evaluation-cases.json",
     "pi/themes/irfan-sumi/theme.json",
+    "pi/prompts/research.md",
+    "pi/prompts/push-changes.md",
   ]) {
     await access(path.join(root, requiredPath));
   }
@@ -44,7 +47,19 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(manifest.files.includes("pi/extensions"));
   assert.ok(manifest.files.includes("pi/themes"));
   assert.ok(manifest.files.includes("pi/agents"));
+  assert.ok(manifest.files.includes("pi/prompts"));
   assert.ok(manifest.files.includes("skills"));
+});
+
+test("package and lockfile versions agree with reviewed install examples", async () => {
+  const manifest = await readJson("package.json");
+  const lock = await readJson("package-lock.json");
+  assert.equal(lock.version, manifest.version);
+  assert.equal(lock.packages[""].version, manifest.version);
+  for (const file of ["README.md", "docs/setup/installation.md"]) {
+    const docs = await readFile(path.join(root, file), "utf8");
+    assert.ok(docs.includes(`pi install git:github.com/irfansofyana/pi-setup@v${manifest.version}`));
+  }
 });
 
 test("web-research evaluation corpus freezes every required benchmark dimension", async () => {

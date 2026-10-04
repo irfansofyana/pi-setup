@@ -18,6 +18,7 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 | Routing | Legacy search coexistence during migration |
 | Operations | Usage stats, `/context` diagnostics, and Caveman response mode |
 | Skills | Setup, `my-web-search`, MCP, and optional workflow skills |
+| Prompts | Seven packaged research, planning, debugging, review, and push workflows |
 
 ### `irfan-sumi` preview
 
@@ -31,13 +32,14 @@ An installable first-party Pi package plus a reviewed companion-package manifest
 package.json                  # Pi resources + exact companion package metadata
 pi/
   agents/                     # reviewed templates; deployed separately
+  prompts/                    # seven package-loaded slash commands
   themes/                     # irfan-sumi bundle
   extensions/                 # repo-owned package extensions, including native web research
 skills/                       # bundled setup and my-web-search skills
 docs/setup/                   # setup and operations guides
 ```
 
-Pi loads declared extensions, themes, and skills from the installed package. Do not copy the whole `pi/` directory—or individual package resources—into `~/.pi/` for a normal install.
+Pi loads declared extensions, themes, skills, and prompt templates from the installed package. Do not copy the whole `pi/` directory—or individual package resources—into `~/.pi/` for a normal install.
 
 ## Fresh-machine bootstrap
 
@@ -50,7 +52,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 npm install -g @earendil-works/pi-coding-agent
 
 # 2) Install one reviewed pi-setup release
-pi install git:github.com/irfansofyana/pi-setup@v0.5.3
+pi install git:github.com/irfansofyana/pi-setup@v0.5.4
 
 # 3) Start Pi
 pi
@@ -110,7 +112,7 @@ Use `pi list` to inspect package sources. These companion packages remain separa
 
 | Path | Scope | Purpose |
 | --- | --- | --- |
-| Installed first-party package | Pi-managed | Repository-owned extensions, themes, and skills |
+| Installed first-party package | Pi-managed | Repository-owned extensions, themes, skills, and prompts |
 | Required companion packages | Pi-managed | MCP, permissions, subagents, and utility extensions |
 | `~/.pi/agent/settings.json` | Global user | Theme and Pi settings |
 | `~/.pi/agent/extensions/` | Global user | Legacy/manual loaders and extension-local policy |
@@ -136,10 +138,11 @@ Package updates replace package-owned code, not user-owned configuration. Preser
 | [MCP](docs/setup/mcp.md) | Global/project config, search, OAuth, bearer auth |
 | [Permissions](docs/setup/permissions.md) | Global approval policy and migration notes |
 | [Subagent team](docs/setup/subagents.md) | Team roles, reviewed deployment, trust boundary |
+| [Agent packaging research](docs/setup/agent-packaging-research.md) | Why package upgrades do not auto-deploy global agents |
 | [Local extensions](docs/setup/local-extensions.md) | Component behavior and user-owned config/state |
 | [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Memory scopes, tools, and hygiene |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
-| [Operations](docs/setup/operations.md) | Verification, updates, rollback, troubleshooting |
+| [Operations](docs/setup/operations.md) | Prompt workflows, verification, updates, rollback, troubleshooting |
 
 ## Setup skill safety model
 
@@ -183,7 +186,7 @@ Inside Pi:
 /settings
 ```
 
-Confirm the first-party package and companion package sources, expected commands/tools/skills/themes, current selected theme, and permission prompts. Existing devices should also confirm that no command or tool is registered twice. See [Operations](docs/setup/operations.md).
+Confirm the first-party package and companion package sources, expected commands/tools/skills/themes/prompts, current selected theme, and permission prompts. Existing devices should also confirm that no command or tool is registered twice. See [Operations](docs/setup/operations.md).
 
 ## Updating setup
 

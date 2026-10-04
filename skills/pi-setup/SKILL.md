@@ -41,7 +41,7 @@ The package owns `/pi-setup-init` and `/pi-setup-doctor` as thin prompt adapters
 
 Distinguish every target:
 
-- **Package-owned:** repository code, themes, and skills loaded from the installed first-party package, including `web-research` and `my-web-search`.
+- **Package-owned:** repository code, themes, skills, and prompt templates loaded from the installed first-party package, including `web-research` and `my-web-search`.
 - **Companion package-owned:** the separate Pi package sources named by `piSetup.requiredPackages`; versioned npm source suffixes define minimum floors, and newer installed versions satisfy them.
 - **Global user-owned:** settings, manual loaders, agents, component config/state/logs, generated skills, and Pi-specific MCP under `~/.pi/agent/`.
 - **Global shared MCP:** `~/.config/mcp/mcp.json`.
@@ -139,7 +139,7 @@ Repeat relevant read-only checks and report:
 
 - approved proposals applied, skipped, restored, or blocked;
 - final `compliant`/`missing`/`duplicate`/`drifted`/`optional`/`blocked` status;
-- package sources and verification results;
+- package sources, declared prompt command availability, and verification results;
 - confirmation that user settings/config/state/secrets were preserved;
 - private backup paths, retention, and exact rollback steps;
 - unresolved duplicates, custom-editor conflicts, or manual auth/service work;

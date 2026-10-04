@@ -6,12 +6,14 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 
 | Path | Scope | Use |
 | --- | --- | --- |
-| Installed `@irfansofyana/pi-setup` package | Pi-managed | Repository-owned extensions, themes, and skills |
+| Installed `@irfansofyana/pi-setup` package | Pi-managed | Repository-owned extensions, themes, skills, and prompts |
 | Required companion packages | Pi-managed | Separate sources with documented minimum versions |
 | `~/.pi/agent/settings.json` | Global Pi | Pi settings and selected theme |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
 | `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
+| `~/.pi/agent/prompts/` | Global Pi | User-owned prompt templates; separate from package prompts |
+| `<project>/.pi/prompts/` | Project-local | Project prompt templates; review before granting trust |
 | `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
 | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/` | Global Pi | Owner-only bounded native-web artifacts; package code owns format, user owns retained state |
 | `<project>/.pi/agents/` | Project-local | Project agent definitions; trusted repositories only |
@@ -69,6 +71,24 @@ Inside Pi:
 ```
 
 For provider credentials, prefer environment variables or `/login`; do not hardcode values in repository files. Keep Hindsight provider credentials in environment/profile config, not this repo.
+
+## Codemode
+
+On Pi versions with built-in Codemode (verified with Pi `1.0.2`), no separate package is required. To enable it persistently, merge this additive selection into global `~/.pi/agent/settings.json`; preserve existing `defaultTools` entries and unrelated settings:
+
+```json
+{
+  "defaultTools": ["+codemode"]
+}
+```
+
+- Default `codemode.mode: "on"` keeps direct tools available alongside JavaScript tool scripts.
+- Optional `codemode.mode: "only"` hides direct tools from the model; scripts still call them through `tools.<name>()`. Choose it separately.
+- Scripts support parallel calls and filtering results before they reach model context. The JavaScript sandbox does not sandbox side effects of called tools.
+- Run `/reload` or restart Pi after changes. `/reload` enables newly added default tools; explicit CLI tool selections override these settings.
+- Rollback removes only the approved addition after checking for drift, preserving other tool selections and settings.
+
+See official [Codemode](https://pi.dev/docs/latest/codemode) and [tool settings](https://pi.dev/docs/latest/settings#tools) references.
 
 ## Theme and signature UI
 

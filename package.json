@@ -1,6 +1,6 @@
 {
   "name": "@irfansofyana/pi-setup",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "description": "Irfan's installable Pi coding-agent setup",
   "type": "module",
@@ -12,6 +12,7 @@
     "pi/extensions",
     "pi/themes",
     "pi/agents",
+    "pi/prompts",
     "skills",
     "docs/setup",
     "README.md",
@@ -22,8 +23,9 @@
     "pi": ">=0.84.1"
   },
   "scripts": {
-    "test": "npm run test:package && npm run test:extensions && npm run test:signature && npm run test:agents",
+    "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:signature && npm run test:agents",
     "test:package": "node --test tests/package-contract.test.mjs",
+    "test:prompts": "node --test tests/prompt-templates.test.mjs",
     "test:extensions": "node --test pi/extensions/*/*.test.ts",
     "test:signature": "node --test pi/extensions/pi-signature.test.ts",
     "test:agents": "node --test pi/agents/agent-templates.test.ts"
@@ -36,6 +38,9 @@
     ],
     "skills": [
       "./skills"
+    ],
+    "prompts": [
+      "./pi/prompts/*.md"
     ],
     "themes": [
       "./pi/themes/*.json",
