@@ -1,0 +1,22 @@
+{
+  "evidence": "Locally installed @tintinweb/pi-subagents 0.19.0 src/index.ts:1592-1647,2738-2752,2828-2835,548-564,1350-1355 and src/cross-extension-rpc.ts:27-33,73-88,100-168. Research originally observed 0.14.3; this fixture does not assert equality across versions.",
+  "tools": {
+    "Agent": {
+      "required": { "prompt": "string", "description": "string", "subagent_type": "string" },
+      "optional": { "name": "string", "model": "string", "thinking": "string", "max_turns": "number", "run_in_background": "boolean", "resume": "string", "isolated": "boolean", "inherit_context": "boolean", "isolation": "string", "schedule": "string" }
+    },
+    "get_subagent_result": { "agent_id": "string", "wait": "boolean?", "verbose": "boolean?" },
+    "steer_subagent": { "agent_id": "string", "message": "string" }
+  },
+  "rpc": {
+    "version": 2,
+    "channels": ["subagents:rpc:ping", "subagents:rpc:spawn", "subagents:rpc:stop"],
+    "reply": "<channel>:reply:<requestId>",
+    "success": { "success": true, "data": { "id": "agent-example" } },
+    "failure": { "success": false, "error": "example error" }
+  },
+  "lifecycle": {
+    "created": { "id": "agent-example", "type": "reviewer", "description": "review", "isBackground": true },
+    "settled": { "id": "agent-example", "type": "reviewer", "description": "review", "result": "example", "error": null, "status": "completed", "toolUses": 0, "durationMs": 1, "tokens": 0, "usage": null }
+  }
+}

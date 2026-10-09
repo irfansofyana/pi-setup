@@ -72,6 +72,10 @@ M3 and M4 can be prepared independently once shared contracts stabilize. No para
 
 **Exit gate:** real native Pi offline loader/session evidence for routing, effective loadouts, controls, settlement and disposal. Private bridge or new minimum version requires explicit review. Provider-backed smoke is a later separately approved check, not a substitute for deterministic tests.
 
+## M1 routing amendment
+
+User correction supersedes the original mandatory-Headroom interpretation: derive explicit `native` or `headroom` mode from reviewed configuration/loadout. Native mode deliberately omits Headroom and may use the direct provider; enabled Headroom mode must fail closed on missing/lost routing, with no direct-upstream request or silent native fallback. Prove native Ciung in a temporary-home fake-provider run first. The public `ModelRuntime.registerProvider(... streamSimple)` dispatch seam is a candidate for a version-checked, route-only child wrapper that rechecks the lease per request; extension event hooks swallow failures and are not a safety boundary. Do not mark routed canonical execution complete until a real parent lease, child runtime, exact auth/model, retry/transport handling, and disposal/release are tested together. No live config/template edits or activation.
+
 ## M2 — Supervisor, admission and budgets
 
 **Depends on:** selected backend from M1.

@@ -86,6 +86,10 @@ Failure produces a typed unsupported-provider/backend result. Do not fall back t
 
 Pi `1.0.4` is the evidence version, not an automatic package minimum. Test advertised Pi `>=1.0.0` or propose a deliberate minimum-version change with metadata/docs/tests aligned. Keep Node `>=22.19.0` compatibility unless separately changed.
 
+## Routing amendment (user correction; overrides earlier mandatory-Headroom wording)
+
+Headroom is optional for canonical children. Derive an explicit `native` or `headroom` routing mode from reviewed configuration/loadout *before* provider construction. If disabled, native provider routing is intentional and must not require the Headroom factory or lease; if enabled, acquire/validate a route and fail closed whenever it is missing or lost, never silently falling back to native. The no-direct-upstream guarantee applies only in enabled mode. Existing global templates still list `headroom`; interpret it as conditional routing metadata rather than a mandatory effective extension in native mode. No live template/config migration is authorized. Until configuration-to-mode derivation and routed child transport are proven, unconfigured callers and enabled mode remain blocked; the native Ciung run is an isolated fake-provider proof only.
+
 ## Role/loadout contract
 
 Preserve authority through effective resources, not just frontmatter parsing:
