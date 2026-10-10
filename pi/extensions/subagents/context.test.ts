@@ -43,6 +43,12 @@ test("fork unsupported and Ciung rejects automatic local context without touchin
   assert.deepEqual(resolveContext(request(manager, result), lookup, "researcher"), { ok: false, code: "privacy_sensitive_context" });
   assert.equal(lookups, 0);
 });
+test("snapshot refuses tool history outside the destination role loadout",()=>{
+ const {manager}=source();
+ manager.appendMessage({role:"assistant",content:[{type:"toolCall",id:"unsafe",name:"bash",arguments:{command:"secret"}}],provider:"fixture",model:"offline",api:"fixture",stopReason:"toolUse",usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{total:0,input:0,output:0,cacheRead:0,cacheWrite:0}},timestamp:4});
+ const leaf=manager.appendMessage({role:"toolResult",toolCallId:"unsafe",toolName:"bash",content:[{type:"text",text:"private"}],isError:false,timestamp:5});
+ assert.deepEqual(resolveContext(request(manager,leaf),()=>manager,"reviewer"),{ok:false,code:"privacy_sensitive_context"});
+});
 
 test("private categories, image payloads and oversized serialized snapshots reject without truncation", () => {
   const { manager } = source();

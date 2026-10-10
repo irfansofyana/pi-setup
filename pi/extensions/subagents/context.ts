@@ -21,7 +21,8 @@ export function resolveContext(request: ContextRequest, resolveSource: (sessionI
   if (!branch.some(e => e.id === request.entryAnchorId)) return reject("invalid_context");
   const projection = buildSessionProjection(source.getEntries(), request.entryAnchorId);
   const messages: TransferMessage[] = [], ids: string[] = [];
-  const pending = new Set<string>();
+  const allowedTools=new Set(["read","grep","find","ls","fffind","ffgrep","fff-multi-grep",...(role==="builder"?["write","edit"]:[])]);
+  const pending = new Map<string,string>();
   for (const projected of projection.entries) {
     const entry = projected.sourceEntry;
     if (entry.type === "custom_message" || entry.type === "branch_summary" || entry.type === "compaction" || entry.type === "context_edit") return reject("privacy_sensitive_context");
@@ -33,10 +34,12 @@ export function resolveContext(request: ContextRequest, resolveSource: (sessionI
     if (m.role === "assistant" && !m.content.every(c => c.type === "text" || c.type === "toolCall")) return reject("privacy_sensitive_context");
     if (m.role === "toolResult" && !m.content.every(c => c.type === "text")) return reject("privacy_sensitive_context");
     if (m.role === "assistant") for (const c of m.content) if (c.type === "toolCall") {
+      if(!allowedTools.has(c.name))return reject("privacy_sensitive_context");
       if (!c.id || pending.has(c.id)) return reject("invalid_context");
-      pending.add(c.id);
+      pending.set(c.id,c.name);
     }
     if (m.role === "toolResult") {
+      if(pending.get(m.toolCallId)!==m.toolName)return reject("invalid_context");
       if (!pending.delete(m.toolCallId)) return reject("invalid_context");
     }
     messages.push(structuredClone(m)); ids.push(entry.id);

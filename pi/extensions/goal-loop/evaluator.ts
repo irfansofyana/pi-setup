@@ -29,9 +29,8 @@ export interface GoalEvaluator {
 
 type RpcReply<T> = { success: true; data?: T } | { success: false; error: string };
 
-async function rpc<T>(events: EventBus, channel: string, payload: Record<string, unknown>, timeoutMs: number): Promise<RpcReply<T> | undefined> {
+async function rpc<T>(events: EventBus, channel: string, payload: Record<string, unknown>, timeoutMs: number, requestId = randomUUID()): Promise<RpcReply<T> | undefined> {
   return new Promise((resolve) => {
-    const requestId = randomUUID();
     let settled = false;
     let timer: ReturnType<typeof setTimeout>;
     let unsubscribe = () => {};
@@ -112,7 +111,7 @@ export function createSubagentGoalEvaluator(
         if (!raw || typeof raw !== "object") return;
         const event = { kind, value: raw as Record<string, unknown> };
         if (!agentId) {
-          buffered.push(event);
+          if(buffered.length<32)buffered.push(event);
           return;
         }
         if (event.value.id === agentId) finish(event);
@@ -125,6 +124,8 @@ export function createSubagentGoalEvaluator(
         if (terminalTimer) clearTimeout(terminalTimer);
       };
 
+      const spawnRequestId=randomUUID();
+      const stop=(target:{id?:string;spawnRequestId?:string})=>pi.events.emit("subagents:rpc:stop",{...target,requestId:randomUUID()});
       const spawn = await rpc<{ id?: string }>(pi.events, "subagents:rpc:spawn", {
         type: "Explore",
         prompt: evaluationPrompt(input),
@@ -135,8 +136,9 @@ export function createSubagentGoalEvaluator(
           maxTurns: 2,
           cwd: input.cwd,
         },
-      }, timeoutMs);
+      }, timeoutMs,spawnRequestId);
       if (!spawn) {
+        stop({spawnRequestId});
         cleanup();
         return { ok: false, reason: "Goal evaluator spawn timed out." };
       }
@@ -155,7 +157,7 @@ export function createSubagentGoalEvaluator(
 
       const event = await terminal;
       cleanup();
-      if (!event) return { ok: false, reason: "Goal evaluator timed out." };
+      if (!event) {stop({id:agentId});return { ok: false, reason: "Goal evaluator timed out." };}
       if (event.kind === "failed") {
         const detail = typeof event.value.error === "string"
           ? event.value.error

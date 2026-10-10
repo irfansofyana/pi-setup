@@ -1,5 +1,66 @@
 # Subagent Team
 
+For the experimental first-party runtime, see the [isolated native preview](../../pi/extensions/subagents/preview.md). It uses a separate temporary profile and does not replace the companion/deployment procedure below.
+
+## Native runtime cutover
+
+The package contains the default-inert native implementation and an isolated
+manual-test launcher. Existing three-companion policy stays in force until a
+separate repository cutover decision. Implementation/manual testing does not
+authorize uninstall, live configuration or theme changes.
+
+Future reviewed normal activation uses global user-owned
+`~/.pi/agent/subagents-native.json`; project files cannot activate it. Example
+proposal only (not an instruction to write/activate now):
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "routing": "native",
+  "concurrency": 1,
+  "threads": 4,
+  "slots": 8,
+  "pending": 4,
+  "persist": false,
+  "schedules": false,
+  "workflows": false,
+  "fffPath": "/absolute/approved/pi-fff/src/index.ts",
+  "skillPaths": {
+    "mermaid": "/absolute/approved/mermaid/SKILL.md",
+    "teach": "/absolute/approved/teach/SKILL.md",
+    "code-review": "/absolute/approved/code-review/SKILL.md"
+  }
+}
+```
+
+Lower caps above suit shared hosts. Only `routing: native` is CLI-supported;
+Headroom requests reject instead of silently bypassing the proxy. Canonical
+templates stay model-neutral/fresh; sessions/transcripts stay off. Snapshot,
+retention, job/workflow and artifact behavior belongs to the
+[component docs](../../pi/extensions/subagents/README.md).
+
+Numbered cutover proposals must separately cover:
+
+1. Audit Pi/version, exact configured sources (including object sources), manual
+   duplicate loaders, role pins, native resources, FFF and named skills. Rehearse
+   with the exclusive launcher before changing a live device.
+2. Review private backups, drift checks, exact Tintinweb source exclusion/removal
+   and reversal. Preserve unknown settings, role pins, state/logs/archives,
+   credentials, selected theme, FFF/stats and unrelated MCP files.
+3. Propose native config plus explicit `PI_SETUP_SUBAGENTS_NATIVE=1`. The gate
+   rejects known configured Tintinweb sources before registering tools; it is not
+   a sandbox or proof against arbitrary renamed extension factories.
+4. Re-read targets, back up privately, apply only approved proposals and restart
+   Pi (or `/reload` where applicable). Verify one runtime/eight tools, `/agents`,
+   prior-generation drain and focused acceptance before retaining the change.
+
+Rollback: stop/drain native Pi, remove its environment opt-in, restore only
+approved source/config changes if targets have not drifted, then restart and
+verify the previous companion. Never overwrite newer state with stale backups.
+Keep native outcome/worktree evidence; do not delete it as rollback. No helper
+automatically applies migration or uninstalls a companion.
+
 This setup turns `@tintinweb/pi-subagents` into a small agent team instead of a generic delegation button. The templates live under [`pi/agents`](../../pi/agents) and are copied to the trusted global directory, not activated from a project checkout.
 
 ## Team

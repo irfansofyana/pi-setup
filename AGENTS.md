@@ -66,6 +66,8 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 ## Validation
 
+On shared hosts, start with focused tests and run only one validation process at a time. Do not repeatedly run parallel full suites or concurrent dependency installs/workers. Check available memory first; defer local validation under host pressure. Use a hard memory limit, no swap, a CPU quota, and a bounded timeout for SDK installs/tests; Node's heap limit alone does not bound process or child memory. Prefer a separate CI runner for broad regression. If hard limits cannot be enforced, defer heavier validation and report the gap.
+
 For documentation-only changes:
 
 - Check Markdown renders cleanly and links resolve.

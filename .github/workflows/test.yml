@@ -12,11 +12,48 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.19.0, 24.18.0]
+        pi: [1.1.0]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24.12.0
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Validate the advertised Pi floor and current development SDK
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@${{ matrix.pi }} @earendil-works/pi-ai@${{ matrix.pi }} @earendil-works/pi-tui@${{ matrix.pi }} typebox@1.3.7
+      - name: Broad regression belongs on the CI runner
+        env:
+          NODE_OPTIONS: --max-old-space-size=512
+        run: npm test
+  native-floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.19.0, 24.18.0]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Install advertised native SDK floor on the separate CI runner
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.0.0 @earendil-works/pi-ai@1.0.0 @earendil-works/pi-tui@1.0.0 typebox@1.3.7
+      - name: Native floor (experimental routed lease deliberately requires 1.1.0)
+        env:
+          NODE_OPTIONS: --max-old-space-size=512
+        run: |
+          for test_file in pi/extensions/subagents/*.test.ts; do
+            case "$test_file" in
+              */headroom-backend.test.ts|*/route-transport.test.ts) continue ;;
+            esac
+            node --test --test-concurrency=1 "$test_file" || exit 1
+          done
+          node --test --test-concurrency=1 pi/extensions/goal-loop/*.test.ts pi/extensions/loop/*.test.ts

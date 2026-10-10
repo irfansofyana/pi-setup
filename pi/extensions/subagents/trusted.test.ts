@@ -163,8 +163,10 @@ test("native role rejects failed auth and missing exact model without dispatch",
   const resources = { tools: ["ext:web-research/web_search", "ext:web-research/web_fetch"], extensions: ["web-research"], skills: ["my-web-search"], models: ["offline-fixture/offline", "offline-fixture/missing"] };
   const options = { role: "researcher", agentDir, cwd, provider: base, available: resources, routing: "native" as const };
   assert.deepEqual(await createTrustedRoleBackend({ ...options, model: "offline-fixture/missing" }), { ok: false, code: "unsupported_provider" });
-  const rejected = { ...base, auth: { ...base.auth, async check() { return undefined; }, async resolve() { return undefined; } } };
-  assert.deepEqual(await createTrustedRoleBackend({ ...options, model: "offline-fixture/offline", provider: rejected }), { ok: false, code: "unsupported_provider" });
+  const rejected = { ...base, auth: {apiKey:{name:"rejected fixture",async check() { return undefined; }, async resolve() { return undefined; }}} };
+  const response=await createTrustedRoleBackend({ ...options, model: "offline-fixture/offline", provider: rejected });
+  try{assert.equal(response.ok,false);if(!response.ok)assert.equal(response.code,"unsupported_provider");}
+  finally{if(response.ok)await response.backend.dispose();}
 }));
 
 test("custom-provider mismatch and unavailable Headroom route fail closed before factory loading", async () => fixture(async (agentDir, cwd) => {
@@ -172,7 +174,7 @@ test("custom-provider mismatch and unavailable Headroom route fail closed before
   let calls = 0;
   const options = { role: "code-mapper", agentDir, cwd, model: "offline-fixture/offline", provider: provider(() => {}), available,
     extensionFactories: { evil: () => { calls++; } } };
-  assert.deepEqual(await createTrustedRoleBackend({ ...options, model: "different/model" }), { ok: false, code: "unsupported_provider" });
+  assert.deepEqual(await createTrustedRoleBackend({ ...options, routing:"native",model: "different/model" }), { ok: false, code: "unsupported_provider" });
   assert.deepEqual(await createTrustedRoleBackend(options), { ok: false, code: "unsupported_routing" });
   assert.equal(calls, 0);
 }));

@@ -41,6 +41,7 @@ Existing devices use the same install, then [review migration proposals](docs/se
 - **Workflow:** persisted `/goal`, paced `/loop`, side-channel `/btw`, and `/caveman` response style.
 - **Prompts:** seven packaged research, planning, debugging, review, and push workflows.
 - **Delegation:** reviewed Ciung, Laya, Sangkur, and Prabu templates; global deployment needs separate approval.
+- **Native subagents:** default-inert implementation, scoped worktrees and optional schedules/workflows; [isolated manual testing](pi/extensions/subagents/preview.md) precedes any cutover.
 - **Setup:** bundled audit/proposal/migration skill; native Pi MCP guidance.
 
 Pi loads declared extensions, themes, skills, and prompts from the package.

@@ -67,6 +67,7 @@ Audit relevant surfaces:
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
 - Component config/state for Web Research artifacts, Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, and MCP. This repository does not manage a permission-system companion or generate a replacement policy.
 - Trusted global subagent templates and `subagents.json`; compare installed Ciung against the native `web-research`/`my-web-search` source template and remember package resources do not natively activate agents.
+- Native subagent opt-in/configuration and known companion conflicts only when relevant; follow `docs/setup/subagents.md#native-runtime-cutover`. An isolated manual test is not live cutover approval, and manifest companions remain authoritative.
 - Separately installed `9router-web-researcher`, legacy 9router web routes, and Tavily/Exa MCP entries as distinct coexistence/removal targets; do not infer removal approval from native resource health.
 - Requested optional skills/tools and external service prerequisites.
 - Credential variable names/references without reading or printing values.
@@ -113,6 +114,7 @@ Separate proposal groups:
 - duplicate legacy manual loader cleanup;
 - optional settings/config changes, including theme;
 - global subagent template deployment;
+- native runtime activation/companion cutover, separate from repository implementation and isolated manual acceptance;
 - later legacy web-skill/route/MCP removal, separate from native Ciung template deployment;
 - external service setup requiring manual auth/credentials.
 

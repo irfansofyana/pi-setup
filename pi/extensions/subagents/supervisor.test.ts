@@ -1,6 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSupervisor } from "./supervisor.ts";
+test("hung initialization has a bounded drain failure, quarantines admission and never frees the unresolved slot",async()=>{
+ let n=0,release:any;const setup=new Promise<any>(resolve=>release=resolve);
+ const supervisor=createSupervisor({nextId:()=>String(++n),cleanupMs:10,createBackend:async()=>setup});
+ const accepted=await supervisor.start({prompt:"waiting"});await new Promise<void>(resolve=>setImmediate(resolve));
+ const closing=supervisor.dispose().then(()=>undefined,error=>error);
+ try{const error=await Promise.race([closing,new Promise(resolve=>setTimeout(()=>resolve(undefined),70))]);assert.match(String(error),/quarantined|unconfirmed/);assert.equal(supervisor.inspect(accepted.threadId)?.state,"quarantined");assert.equal((await supervisor.start({prompt:"late"})).ok,false);}
+ finally{release({run:async()=>({outcome:"completed",complete:true}),abort:async()=>{},dispose:async()=>{}});await closing;await supervisor.wait([accepted.runId]);}
+});
+
+test("terminal result retains actual settled artifact references without deleting the worktree",async()=>{
+  let n=0;
+  const artifact={path:"/fixture/worktree",repo:"/fixture/repo",branch:"pi-subagent/fixture",base:"a".repeat(40),commit:"a".repeat(40),dirty:true,status:"M file.txt",diff:"file.txt | 1 +",truncated:false,files:["file.txt"]};
+  const supervisor=createSupervisor({nextId:()=>String(++n),createBackend:async()=>({run:async()=>({outcome:"completed",complete:true}),abort:async()=>{},dispose:async()=>{},artifacts:async()=>[Object.freeze(artifact)]})});
+  try{const accepted=await supervisor.start({prompt:"edit"});assert.equal(accepted.ok,true);if(!accepted.ok)return;
+    const [result]=await supervisor.wait([accepted.runId]);assert.equal(result.artifacts?.[0].path,"/fixture/worktree");assert.equal(result.artifacts?.[0].dirty,true);}
+  finally{await supervisor.dispose();}
+});
 
 type Event = { type: string; text?: string; assistantMessageEvent?: { type: string; delta: string } };
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
@@ -19,6 +36,18 @@ function harness(options: { concurrency?: number; pending?: number; slots?: numb
   return { fleet, gates, started, aborted, disposed, messages, steers, get maxRunning() { return maxRunning; } };
 }
 async function tick() { await new Promise<void>(r => setImmediate(r)); }
+
+test("exact-run inspection distinguishes a queued continuation from its running predecessor",async()=>{
+ const gate=deferred<{outcome:"completed";complete:true}>();let n=0;
+ const fleet=createSupervisor({nextId:()=>String(++n),createBackend:async()=>({run:async()=>gate.promise,abort:async()=>{},dispose:async()=>{}})});
+ try{
+  const first=await fleet.start({prompt:"first"});await tick();
+  const next=await fleet.control({version:1,operation:"follow_up",threadId:first.threadId,message:"second"});
+  const inspected=fleet.inspect(first.threadId,next.runId);
+  assert.equal(inspected?.runId,next.runId);assert.equal(inspected?.state,"queued");
+  assert.equal(fleet.inspect(first.threadId,"unrelated"),undefined);
+ }finally{gate.resolve({outcome:"completed",complete:true});await fleet.dispose();}
+});
 
 test("single FIFO admission queue bounds execution and correlates events and immutable results", async () => {
   const h = harness({ concurrency: 1 }); const events: any[] = []; h.fleet.subscribe(e => events.push(e));

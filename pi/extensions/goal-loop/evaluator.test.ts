@@ -43,6 +43,22 @@ const input: GoalEvaluatorInput = {
   cwd: "/tmp/project",
 };
 
+test("spawn timeout cancels the exact request so a late worker cannot become an orphan",async()=>{
+  const events=createEventBus();let spawned:any,stopped:any;
+  events.on("subagents:rpc:ping",(raw:any)=>events.emit(`subagents:rpc:ping:reply:${raw.requestId}`,{success:true,data:{version:2}}));
+  events.on("subagents:rpc:spawn",raw=>{spawned=raw;});events.on("subagents:rpc:stop",raw=>{stopped=raw;});
+  const result=await createSubagentGoalEvaluator({events},{timeoutMs:5}).evaluate(input);
+  assert.equal(result.ok,false);assert.equal(stopped?.spawnRequestId,spawned.requestId);
+});
+test("terminal timeout requests stop of the exact evaluator agent",async()=>{
+  const events=createEventBus();let stopped:any;
+  events.on("subagents:rpc:ping",(raw:any)=>events.emit(`subagents:rpc:ping:reply:${raw.requestId}`,{success:true,data:{version:2}}));
+  events.on("subagents:rpc:spawn",(raw:any)=>events.emit(`subagents:rpc:spawn:reply:${raw.requestId}`,{success:true,data:{id:"agent-timeout"}}));
+  events.on("subagents:rpc:stop",raw=>{stopped=raw;});
+  const result=await createSubagentGoalEvaluator({events},{timeoutMs:5}).evaluate(input);
+  assert.equal(result.ok,false);assert.equal(stopped?.id,"agent-timeout");
+});
+
 test("evaluates a run through correlated subagent RPC events", async () => {
   const events = createEventBus();
   events.on("subagents:rpc:ping", (raw) => {

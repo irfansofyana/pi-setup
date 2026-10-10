@@ -110,6 +110,26 @@ Inside Pi:
 Use the notion-cli skill to list Notion API endpoints.
 ```
 
+## Repository validation on shared hosts
+
+Use focused tests first, one validation process at a time. Do not run parallel full suites, repeated broad tests, concurrent SDK installs, or coding workers alongside them. Prefer CI for broad regression. A healthy host at the start does not guarantee memory will remain available.
+
+On Linux with a working user systemd manager, check available memory and run the selected test under a cgroup. This example refuses to start below 2 GiB available and caps the whole test process tree at 512 MiB RAM, no swap, 25% of one CPU, 32 tasks, and 60 seconds:
+
+```bash
+awk '/MemAvailable:/ { print; if ($2 < 2097152) exit 1 }' /proc/meminfo && \
+systemd-run --user --wait --pipe --collect --working-directory="$PWD" \
+  -p MemoryMax=512M -p MemorySwapMax=0 -p CPUQuota=25% \
+  -p TasksMax=32 -p RuntimeMaxSec=60 \
+  "$(command -v node)" --max-old-space-size=192 \
+  --test --test-concurrency=1 --test-isolation=none \
+  pi/extensions/subagents/headroom-backend.test.ts
+```
+
+The Headroom child bridge requires the audited Pi SDK `1.1.0`; use an isolated fixture for that version instead of changing the installed Pi. Tests use a disposable loopback server and fake credentials. No real provider smoke is implied. If systemd limits are unavailable, defer this SDK test to an isolated runner. Do not fall back to unbounded execution or increase the memory cap merely to pass a failing test. A heap limit alone is insufficient; a capped process killed by its limit is a failed validation, not a passing test.
+
+`offline-smoke.mjs` also serializes its test files and bounds each Node heap, but still needs an outer process-tree memory/CPU limit on a shared host. Keep live settings, services, installed sources and credentials out of test fixtures.
+
 ## Troubleshooting
 
 | Problem | Fix |

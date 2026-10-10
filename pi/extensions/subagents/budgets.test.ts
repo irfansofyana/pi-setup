@@ -15,6 +15,14 @@ function fixture(budget: { softTurns: number; hardTurns: number; maxTokens?: num
   return { fleet, runs, aborts, steers };
 }
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+test("a final stop exactly at the hard ceiling succeeds but cannot buy a follow-up",async()=>{
+ const h=fixture({softTurns:2,hardTurns:2},{evaluatorSupported:true});
+ const a=await h.fleet.start({prompt:"evaluate",evaluator:true});await tick();
+ h.runs[0].emit(message("first"));h.runs[0].emit({...message("final"),message:{...message("final").message,stopReason:"stop"}});
+ h.runs[0].resolve({outcome:"completed",complete:true});
+ assert.equal((await h.fleet.wait([a.runId]))[0].outcome,"completed");assert.deepEqual(h.aborts,[]);await tick();
+ const next=await h.fleet.control({version:1,operation:"follow_up",threadId:a.threadId,message:"more"});assert.equal(next.status,"rejected");await h.fleet.dispose();
+});
 
 test("role ceiling cannot be enlarged by invocation, and soft turn requests wrap-up before hard stop", async () => {
   const h = fixture({ softTurns: 3, hardTurns: 5 });
@@ -41,7 +49,8 @@ test("finalized native usage deduplicates run/message identities, preserves cach
   await tick(); assert.deepEqual(h.aborts, [2]);
   assert.equal(h.fleet.inspect(a.threadId)?.usage.totalTokens, 13);
   h.runs[1].resolve({ outcome: "completed", complete: true });
-  assert.equal((await h.fleet.wait([b.runId!]))[0].outcome, "budget_exhausted"); await h.fleet.dispose();
+  const final=(await h.fleet.wait([b.runId!]))[0];
+  assert.equal(final.outcome, "budget_exhausted");assert.equal(final.usage?.totalTokens,6);assert.equal(final.turns,2);await h.fleet.dispose();
 });
 
 test("descendant-tagged finalized events do not inflate parent accounting", async () => {

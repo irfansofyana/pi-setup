@@ -64,7 +64,9 @@ export function validateLegacy(tool: keyof typeof legacyFields, value: unknown):
 export type RunState = "queued" | "initializing" | "running" | "stopping" | "terminal" | "quarantined";
 export type Outcome = "completed" | "failed" | "interrupted" | "cancelled" | "budget_exhausted" | "orphaned";
 export type Receipt = { version: 1; controlId: string; runId?: string; status: "accepted" | "queued" | "handled" | "applied" | "rejected" | "unknown_delivery"; error?: Rejection; result?: RunResult };
-export type RunResult = { version: 1; agentId: string; threadId: string; runId: string; outcome: Outcome; complete: boolean; truncated: boolean; text?: string };
+export type Artifact = Readonly<{id?:string;path:string;repo:string;branch:string;base:string;commit:string;dirty:boolean;status:string;diff?:string;truncated:boolean;files:readonly string[]}>;
+export type RunUsage=Readonly<{input:number;output:number;cacheRead:number;cacheWrite:number;totalTokens:number;cost:number}>;
+export type RunResult = { version: 1; agentId: string; threadId: string; runId: string; outcome: Outcome; complete: boolean; truncated: boolean; text?: string;artifacts?:readonly Artifact[];usage?:RunUsage;turns?:number;toolUses?:number };
 export interface Supervisor {
   start(request: unknown): Promise<Receipt>;
   control(request: Control): Promise<Receipt>;

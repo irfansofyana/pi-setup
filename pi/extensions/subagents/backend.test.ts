@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { createNativeBackend } from "./backend.ts";
+import { createNativeBackend,createEvaluatorBackend } from "./backend.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveContext } from "./context.ts";
 
@@ -44,6 +44,13 @@ async function fixture(fn: (dirs: { home: string; cwd: string }) => Promise<void
   try { await mkdir(home); await mkdir(cwd); await writeFile(join(cwd, "fixture.txt"), "approved fixture\n"); await fn({ home, cwd }); }
   finally { await rm(root, { recursive: true, force: true }); }
 }
+
+test("dedicated evaluator accepts an exact provider with only read-only tools and no ambient factories",async()=>fixture(async({home,cwd})=>{
+  const opened=await createEvaluatorBackend({agentDir:home,cwd,model:"offline-fixture/offline",provider:provider(()=>{})});
+  assert.equal(opened.ok,true);if(!opened.ok)return;
+  try{assert.deepEqual(opened.backend.activeTools.sort(),["find","grep","ls","read"]);assert.equal((await opened.backend.run("Evaluate fixture",()=>{})).outcome,"completed");}
+  finally{await opened.backend.dispose();}
+}));
 
 test("native SDK streams read-only text/tool events and settles once without child writes", async () => fixture(async ({ home, cwd }) => {
   const requests: any[] = [];

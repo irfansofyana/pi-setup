@@ -26,9 +26,9 @@
     "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:signature && npm run test:agents",
     "test:package": "node --test tests/package-contract.test.mjs",
     "test:prompts": "node --test tests/prompt-templates.test.mjs",
-    "test:extensions": "node --test pi/extensions/*/*.test.ts",
-    "test:signature": "node --test pi/themes/pi-irfan-devs/*.test.ts",
-    "test:agents": "node --test pi/agents/agent-templates.test.ts",
+    "test:extensions": "node --test --test-concurrency=1 pi/extensions/*/*.test.ts",
+    "test:signature": "node --test --test-concurrency=1 pi/themes/pi-irfan-devs/*.test.ts",
+    "test:agents": "node --test --test-concurrency=1 pi/agents/agent-templates.test.ts",
     "test:themes": "node pi/themes/pi-irfan-devs/smoke-test.mjs"
   },
   "pi": {
@@ -60,5 +60,11 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
+    "typebox": "1.3.7"
   }
 }
