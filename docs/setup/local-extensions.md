@@ -48,7 +48,7 @@ Persistence has separate owners. The extension controls only its in-memory cache
 
 Fallback is allowed only after an empty/all-failed response or an exhausted retryable operational failure. Authentication, payment/quota, permission, validation, cancellation, and safety failures fail closed without switching providers. Search snippets are discovery aids; load `my-web-search` and fetch important sources before treating a material claim as confirmed.
 
-Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and rollback purposes, but the native tools do not call them. Do not remove legacy packages, skills, MCP configuration, credentials, caches, or logs until the migration gate is separately approved. Run `/reload` after package updates, then verify both tools and Ciung as described in [Subagent Team](subagents.md#verification).
+Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and rollback purposes, but the native tools do not call them. Do not remove legacy packages, skills, MCP configuration, credentials, caches, or logs until the migration gate is separately approved. Run `/reload` after package updates, then verify both tools and the bundled researcher as described in [Subagent Team](subagents.md#verification).
 
 ## Irfan Devs theme bundle
 
@@ -372,7 +372,7 @@ If old upstream config exists at `~/.pi/agent/caveman.json`, local extension rea
 
 Purpose: Pi-working-root-scoped `/goal` command with persisted state, completion receipts, usage limits, verification evidence, and auto-continue loops.
 
-Requires Pi `>=0.80.4` and a reviewed protocol-v2 subagent backend. Normal setup uses package-owned native subagents; legacy Tintinweb sources suppress native registration until separately approved removal. Native runtime supplies the dedicated fresh read-only hard-two `Explore` evaluator. Spawn/terminal timeout cleanup targets the exact request/run. Extension records run output at `agent_end`, calls separate evaluator, and makes one continuation decision at `agent_settled`.
+Packaged setup requires Pi `>=1.0.0` and a reviewed protocol-v2 subagent backend. Normal setup uses package-owned native subagents; legacy Tintinweb sources suppress native registration until separately approved removal. Native runtime supplies the dedicated fresh read-only hard-two `Explore` evaluator. Spawn/terminal timeout cleanup targets the exact request/run. Extension records run output at `agent_end`, calls separate evaluator, and makes one continuation decision at `agent_settled`.
 
 Goal Loop loads from the first-party package. Preserve `~/.pi/agent/goal-loop/` config, state, archive, and logs when removing a legacy manual loader.
 
@@ -436,7 +436,7 @@ Extension does not bypass Pi permissions. It does not schedule work after Pi exi
 
 Purpose: repo-owned Cursor-style `/loop` for repeated local prompts. It runs once immediately, then continues on fixed intervals or agent-selected time/safe-event wakes until agent declares completion, user stops it, or Pi exits.
 
-Requires Pi `>=0.80.4`, package-owned Goal Loop, and a reviewed protocol-v2 subagent backend. Normal setup uses package-owned native subagents; legacy Tintinweb sources suppress native registration until separately approved removal. Native runtime supplies the dedicated fresh read-only hard-two `Explore` evaluator. Native wakes correlate run IDs as well as legacy agent IDs so an old completion cannot wake a resumed run.
+Packaged setup requires Pi `>=1.0.0`, package-owned Goal Loop, and a reviewed protocol-v2 subagent backend. Normal setup uses package-owned native subagents; legacy Tintinweb sources suppress native registration until separately approved removal. Native runtime supplies the dedicated fresh read-only hard-two `Explore` evaluator. Native wakes correlate run IDs as well as legacy agent IDs so an old completion cannot wake a resumed run.
 
 Prompt Loop and Goal Loop load together from the first-party package. Existing devices should use the approval-gated migration audit to remove only verified legacy loaders, then run `/reload` or restart Pi.
 

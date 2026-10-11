@@ -68,7 +68,8 @@ component/manual-test docs for this adaptation's effective behavior.
 
 Upstream uses TypeScript parameter properties and `tsx` in its own test scripts.
 Pure checks can use Node `--experimental-transform-types` in a hard-capped scope.
-SDK tests must use an exact compatible disposable SDK fixture, not the repository's
-older installed dependencies. No test or install may bypass shared-host limits.
+SDK tests must use an exact compatible disposable SDK fixture; the root manifest
+and CI workflow own development and compatibility versions. No test or install
+may bypass shared-host limits.
 The original tests describe upstream behavior; passing them is not evidence that
 pi-setup's stricter policy or real provider compatibility has been accepted.

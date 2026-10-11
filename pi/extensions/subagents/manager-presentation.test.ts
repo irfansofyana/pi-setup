@@ -101,7 +101,7 @@ test("completion grace clock renders the collapsed summary before it stops", () 
     assert.match(f.render().join("\n"), /map/);
     time += 5000; const before = f.renders; ticks[0]();
     assert.ok(f.renders > before); assert.equal(clears, 1);
-    assert.equal(f.render().length, 1); assert.match(f.render()[0], /2 sub-agents completed/);
+    assert.equal(f.render().length, 1); assert.match(f.render()[0], /2 subagents completed/);
     f.component.handleMouse({ type: "click", button: "left", y: 0 });
     assert.match(f.render().join("\n"), /Main/);
     assert.equal(f.opens, 0, "summary expands without choosing a recipient");

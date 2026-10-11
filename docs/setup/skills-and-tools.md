@@ -5,9 +5,9 @@ The aggregate package loads its declared `skills/` resources directly. Install t
 ## Bundled skills
 
 - `pi-setup` — audit and approval-gated migration workflow.
-- `my-web-search` — provider-neutral research method used by the main agent and preloaded by Ciung.
+- `my-web-search` — provider-neutral research method used by the main agent and preloaded by the bundled `researcher` role.
 
-Neither bundled skill needs a separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by Ciung, and must be removed only after an explicit audit and approval.
+Neither bundled skill needs a separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by the bundled researcher, and must be removed only after an explicit audit and approval.
 
 ## Core personal skills
 

@@ -10,7 +10,9 @@
 | MCP status | `/mcp` |
 | Native MCP setup (shell) | `pi mcp add <name> -- <command> [args...]` |
 | MCP tools/exposure | `/mcp`, then select a server |
-| Subagent team/status/settings | `/agents` |
+| Subagent settings | `/agents` |
+| Subagent messages, steering and follow-up | `/agents tasks [path]` |
+| Exact-run controls and confirmed retained-thread cleanup | `/agents fleet`, `/agents reap` |
 | Allowed subagent models | `/scoped-models` |
 | Headroom status | `/headroom status` |
 | Hindsight diagnose | `/hindsight diagnose` |
@@ -30,15 +32,15 @@ The root manifest loads `pi/prompts/*.md` directly from the installed package. T
 
 | Command | Purpose | Default boundary |
 | --- | --- | --- |
-| `/research <topic>` | 2–3 parallel Ciung lanes, focused queries, fetched evidence | Findings in chat; no edits |
-| `/research-fit <capability>` | Ciung public constraints + Laya local feasibility | Proposal only |
+| `/research <topic>` | 2–3 parallel researcher lanes, focused queries, fetched evidence | Findings in chat; no edits |
+| `/research-fit <capability>` | Researcher public constraints + scout local feasibility | Proposal only |
 | `/research-gap <feature and references>` | User-visible parity and gap matrix | Analysis only |
 | `/plan-change <change>` | Acceptance criteria, vertical slices, verification, risks | Wait for implementation approval |
 | `/debug <symptom>` | Reproduction, discriminating checks, root-cause evidence | Diagnosis only unless a fix is requested |
-| `/review-change [base or focus]` | Independent Prabu standards/spec lanes | Read-only; parent owns test execution |
+| `/review-change [base or focus]` | Independent reviewer standards/spec lanes | Read-only; parent owns test execution |
 | `/push-changes [scope and destination]` | Scoped commit and ordinary branch push | No PR/MR unless explicitly requested |
 
-Research, planning, mapping, and review lanes require the reviewed global roles from [Subagent team](subagents.md); package prompts do not deploy agents. Follow that guide's isolation requirements before invoking specialists in an untrusted repository. Research uses bundled `my-web-search`; `diagnosing-bugs` and `pr` are optional installed skills, not new package requirements. Templates do not change permission policy; their instructions are not a sandbox or enforced security boundary. Missing CLIs or skills are not installed implicitly.
+Research, planning, mapping, and review lanes use the package-owned native roles from [Subagent team](subagents.md); package prompts do not deploy agents. The extension loads bundled roles directly; global copies are unnecessary. Follow that guide's trust requirements before invoking specialists in an untrusted repository. Research uses bundled `my-web-search`; `diagnosing-bugs` and `pr` are optional installed skills, not new package requirements. Templates do not change permission policy; their instructions are not a sandbox or enforced security boundary. Missing CLIs or skills are not installed implicitly.
 
 Examples:
 
@@ -90,8 +92,8 @@ Smoke-test prompts:
 
 ```text
 /btw what is current task context?
-Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
-Run Ciung (`researcher`) and Laya (`code-mapper`) in parallel for this task, then reconcile their findings before proposing changes.
+Ask scout to explain this repository's setup-document ownership. Do not edit anything.
+Run researcher and scout in parallel for this task, then reconcile their findings before proposing changes.
 Use my-web-search to find current native Pi MCP docs.
 Create a Mermaid diagram of this repository setup.
 Review README.md for clarity and missing setup steps.
@@ -130,6 +132,13 @@ The Headroom child bridge requires the audited Pi SDK `1.1.0`; use an isolated f
 
 `offline-smoke.mjs` also serializes its test files and bounds each Node heap, but still needs an outer process-tree memory/CPU limit on a shared host. Keep live settings, services, installed sources and credentials out of test fixtures.
 
+The [CI workflow](../../.github/workflows/test.yml) owns exact validation versions
+and the serial task-panel compatibility job: Pi 1.0.0/1.0.4/1.1.0, 2 GiB hard RAM,
+no swap, 2 CPUs and bounded runtime. Current npm test scripts use
+`--experimental-transform-types`; local Node 26.8.1 rejects that flag. Use the
+workflow's pinned Node versions for those scripts until the launcher is updated.
+Static `node --check` does not load the SDK, typecheck or verify terminal behavior.
+
 ## Troubleshooting
 
 | Problem | Fix |
@@ -148,6 +157,10 @@ The Headroom child bridge requires the audited Pi SDK `1.1.0`; use an isolated f
 | Duplicate command/tool such as `/caveman` | Use the bundled `pi-setup` skill to identify first-party package and manual loaders; back up and remove only the explicitly approved manual duplicate |
 | Transcript blinks or will not scroll | Update theme-owned `signature.ts`; offscreen header animation must pause to preserve scrollback |
 | Theme not applied | Confirm the first-party package exposes the theme and inspect `/settings`; do not overwrite settings or copy a theme manually |
+| Native subagents missing | Check explicit opt-out and configured Tintinweb sources; follow the [cutover audit](subagents.md#native-runtime-cutover) before removing anything |
+| Subagent progress reminder says execution continues | This is a report-only deadline, not a failed or stopped worker; inspect `/agents tasks` or use `agent_wait` |
+| Completed rows disappear but capacity stays full | The idle dock only folds rows; retained sessions still occupy capacity. Review `/agents reap` before confirming cleanup |
+| Message delivery is uncertain or the target run changed | The draft is retained. Inspect the recipient; uncertain delivery requires **R** while browsing before retry. A stale run requires reopening the composer |
 
 ## Maintenance
 
@@ -160,6 +173,37 @@ pi list
 After changing extensions, themes, prompt templates, MCP config, permission policy, or skills: run `/reload` or restart Pi. After changing environment variables, restart Pi so process inherits new values; `/reload` alone does not refresh shell environment.
 
 First-party package updates change repository-owned extensions, themes, skills, and prompt templates. Companion packages update independently. Neither path should rewrite user-owned settings/config/state; re-run the bundled `pi-setup` audit and approve any migration separately.
+
+## Release preparation
+
+`package.json` and the root lockfile prepare **0.7.0 (unreleased)**. The install
+examples retain the existing `v0.6.0` tag until a reviewed `v0.7.0` is published.
+This version bump creates no tag or release and does not update a live installation.
+
+Changes since `main` include default native subagents with four bundled roles,
+approved custom definitions, scoped builder worktrees, Goal/Prompt Loop integration
+and parent Headroom routing. The Subagents dock folds completed rows and provides
+live messages, per-agent reading state, unread indicators, steering/follow-up and
+delivery receipts. Only two companions remain required. Optional outcome storage
+does not persist child conversations or enable seamless reload recovery.
+
+Documentation/package checks on 2026-10-12: package contracts passed 11/11 and
+prompt contracts passed 9/9, including native prompt discovery. These checks load
+no child sessions and make no provider calls; they do not validate the task panel.
+
+Before tagging:
+
+- Run package/prompt contracts, focused subagent regressions and the supported
+  Node/Pi CI matrix; resolve failures against the exact release commit.
+- Exercise the real terminal: held arrows, completion during selection, resize,
+  paste, key remapping, draft recovery, unknown delivery and stacked overlays.
+- Verify spawn/steer/follow-up/results/stop/reap, retained capacity and reload
+  cleanup with disposable, resource-bounded sessions and approved credentials.
+- Keep [verification evidence and gaps](../../pi/extensions/subagents/parity.md#verification-boundary)
+  current. The Phase 1/2 SDK/UI checks remain pending; earlier test counts do not
+  establish acceptance of the replacement task panel.
+- Review the native cutover instructions, then publish the reviewed tag only
+  when explicitly requested. Update install examples after publication.
 
 ## Migration rollback
 

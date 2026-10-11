@@ -84,7 +84,7 @@ resource-capped native runtime for manual acceptance.
 Phase 2 follow-up (2026-10-12): implemented per-agent reading state and unread
 indicators, explicit steer/follow-up modes, receipt-preserving controls with stale
 run rejection and uncertain-delivery retry handling, short labels and simplified
-dock details. The completion summary uses “N sub-agents completed.” Added tests
+dock details. The completion summary uses “N subagents completed.” Added tests
 for queued human follow-up through orchestration, serialized run fences, reading
 state, late observer cleanup and UI delivery recovery. **Runtime tests, typecheck
 and interactive acceptance remain unexecuted** under the same host constraints
@@ -136,4 +136,4 @@ separate checks.
 Pending: real TUI resizing/keyboard/fonts/theme coexistence; actual OAuth/provider,
 Headroom and installed FFF/web behavior; broad CI and Node/Pi floor matrix. Follow
 resource-capped manual acceptance. No global activation,
-companion removal, configuration migration, commit or push was performed.
+companion removal or configuration migration is implied by these checks.

@@ -22,6 +22,7 @@ allowlists and worktrees are not an OS sandbox or secret detector.
 ## Commands and definitions
 
 - `/agents` — settings.
+- `/agents tasks [path]` — live messages and dedicated steer/follow-up composer.
 - `/agents types` — inspect/edit bundled roles, user overrides and custom types.
 - `/agents tree` — optional advanced terminal live viewer.
 - `/agents fleet` — exact-run controls, including RPC-compatible dialogs.
@@ -56,7 +57,7 @@ Main displays a compact Claude-style task list with short names, state, elapsed
 time, unread counts and current activity. Usage details live in the inspector.
 Completed/stopped rows fold after five seconds when you
 are at the main prompt. When all tasks finish, the dock becomes a single review
-summary: **1 sub-agent completed** or **N sub-agents completed**. Failed and paused tasks remain visible. Entering task selection expands
+summary: **1 subagent completed** or **N subagents completed**. Failed and paused tasks remain visible. Entering task selection expands
 the retained list; rows keep their order as workers finish. Open details stay open.
 
 In the integrated theme, **←** or **↓** from an empty focused prompt enters task
@@ -107,7 +108,7 @@ manual terminal acceptance limits are tracked in the component's
 
 Native runtime adapts `championswimmer/pi-subagent-manager` 0.20.0, pinned commit
 `1f037b1` (MIT). Without configuration, in-memory defaults are 3 executing
-task, 4 threads, 8 result slots and 4 pending. Persistence, schedules and workflows
+tasks, 4 threads, 8 result slots and 4 pending. Persistence, schedules and workflows
 stay off. No config is generated during package loading.
 
 Optional global `~/.pi/agent/subagents-native.json` overrides runtime defaults.
@@ -212,15 +213,16 @@ and questions, not a whole-repository scan. Give builder explicit worktree file
 scopes and acceptance criteria. Give reviewer actual diff, affected-file context,
 acceptance criteria and exact command output; reviewer cannot execute verification.
 
-Example builder request through the compatibility `Agent` tool:
+Example builder request through `agent_spawn` (the compatibility `Agent` tool
+does not accept the required `files` scope):
 
 ```javascript
-Agent({
-  subagent_type: "builder",
-  description: "Implement one reviewed behavior change",
-  prompt: "Implement only the supplied acceptance criteria; report tests not run.",
+agent_spawn({
+  path: "implement-feature",
+  type: "builder",
+  task: "Implement only the supplied acceptance criteria; report tests not run.",
   files: ["src/feature.ts", "tests/feature.test.ts"],
-  run_in_background: true
+  wait: false
 });
 ```
 

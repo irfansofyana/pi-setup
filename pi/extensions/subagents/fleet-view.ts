@@ -93,7 +93,7 @@ export function fleetOverview(
   if (!workers.length) {
     const completed = folded.filter(thread => thread.state === "completed").length;
     const stopped = folded.length - completed;
-    const summary = [completed ? `✓ ${completed} sub-agent${completed === 1 ? "" : "s"} completed` : "",
+    const summary = [completed ? `✓ ${completed} subagent${completed === 1 ? "" : "s"} completed` : "",
       stopped ? `${stopped} stopped` : ""].filter(Boolean).join(" · ");
     return [{ text: fit(`${summary}${foldedUnread ? ` · ${foldedUnread} new` : ""} · ${reviewHint}`), action: "review" }];
   }
@@ -126,7 +126,7 @@ export function fleetOverview(
   }
   // Tiny docks show the recipient, never just help for an invisible selection.
   if (limit === 1 && selected) return [workerRow(entries[selectedIndex], selectedIndex)];
-  const heading = fit(`Tasks · ${totals}`);
+  const heading = fit(`Subagents · ${totals}`);
   const rows: AgentRow[] = [{ text: heading, parts: [{ text: heading, tone: "accent" }] }];
   if (limit === 1) return rows;
   const room = limit - 2;
@@ -141,7 +141,7 @@ export function fleetOverview(
   const foldedLabel = [folded.filter(thread => thread.state === "completed").length,
     folded.filter(thread => thread.state === "stopped").length]
     .map((count, i) => count ? `${count} ${i === 0 ? "completed" : "stopped"}` : "").filter(Boolean).join(" · ");
-  rows.push({ text: fit(`${hidden ? `+${hidden} more · ` : ""}${foldedLabel ? `${foldedLabel} · ` : ""}${foldedUnread ? `${foldedUnread} new · ` : ""}${selected ? "↑↓ select · Enter view · Esc Main" : folded.length ? reviewHint : options.keyboard === false ? "/agents tasks · inspect and steer" : "←/↓ tasks · click to view"}`),
+  rows.push({ text: fit(`${hidden ? `+${hidden} more · ` : ""}${foldedLabel ? `${foldedLabel} · ` : ""}${foldedUnread ? `${foldedUnread} new · ` : ""}${selected ? "↑↓ select · Enter view · Esc Main" : folded.length ? reviewHint : options.keyboard === false ? "/agents tasks · inspect and steer" : "←/↓ subagents · click to view"}`),
     ...(folded.length ? { action: "review" as const } : {}) });
   return rows.slice(0, limit);
 }

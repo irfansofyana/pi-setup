@@ -11,7 +11,7 @@ test("fleet shows all states, safe latest activity, metrics and identity-bound d
   const workers = [thread("/root/done", "completed"), thread("/root/queued"), thread("/root/active"), thread("/root/paused", "paused")];
   const before = workers.map(worker => worker.path);
   const rows = fleetOverview(workers, 12, path => ({ runState: path.endsWith("queued") ? "queued" : "running", turns: 2, toolUses: 3 }), 12000);
-  assert.match(rows[0].text, /1 running · 1 queued · 1 paused · 1 done/);
+  assert.equal(rows[0].text, "Subagents · 1 running · 1 queued · 1 paused · 1 done");
   assert.match(rows[1].text, /active.*running.*12.0s/);
   assert.doesNotMatch(rows[1].text, /turns|tokens|tools/);
   assert.equal(rows[1].selection?.path, "/root/active");
@@ -29,7 +29,7 @@ test("bounded fleet keeps hidden/queued counts and keyboard help, excluding root
     assert.ok(rows.length <= size);
     assert.match(rows[0].text, /16 queued/);
     assert.doesNotMatch(rows[0].text, /0 running/);
-    if (size > 1) assert.match(rows.at(-1)!.text, /more.*←\/↓ tasks/);
+    if (size > 1) assert.match(rows.at(-1)!.text, /more.*←\/↓ subagents/);
     assert.ok(rows.every(row => row.selection?.path !== "/root"));
   }
   assert.deepEqual(fleetOverview([], 12), []);
@@ -41,7 +41,7 @@ test("idle completion grace folds into a review summary without hiding attention
   assert.ok(render(5999).some(row => row.selection?.path === done.path));
   const folded = render(6000);
   assert.equal(folded.length, 1);
-  assert.match(folded[0].text, /1 sub-agent completed/);
+  assert.match(folded[0].text, /1 subagent completed/);
   assert.equal(folded[0].action, "review");
   const mixed = render(6000, [done, thread("/root/failed", "failed"), thread("/root/paused", "paused")]);
   assert.ok(mixed.some(row => row.selection?.path === "/root/failed"));
@@ -62,11 +62,11 @@ test("short display names and unread badges never replace lifetime routing ident
   assert.match(namedPath[1].text, /research/); assert.doesNotMatch(namedPath[1].text, /\/root\//);
 });
 
-test("completed summary pluralizes sub-agents and retains unread counts when other work is active", () => {
+test("completed summary pluralizes subagents and retains unread counts when other work is active", () => {
   const done = [thread("/root/one", "completed"), thread("/root/two", "completed")];
   const options = { collapseCompleted: true, unread: (worker: ThreadView) => worker.state === "completed" ? 1 : 0 };
   const summary = fleetOverview(done, 10, undefined, 6000, options);
-  assert.match(summary[0].text, /2 sub-agents completed · 2 new/);
+  assert.match(summary[0].text, /2 subagents completed · 2 new/);
   const mixed = fleetOverview([...done, thread("/root/active")], 10, undefined, 6000, options);
   assert.match(mixed.at(-1)!.text, /2 completed · 2 new/);
 });

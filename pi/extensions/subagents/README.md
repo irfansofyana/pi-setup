@@ -16,7 +16,8 @@ launcher or synthetic demo command is shipped.
   scout. Upstream-format custom Markdown types and settings-only YAML overrides
   live under `<agent-dir>/subagent-manager/agents/`. Trusted projects may supply
   `.pi/agent/subagent-manager/agents/`; untrusted project definitions never load.
-  Retained threads keep their admitted definition snapshots across reload.
+  Retained threads keep their admitted definition snapshots across `/agents reload`;
+  package `/reload` drains workers and replaces the runtime.
   Ordered exact model preferences and the configured picker policy apply; missing
   required custom resources fail, never widen authority silently. Bundled local
   roles need no companion package or external skill: built-in read/grep/find/ls
@@ -41,7 +42,8 @@ launcher or synthetic demo command is shipped.
   does not start another turn. Prompt Loop rejects stale resumed-run completions.
 - Upstream `agent_types`, `agent_spawn`, `agent_wait`, `agent_steer`, `agent_status`,
   `agent_stop`, `agent_output` share the same manager as legacy tools/protocol.
-  `/agents` opens upstream settings; `/agents types`, `import`, `reload`, `reap`
+  `/agents tasks` opens the dedicated transcript/composer panel. `/agents` opens
+  settings; `/agents types`, `import`, `reload`, `reap`
   and `tree` expose its editor, selected migration, reload, confirmed cleanup and
   live viewer. `/agents fleet` retains exact-run controls and consume/close.
   Import asks the current root model to migrate only selected sources; originals
@@ -81,18 +83,18 @@ launcher or synthetic demo command is shipped.
 ## Inline navigation
 
 ```text
-Tasks · 1 running · 1 queued
-● research · running · researcher · 2 turns · 3 tools · 2.4k tokens · 12.0s
-  └ Tool: web_fetch · Research official docs
-○ review · queued · reviewer · 0 turns · 0 tools · 1.0s
-  └ Waiting for an execution slot · Review the change
-←/↓ tasks · click to view
+Subagents · 1 running · 1 queued
+● research · running · researcher · 12.0s
+  └ Tool: web_fetch
+○ review · queued · reviewer · 1.0s
+  └ Waiting for an execution slot
+←/↓ subagents · click to view
 ```
 
 - Main shows a bounded task list with short display names, role colors, state,
   unread counts, elapsed time and a separate activity line. Completed/stopped rows fold after five seconds
-  at the idle prompt; all-settled fleets show “1 sub-agent completed” or
-  “N sub-agents completed” with a review action. Failed/paused
+  at the idle prompt; all-settled fleets show “1 subagent completed” or
+  “N subagents completed” with a review action. Failed/paused
   tasks remain visible. Expanding restores every retained task in creation order;
   no completion collapse occurs while selecting. Open details stay open.
   Full/Minimal controls the idle dock's height; selection can reach every task.

@@ -18,10 +18,10 @@ If unavailable, follow the workflow below; do not install anything implicitly.
    If reproduction is unavailable, state what is missing rather than guessing.
 3. Rank hypotheses. For each, identify a discriminating check; execute the
    smallest safe check and update the hypothesis from actual results.
-4. Use trusted global code-mapper (Laya) only when execution-path mapping helps.
-   Use inherit_context: false and max_turns: 20 with a self-contained evidence
-   packet. Require output_transcript: false in the deployed global role
-   configuration, not as an Agent argument. Keep this role read-only and network-free.
+4. Use the package-owned native scout only when execution-path mapping helps.
+   Use agent_spawn with wait: false and maxTurns: 20 and a self-contained evidence
+   packet. Bundled role policy enforces fresh context and no persisted child
+   transcripts. Keep this role read-only and network-free.
    If unavailable, report the limitation; do not substitute project agents or
    broader built-in roles. Use isolated execution outside untrusted repositories.
 5. The parent owns command execution and test evidence. Redact credentials and

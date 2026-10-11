@@ -8,6 +8,13 @@ This is a source review and proposal, not an installation, benchmark, runtime
 acceptance result, or approval to change local configuration. Read the extension,
 CLI, shared helpers, bundled skill, manifest and complete repository tree.
 
+**Implementation update (2026-10-12):** the comparison below describes baseline
+`44962ee`. Phase 1/2 subsequently added completion collapse, failure containment,
+reading state/unread indicators and explicit steer/follow-up receipts. Current
+labels use “Subagents” and “N subagents completed.” See [current behavior](subagents.md#inline-navigation)
+and [verification gaps](../../pi/extensions/subagents/parity.md#verification-boundary).
+Persistent workers and durable child conversations remain future design work.
+
 ## Recommendation
 
 Adopt explicit message-delivery choices, clearer identity and lifecycle presentation,
@@ -180,7 +187,7 @@ The reported screenshot has task selection active: the selected marker, Main row
 and Esc hint indicate browsing. Expanded completed rows are useful in that state.
 The missing distinction is between actively browsing tasks and the idle prompt.
 
-## Proposed terminal experience
+## Proposed terminal experience (historical proposal)
 
 Draft recommendation only; this section does not implement or activate behavior.
 
@@ -192,7 +199,7 @@ Draft recommendation only; this section does not implement or activate behavior.
 - When every task is done, use one line instead of several completed rows:
 
   ```text
-  ✓ 4 tasks completed · ←/↓ review
+  ✓ 4 subagents completed · ←/↓ review
   ```
 
 - Show `/agents tasks` as the fallback entry point when editor navigation is

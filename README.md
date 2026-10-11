@@ -26,6 +26,10 @@ Inside Pi:
 /reload
 ```
 
+This branch prepares **0.7.0**; its tag is not published yet. After publication and review,
+install it with `pi install git:github.com/irfansofyana/pi-setup@v0.7.0`.
+The inventory below describes 0.7.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
+
 Init audits and proposes numbered changes; approval comes before mutation.
 Doctor is read-only. Neither command changes settings directly.
 Existing devices use the same install, then [review migration proposals](docs/setup/installation.md#existing-device-migration).
@@ -41,7 +45,7 @@ Existing devices use the same install, then [review migration proposals](docs/se
 - **Workflow:** persisted `/goal`, paced `/loop`, side-channel `/btw`, and `/caveman` response style.
 - **Prompts:** seven packaged research, planning, debugging, review, and push workflows.
 - **Delegation:** bundled researcher, scout, builder and reviewer; `code-mapper` aliases scout. No manual role deployment.
-- **Native subagents:** enabled by default; `/agents` settings/tree UI, four bundled roles, custom types and scoped worktrees. Persistence, schedules and workflows remain opt-in; existing legacy companions take precedence.
+- **Native subagents:** enabled by default; compact Subagents dock, `/agents tasks` live messages, steering/follow-up, unread indicators and scoped builder worktrees. Outcome persistence, schedules and workflows remain opt-in; configured Tintinweb sources suppress native registration.
 - **Setup:** bundled audit/proposal/migration skill; native Pi MCP guidance.
 
 Pi loads declared extensions, themes, skills, and prompts from the package.
@@ -85,8 +89,8 @@ Subagents are package-owned; legacy Tintinweb removal requires separate approval
 | [Configuration](docs/setup/configuration.md) | Ownership, paths, auth, themes, Signature UI |
 | [MCP](docs/setup/mcp.md) | Native servers, search, OAuth, bearer auth |
 | [Permissions](docs/setup/permissions.md) | Trust boundaries and manual approvals |
-| [Subagent team](docs/setup/subagents.md) | Roles, reviewed deployment, trust |
-| [Agent packaging research](docs/setup/agent-packaging-research.md) | Why upgrades do not auto-deploy global agents |
+| [Subagent team](docs/setup/subagents.md) | Native roles, task panel, migration, trust |
+| [Agent packaging research](docs/setup/agent-packaging-research.md) | Bundled roles and user-owned legacy files |
 | [Local extensions](docs/setup/local-extensions.md) | Todos, structured questions, component behavior/config/state |
 | [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Memory scopes, tools, hygiene |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |

@@ -2,6 +2,12 @@
 
 Research for replacing `@tintinweb/pi-subagents` with a package-owned extension. This document records evidence and design options; it does **not** authorize implementation, package removal, or live configuration changes.
 
+**Historical snapshot (2026-10-07):** version, companion, global-role and command
+claims below describe the pre-native baseline. The branch now ships default native
+roles through an extension-owned loader and no longer requires Tintinweb. Use
+[current setup](subagents.md) and [implementation/verification status](../../pi/extensions/subagents/parity.md)
+for present behavior. Historical test counts do not validate later UI changes.
+
 ## Research contract
 
 - Decision: whether and how to own subagent execution, visibility, and control inside `pi-setup`.
@@ -50,7 +56,7 @@ The theme smoke loads real Pi extension/TUI code with controlled fixture events;
 - Current role tools are intentionally narrower than generic Pi agents. Preserve FFF search, native Web Research, Headroom provider routing, no nested-agent tools, and role-specific mutation restrictions.
 - Existing documentation already describes FleetView, live viewers, and steering through Tintinweb. Ownership and clearer control UX are distinct goals from adding those basic capabilities.
 
-Owning sources: [Subagent team](subagents.md), [agent packaging research](agent-packaging-research.md), [canonical templates](../../pi/agents), [setup procedure](../../skills/pi-setup/SKILL.md).
+Current owning sources: [Subagent team](subagents.md), [agent packaging research](agent-packaging-research.md), [bundled native definitions](../../pi/extensions/subagents/agents), [setup procedure](../../skills/pi-setup/SKILL.md). The original `pi/agents/` templates are retired.
 
 ### Existing UI constraints
 
@@ -216,7 +222,7 @@ Removing the companion from the manifest alone would break package behavior.
 | Headroom | Shared process `ModelRuntime` provider-routing leases | Reuse correctly with SDK; reconstruct explicit routing in process backend |
 | Setup/package contracts | Three separate companions; procedural approvals/backups | Update manifest, owning docs, setup skill, tests only after design approval |
 
-Sources: [Goal evaluator](../../pi/extensions/goal-loop/evaluator.ts), [Prompt Loop](../../pi/extensions/loop/index.ts), [Headroom](../../pi/extensions/headroom/index.ts), [package tests](../../tests/package-contract.test.mjs), [role tests](../../pi/agents/agent-templates.test.ts).
+Current sources: [Goal evaluator](../../pi/extensions/goal-loop/evaluator.ts), [Prompt Loop](../../pi/extensions/loop/index.ts), [Headroom](../../pi/extensions/headroom/index.ts), [package tests](../../tests/package-contract.test.mjs), [native role tests](../../pi/extensions/subagents/agents.test.ts). The original `pi/agents/agent-templates.test.ts` was retired with the legacy templates.
 
 Migration must preserve unknown user keys, installed model pins, existing global roles, sessions/results/logs, unrelated companions, MCP, credentials, and selected theme. No automatic package removal, transcript cleanup, global template deployment, or postinstall mutation.
 
