@@ -52,25 +52,54 @@ from upstream behavior.
 
 ## Inline navigation
 
-Main displays a compact Claude-style task list with state, usage, elapsed time
-and current activity. Rows keep their order as workers finish.
+Main displays a compact Claude-style task list with short names, state, elapsed
+time, unread counts and current activity. Usage details live in the inspector.
+Completed/stopped rows fold after five seconds when you
+are at the main prompt. When all tasks finish, the dock becomes a single review
+summary: **1 sub-agent completed** or **N sub-agents completed**. Failed and paused tasks remain visible. Entering task selection expands
+the retained list; rows keep their order as workers finish. Open details stay open.
 
 In the integrated theme, **←** or **↓** from an empty focused prompt enters task
 selection. **↑/↓** chooses; **Enter** opens the live detail panel. Fullscreen
 mouse users can click a task. **`/agents tasks`** opens the panel with any theme.
 
-The panel shows wrapped messages, tool activity, model and metrics. **Enter** or
-**Tab** opens its dedicated steering composer; **Enter** sends through the exact-run
-root service. **Esc** leaves the composer, then closes the panel. Main keeps its
+The panel shows the full target path, wrapped messages, tool activity, model and
+metrics. While browsing, **S** chooses **Steer current work**; **F** chooses
+**Follow up after completion**, which queues a distinct run behind active work
+or continues a retained session. **Enter** or **Tab** opens the current mode's
+composer; the configured submit binding sends through the exact-run root service.
+**Esc** leaves the composer, then closes the panel. Main keeps its
 own prompt. **←/→** switches tasks while browsing or with an empty draft;
 **↑/↓**, **PgUp/PgDn** scroll history, and **End** follows live output.
 
-Agent drafts survive closing/switching; rejection retains the message. Existing
-lifetime budgets apply. Commands typed in the steering composer are agent text.
+Reading position, live-follow mode, delivery mode and drafts survive closing and
+switching within the session. New agent text adds an unread indicator without
+moving a scrolled view; following the latest messages clears it. Unread tracking
+uses bounded in-memory text fingerprints, with no transcript persistence.
+
+The composer captures the selected lifetime and run. A stale target rejects and
+keeps the draft; reopen the composer to review the new target. Queued, accepted
+and delivered receipts do not prove model consumption. Uncertain delivery keeps
+the draft and blocks resending until you inspect the task and press **R** while
+browsing to allow retry. Retained sessions still use remaining lifetime budgets.
+Commands typed in the steering composer are agent text.
 Normal editing, autocomplete, dialogs and registered shortcuts keep their keys;
 release events never navigate twice. Navigation does not stop or forget workers.
 Use `/agents fleet` for additional controls and confirmed `/agents reap` for cleanup.
+Collapsing the dock does not free thread capacity, consume results or discard
+follow-up context. Clicking the completed summary expands the list. Rendering,
+input and observer failures are contained in the task UI, with a bounded diagnostic
+and `/agents tasks` recovery. Drafts retain their last successfully saved content.
 See [inline controls and limits](../../pi/extensions/subagents/README.md#inline-navigation).
+
+Spawn reporting deadlines produce informational progress reminders: elapsed time,
+queue state or latest observed status and its age. They do not establish inactivity
+or stop execution. Progress does not reset the reporting timer; hard execution
+deadlines and turn/usage budgets remain separate.
+
+After updating the extension, run `/reload` or restart Pi. UI compatibility and
+manual terminal acceptance limits are tracked in the component's
+[verification boundary](../../pi/extensions/subagents/parity.md#verification-boundary).
 
 <a id="install-the-trusted-templates"></a>
 

@@ -12,11 +12,12 @@ test("fleet shows all states, safe latest activity, metrics and identity-bound d
   const before = workers.map(worker => worker.path);
   const rows = fleetOverview(workers, 12, path => ({ runState: path.endsWith("queued") ? "queued" : "running", turns: 2, toolUses: 3 }), 12000);
   assert.match(rows[0].text, /1 running · 1 queued · 1 paused · 1 done/);
-  assert.match(rows[1].text, /active.*running.*2 turns.*3 tools.*2.4k tokens.*12.0s/);
+  assert.match(rows[1].text, /active.*running.*12.0s/);
+  assert.doesNotMatch(rows[1].text, /turns|tokens|tools/);
   assert.equal(rows[1].selection?.path, "/root/active");
   assert.equal(rows[1].selection?.identity, "/root/active");
   assert.ok(rows.some(row => row.text.includes("Waiting for an execution slot")));
-  assert.ok(rows.some(row => row.text.includes("Tool: web_fetch · Research official sources")));
+  assert.ok(rows.some(row => row.text.includes("Tool: web_fetch")));
   assert.deepEqual(workers.map(worker => worker.path), before);
   for (const row of rows) if (row.parts) assert.equal(row.parts.map(part => part.text).join(""), row.text);
 });
@@ -26,11 +27,48 @@ test("bounded fleet keeps hidden/queued counts and keyboard help, excluding root
   for (let size = 1; size <= 12; size++) {
     const rows = fleetOverview(workers, size, () => ({ runState: "queued" }));
     assert.ok(rows.length <= size);
-    assert.match(rows[0].text, /0 running · 16 queued/);
+    assert.match(rows[0].text, /16 queued/);
+    assert.doesNotMatch(rows[0].text, /0 running/);
     if (size > 1) assert.match(rows.at(-1)!.text, /more.*←\/↓ tasks/);
     assert.ok(rows.every(row => row.selection?.path !== "/root"));
   }
   assert.deepEqual(fleetOverview([], 12), []);
+});
+
+test("idle completion grace folds into a review summary without hiding attention", () => {
+  const done = { ...thread("/root/done", "completed"), updatedAt: 1000 };
+  const render = (now: number, workers = [done]) => fleetOverview(workers, 10, undefined, now, { collapseCompleted: true });
+  assert.ok(render(5999).some(row => row.selection?.path === done.path));
+  const folded = render(6000);
+  assert.equal(folded.length, 1);
+  assert.match(folded[0].text, /1 sub-agent completed/);
+  assert.equal(folded[0].action, "review");
+  const mixed = render(6000, [done, thread("/root/failed", "failed"), thread("/root/paused", "paused")]);
+  assert.ok(mixed.some(row => row.selection?.path === "/root/failed"));
+  assert.ok(mixed.some(row => row.selection?.path === "/root/paused"));
+  assert.ok(!mixed.some(row => row.selection?.path === done.path));
+  assert.match(mixed.at(-1)!.text, /1 completed/);
+  done.state = "running";
+  assert.ok(render(7000).some(row => row.selection?.path === done.path), "follow-up returns to the live dock");
+});
+
+test("short display names and unread badges never replace lifetime routing identity", () => {
+  const worker = thread("/root/long/path/research");
+  const rows = fleetOverview([worker], 6, () => ({ name: "Release notes" }), 12000, { unread: () => 2 });
+  const row = rows.find(item => item.selection?.path)!;
+  assert.match(row.text, /Release notes.*2 new/);
+  assert.equal(row.selection?.path, worker.path); assert.equal(row.selection?.identity, worker.costId);
+  const namedPath = fleetOverview([worker], 6, () => ({ name: worker.path }));
+  assert.match(namedPath[1].text, /research/); assert.doesNotMatch(namedPath[1].text, /\/root\//);
+});
+
+test("completed summary pluralizes sub-agents and retains unread counts when other work is active", () => {
+  const done = [thread("/root/one", "completed"), thread("/root/two", "completed")];
+  const options = { collapseCompleted: true, unread: (worker: ThreadView) => worker.state === "completed" ? 1 : 0 };
+  const summary = fleetOverview(done, 10, undefined, 6000, options);
+  assert.match(summary[0].text, /2 sub-agents completed · 2 new/);
+  const mixed = fleetOverview([...done, thread("/root/active")], 10, undefined, 6000, options);
+  assert.match(mixed.at(-1)!.text, /2 completed · 2 new/);
 });
 
 test("activity remains visible on narrow terminals and every row fits by terminal cells", () => {

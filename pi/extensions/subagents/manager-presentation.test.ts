@@ -18,6 +18,7 @@ function fixture(mode = "tui", initiallyUnrelated = false) {
   const settings = { ...DEFAULT_MANAGER_SETTINGS };
   const widgets = new Map<string, any>(), listeners = new Set<any>();
   const sent: { path: string; text: string }[] = [], main: string[] = [];
+  const notices: { text: string; level: string }[] = [];
   const threads: ThreadView[] = ["map", "review"].map((name, i) => ({ path: `/root/${name}`, parent: "/root", owner: "/root",
     type: "scout", task: `Read ${name}`, state: "running", status: "Tool: read", createdAt: i + 1, updatedAt: 1, costId: name, output: `Output ${name}` }));
   const originalSubmit = (text: string) => main.push(text);
@@ -27,7 +28,11 @@ function fixture(mode = "tui", initiallyUnrelated = false) {
   let focus: unknown = initiallyUnrelated ? { ...root } : root, overlay = false, fallback = 0, opens = 0, renders = 0;
   let panel: TaskPanel | undefined;
   const overlays: any[] = [];
-  const service: any = { steer: async (path: string, text: string) => { sent.push({ path, text }); return threads.find(t => t.path === path); } };
+  const service: any = {
+    steer: async (path: string, text: string) => { sent.push({ path, text }); return threads.find(t => t.path === path); },
+    taskTarget: (selection: any) => ({ ...selection, threadId: "thread-test", runId: "run-test" }),
+    sendTask: async (target: any, _mode: string, text: string) => { sent.push({ path: target.path, text }); return { status: "accepted" }; },
+  };
   const tui: any = { terminal: { rows: 30, columns: 100 }, hasOverlay: () => overlay || overlays.length > 0, getFocusedComponent: () => focus,
     requestRender() { renders++; },
     showOverlay(component: any) {
@@ -45,7 +50,8 @@ function fixture(mode = "tui", initiallyUnrelated = false) {
     theme, setWidget(name: string, content: any) { widgets.set(name, content); },
     getEditorText: () => root.text, setEditorText() { throw Error("Main draft must not be changed"); },
     setEditorComponent() { throw Error("Main editor must not be replaced"); },
-    onTerminalInput(handler: any) { listeners.add(handler); return () => listeners.delete(handler); }, notify() {},
+    onTerminalInput(handler: any) { listeners.add(handler); return () => listeners.delete(handler); },
+    notify(text: string, level: string) { notices.push({ text, level }); },
   } };
   const presentation = createManagerPresentation({ settings: () => settings, threads: () => threads, service: () => service,
     isEditor: (value): value is typeof root => value === root,
@@ -61,7 +67,7 @@ function fixture(mode = "tui", initiallyUnrelated = false) {
     return !tui.hasOverlay() && focus === root && dispatchRootEditorInput(root, data) ? { consume: true } : undefined;
   };
   const choose = () => { input("\x1b[D"); input("\x1b[B"); input("\r"); };
-  return { presentation, settings, threads, widgets, listeners, root, main, sent, service, tui, ctx, input, choose, refresh, overlays,
+  return { presentation, settings, threads, widgets, listeners, root, main, sent, service, tui, ctx, input, choose, refresh, overlays, notices,
     render: (width = 140) => component?.render(width) ?? [], close: () => panel?.close(),
     get panel() { return panel; }, get component() { return component; }, get opens() { return opens; }, get renders() { return renders; }, get fallback() { return fallback; },
     set focus(value: unknown) { focus = value; }, set overlay(value: boolean) { overlay = value; } };
@@ -79,6 +85,84 @@ test("Kitty arrow release does not move selection twice; Enter release/repeat ne
     f.close(); await flush();
     f.input("\x1b[13;1:2u"); assert.equal(f.opens, 1);
   } finally { f.presentation.clear(f.ctx); }
+});
+
+test("completion grace clock renders the collapsed summary before it stops", () => {
+  const set = globalThis.setInterval, clear = globalThis.clearInterval, now = Date.now;
+  let time = 10000, clears = 0; const ticks: (() => void)[] = [];
+  Date.now = () => time;
+  (globalThis as any).setInterval = (tick: () => void) => { ticks.push(tick); return { unref() {} }; };
+  (globalThis as any).clearInterval = () => { clears++; };
+  let f: ReturnType<typeof fixture> | undefined;
+  try {
+    f = fixture();
+    for (const thread of f.threads) { thread.state = "completed"; thread.updatedAt = time; }
+    f.refresh(); assert.equal(ticks.length, 1);
+    assert.match(f.render().join("\n"), /map/);
+    time += 5000; const before = f.renders; ticks[0]();
+    assert.ok(f.renders > before); assert.equal(clears, 1);
+    assert.equal(f.render().length, 1); assert.match(f.render()[0], /2 sub-agents completed/);
+    f.component.handleMouse({ type: "click", button: "left", y: 0 });
+    assert.match(f.render().join("\n"), /Main/);
+    assert.equal(f.opens, 0, "summary expands without choosing a recipient");
+  } finally { f?.presentation.clear(f.ctx); Date.now = now; globalThis.setInterval = set; globalThis.clearInterval = clear; }
+});
+
+test("panel render failure restores Main and leaves its draft and callback intact", () => {
+  const f = fixture(); const submit = f.root.onSubmit, fg = f.ctx.ui.theme.fg;
+  try {
+    f.choose(); f.root.text = "keep main draft";
+    f.ctx.ui.theme.fg = () => { throw new TypeError("renderer failure"); };
+    assert.doesNotThrow(() => f.panel!.render(100));
+    assert.equal(f.overlays.length, 0); assert.equal(f.tui.getFocusedComponent(), f.root);
+    assert.equal(f.root.text, "keep main draft"); assert.equal(f.root.onSubmit, submit);
+    assert.match(f.notices.at(-1)!.text, /render.*TypeError/);
+    f.ctx.ui.theme.fg = fg; f.root.text = ""; f.choose();
+    assert.equal(f.overlays.length, 1, "a failed panel can be reopened");
+  } finally { f.ctx.ui.theme.fg = fg; f.presentation.clear(f.ctx); }
+});
+
+test("dock render failure falls back once and does not capture prompt input", () => {
+  const f = fixture(); const fg = f.ctx.ui.theme.fg;
+  try {
+    f.ctx.ui.theme.fg = () => { throw Error("renderer failure"); };
+    assert.doesNotThrow(() => f.render());
+    assert.match(f.render().join("\n"), /\/agents tasks/);
+    assert.equal(f.notices.length, 1);
+    assert.equal(f.input("\x1b[D"), undefined);
+    f.root.onSubmit("still usable"); assert.deepEqual(f.main, ["still usable"]);
+  } finally { f.ctx.ui.theme.fg = fg; f.presentation.clear(f.ctx); }
+});
+
+test("panel failure beneath another overlay removes only the failed task view", () => {
+  const f = fixture(); const fg = f.ctx.ui.theme.fg;
+  try {
+    f.choose(); const unrelated = { focused: true }; f.overlays.push(unrelated); f.focus = unrelated;
+    f.ctx.ui.theme.fg = () => { throw Error("render failed"); };
+    assert.doesNotThrow(() => f.panel!.render(100));
+    assert.deepEqual(f.overlays, [unrelated]); assert.equal(f.tui.getFocusedComponent(), unrelated);
+  } finally { f.ctx.ui.theme.fg = fg; f.presentation.clear(f.ctx); }
+});
+
+test("root Enter remapped to newline is never stolen by task selection", () => {
+  const f = fixture();
+  try {
+    getKeybindings().setUserBindings({ "tui.input.submit": "ctrl+s", "tui.input.newLine": "enter" });
+    f.input("\x1b[D"); f.input("\x1b[B");
+    assert.equal(f.input("\r"), undefined); assert.equal(f.opens, 0);
+  } finally { f.presentation.clear(f.ctx); }
+});
+
+test("a navigation input failure consumes that key before releasing the root hook", () => {
+  const f = fixture(); const autocomplete = f.root.isShowingAutocomplete;
+  try {
+    f.input("\x1b[D"); f.input("\x1b[B");
+    f.root.isShowingAutocomplete = () => { throw Error("editor status unavailable"); };
+    assert.equal(f.input("\r")?.consume, true, "the failing action must not become a Main submission");
+    assert.equal(f.opens, 0); assert.equal(f.notices.length, 1);
+    f.root.isShowingAutocomplete = autocomplete;
+    assert.equal(f.input("\r"), undefined, "subsequent input returns to Main");
+  } finally { f.root.isShowingAutocomplete = autocomplete; f.presentation.clear(f.ctx); }
 });
 
 test("held arrows move deliberately and clamp without wrapping to another recipient", () => {
@@ -149,8 +233,8 @@ test("task-panel messages use exact-run steering and cannot execute Main command
   const f = fixture(); const controls: any[] = [];
   const current: any = { runId: "run-active" };
   const scope: any = { get: () => f.threads[0], list: () => f.threads };
-  f.service.steer = createRootThreadService({ manager: { scope: () => scope }, handleFor: () => ({ threadId: "thread-bound" }), inspect: () => current } as any,
-    async request => { controls.push(request); return { version: 1, controlId: "control", runId: current.runId, status: "accepted" }; }).steer;
+  Object.assign(f.service, createRootThreadService({ manager: { scope: () => scope }, handleFor: () => ({ threadId: "thread-bound" }), inspect: () => current } as any,
+    async request => { controls.push(request); return { version: 1, controlId: "control", runId: current.runId, status: "accepted" }; }));
   try {
     f.choose(); await flush(); f.panel!.render(100);
     f.panel!.handleInput("\r"); f.panel!.handleInput("/reload"); f.panel!.handleInput("\r"); await flush();

@@ -9,6 +9,7 @@ type Options = {
   openDetails(selection: AgentSelection): unknown;
   changed(): void;
   metrics?(path: string): AgentMetrics | undefined;
+  unread?(thread: ThreadView): number;
 };
 
 /** Focuses a task row; never changes the root composer or its submission recipient. */
@@ -65,7 +66,8 @@ export function createInlineNavigation(options: Options) {
   }
   function view(maxLines = 12, width?: number, keyboard = true): AgentRow[] {
     reconcile();
-    return fleetOverview(workers(), maxLines, options.metrics, Date.now(), { width, keyboard, focused: picking && keyboard ? highlighted : undefined });
+    return fleetOverview(workers(), maxLines, options.metrics, Date.now(), { width, keyboard, collapseCompleted: !picking,
+      focused: picking && keyboard ? highlighted : undefined, unread: options.unread });
   }
   return { handle, open, focus, view, render: (rows = 12) => view(rows).map(row => row.text), reset, reconcile,
     get picking() { return picking; } };

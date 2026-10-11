@@ -135,13 +135,29 @@ test("concurrent formal continuations reserve distinct exact runs instead of bec
   try {
     const first = await f.service.start({ role: "researcher", prompt: "first" }); if (!first.ok) throw Error("admission");
     await f.service.wait([first.runId]);
-    const requests = ["second", "third"].map(message => f.service.control({ version: 1, operation: "follow_up", threadId: first.threadId, expectedRunId: first.runId, message }));
+    // Explicitly unfenced queueing allows each continuation to target the latest run.
+    const requests = ["second", "third"].map(message => f.service.control({ version: 1, operation: "follow_up", threadId: first.threadId, message }));
     const receipts = await Promise.all(requests);
     assert.ok(receipts.every(receipt => receipt.status !== "rejected"));
     assert.notEqual(receipts[0].runId, receipts[1].runId);
     await f.service.wait(receipts.map(receipt => receipt.runId!));
     await f.service.manager.wait("/root", f.service.pathFor(first.threadId)!);
     assert.deepEqual(f.prompts, ["first", "second", "third"]);
+  } finally { await f.service.dispose(); }
+});
+
+test("serialized continuations reject a run fence captured before another continuation", async () => {
+  const f = fixture();
+  try {
+    const first = await f.service.start({ role: "researcher", prompt: "first" }); if (!first.ok) throw Error("admission");
+    await f.service.manager.wait("/root", f.service.pathFor(first.threadId)!);
+    const receipts = await Promise.all(["second", "stale third"].map(message => f.service.control({
+      version: 1, operation: "follow_up", threadId: first.threadId, expectedRunId: first.runId, message,
+    })));
+    assert.notEqual(receipts[0].status, "rejected");
+    assert.equal(receipts[1].status, "rejected"); assert.equal(receipts[1].error?.code, "stale_run");
+    await f.service.manager.wait("/root", f.service.pathFor(first.threadId)!);
+    assert.deepEqual(f.prompts, ["first", "second"]);
   } finally { await f.service.dispose(); }
 });
 

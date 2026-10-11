@@ -78,6 +78,8 @@ export function createManagedSupervisor(options: Parameters<typeof createSupervi
       // Formal active-run queuing remains the policy pool's compatibility operation.
       if (!current?.result) return raw.control(request);
       await manager.wait("/root", path);
+      const valid = validateControl(request, raw.inspect(request.threadId)?.runId);
+      if (!valid.ok) return { version: 1, controlId: `control-manager-${++serial}`, status: "rejected", error: valid };
       if (request.operation === "resume" && !current.result.complete) return raw.control(request);
       const old = admitted.get(path);
       const result = await allocation(path, () => manager.steer("/root", path, request.message));

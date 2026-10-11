@@ -93,3 +93,29 @@ test("reset and empty fleets remove list focus without touching the editor", () 
   assert.deepEqual(f.nav.view(), []); assert.equal(f.nav.picking, false);
   assert.equal(f.nav.handle("down", active), false);
 });
+
+test("settled idle dock collapses but expanding retains every task and exact recipient", () => {
+  const f = fixture();
+  for (const item of f.threads) { item.state = "completed"; item.updatedAt = Date.now() - 6000; }
+  assert.equal(f.nav.view().length, 1);
+  assert.match(f.nav.render()[0], /2 sub-agents completed/);
+  f.nav.handle("left", active); f.nav.handle("down", active);
+  assert.match(f.nav.render().join("\n"), /›.*map/);
+  f.nav.handle("enter", active);
+  assert.deepEqual(f.opened, [{ path: "/root/map", identity: "/root/map" }]);
+  f.nav.handle("escape", active);
+  assert.equal(f.nav.view().length, 1);
+  assert.equal(f.threads.length, 2, "collapse must not reap retained sessions");
+});
+
+test("completion grace expires without collapsing an active selection", () => {
+  const f = fixture();
+  f.nav.handle("left", active); f.nav.handle("down", active);
+  f.threads[0].state = "completed"; f.threads[0].updatedAt = Date.now() - 6000;
+  assert.match(f.nav.render().join("\n"), /›.*map/);
+  f.nav.handle("down", active); f.nav.handle("enter", active);
+  assert.equal(f.opened[0].path, "/root/review");
+  f.nav.handle("escape", active);
+  assert.doesNotMatch(f.nav.render().join("\n"), /✓ map/);
+  assert.match(f.nav.render().join("\n"), /review/);
+});

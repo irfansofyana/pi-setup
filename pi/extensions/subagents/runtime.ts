@@ -28,6 +28,7 @@ import { createAgentRegistry, canonicalRole, resolveAgentDefinition, delegationT
 import { createChildTools } from "./child-tools.ts";
 import { createManagerUI } from "./manager-ui.ts";
 import { createManagerPresentation } from "./manager-presentation.ts";
+import { taskReminder } from "./task-reminder.ts";
 import { isRootEditor } from "../../themes/pi-irfan-devs/root-editor.ts";
 import { createParentDelivery } from "./parent-delivery.ts";
 import { subagentPrompt } from "./upstream/src/orch/prompt.ts";
@@ -78,7 +79,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any){
   const pruneRecords=()=>{pruneRuntimeRecords(records,activity,receipts,id=>supervisor?.inspect(id));const paths=new Set(supervisor?.manager.list().map(thread=>thread.path)??[]);for(const path of driverOptions.keys())if(!paths.has(path))driverOptions.delete(path);};
   let refreshFleet=()=>{};
   const presentation=createManagerPresentation({settings:()=>managerUI?.settings,threads:()=>supervisor?.manager.list()??[],
-    metrics(path){const handle=supervisor?.handleFor(path);const snapshot=handle&&supervisor?.inspect(handle.threadId);return snapshot?{runState:snapshot.state,turns:snapshot.turns,toolUses:snapshot.toolUses,totalTokens:snapshot.usage.totalTokens,softTurns:snapshot.budget?.softTurns,hardTurns:snapshot.budget?.hardTurns}:undefined;},
+    metrics(path){const handle=supervisor?.handleFor(path);const snapshot=handle&&supervisor?.inspect(handle.threadId);return snapshot?{name:handle?records.get(handle.agentId)?.name:undefined,runState:snapshot.state,turns:snapshot.turns,toolUses:snapshot.toolUses,totalTokens:snapshot.usage.totalTokens,softTurns:snapshot.budget?.softTurns,hardTurns:snapshot.budget?.hardTurns}:undefined;},
     service:()=>rootThreads(),isEditor:(component):component is CustomEditor=>component instanceof CustomEditor && isRootEditor(component),
     renderOther(ctx,settings,threads,ended){updateWidget(ctx,threads,settings.widgetMode,settings.nerdFontIcons,ended,settings.loaderStyle,false);}});
   const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: value });
@@ -166,8 +167,9 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any){
           refreshFleet();
         }
         if(event.kind==="timeout"&&!closingGeneration){
-          const text=`Subagent ${event.thread.path} report-only timeout; still ${event.thread.state}. Use agent_wait, agent_steer or agent_stop.`;
-          if(ctx.hasUI)ctx.ui.notify(text,"warning");
+          const handle=supervisor?.handleFor(event.thread.path),snapshot=handle&&supervisor?.inspect(handle.threadId);
+          const reminder=taskReminder(event.thread,snapshot?.state),current=runtimeContext??ctx;
+          if(current.hasUI&&reminder)try{current.ui.notify(reminder.message,reminder.level);}catch{/* Optional UI cannot disrupt execution. */}
         }
       }});
     refreshFleet=()=>{

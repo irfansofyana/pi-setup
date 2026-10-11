@@ -4,6 +4,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 /** Safe display metadata only. Never expose provider errors or raw tool arguments/results. */
 export type AgentMetrics = {
+  name?: string;
   runState?: string;
   turns?: number;
   toolUses?: number;
@@ -15,12 +16,17 @@ export type AgentSelection = { path?: string; identity?: string | number };
 export type AgentTone = "accent" | "success" | "warning" | "error" | "muted" | "dim" | "text";
 export type AgentRow = {
   text: string;
+  action?: "review";
   parts?: { text: string; tone: AgentTone }[];
   selection?: AgentSelection;
 };
 
+export function completionGrace(thread: ThreadView, now = Date.now()): boolean {
+  return ["completed", "stopped"].includes(thread.state) && now - thread.updatedAt < 5000;
+}
+
 export const agentIdentity = (thread: ThreadView) => thread.costId ?? thread.createdAt;
-export const agentLabel = (path: string) => displayText(path.replace(/^\/root\//, ""), 64);
+export const agentLabel = (path: string, name?: string) => displayText((name?.trim() || path).split("/").at(-1) || path, 48);
 /** Status transitions never reorder the row a user is navigating toward. */
 export const orderedAgents = (threads: readonly ThreadView[]) => threads.filter(thread => thread.path !== "/root")
   .sort((a, b) => a.createdAt - b.createdAt || a.path.localeCompare(b.path));
@@ -38,6 +44,7 @@ export function agentActivity(thread: ThreadView, metrics?: AgentMetrics): strin
   const state = agentState(thread, metrics);
   if (state === "failed") return "Failed · error details hidden";
   if (state === "queued") return "Waiting for an execution slot";
+  if (state === "completed" || state === "stopped") return "Session retained · follow-up uses remaining budget";
   return singleLine(thread.status, 120) || (({ running: "Working…", starting: "Starting…", paused: "Waiting for your decision", completed: "Completed", stopped: "Stopped" } as Record<string, string>)[state] ?? state);
 }
 
@@ -71,20 +78,32 @@ export function fleetOverview(
   maxLines: number,
   metrics: (path: string) => AgentMetrics | undefined = () => undefined,
   now = Date.now(),
-  options: { width?: number; focused?: AgentSelection; keyboard?: boolean } = {},
+  options: { width?: number; focused?: AgentSelection; keyboard?: boolean; collapseCompleted?: boolean; unread?(thread: ThreadView): number } = {},
 ): AgentRow[] {
   const limit = Math.max(1, Math.floor(maxLines));
   const width = Math.max(0, Math.floor(options.width ?? 10000));
   const fit = (text: string) => truncateToWidth(text, width, "…");
-  const workers = orderedAgents(threads).map(thread => ({ thread, metrics: metrics(thread.path) }));
-  if (!workers.length) return [];
+  const all = orderedAgents(threads);
+  if (!all.length) return [];
+  const folded = options.collapseCompleted && !options.focused
+    ? all.filter(thread => ["completed", "stopped"].includes(thread.state) && !completionGrace(thread, now)) : [];
+  const foldedUnread = folded.reduce((sum, thread) => sum + (options.unread?.(thread) ?? 0), 0);
+  const workers = all.filter(thread => !folded.includes(thread)).map(thread => ({ thread, metrics: metrics(thread.path) }));
+  const reviewHint = options.keyboard === false ? "/agents tasks" : "←/↓ review";
+  if (!workers.length) {
+    const completed = folded.filter(thread => thread.state === "completed").length;
+    const stopped = folded.length - completed;
+    const summary = [completed ? `✓ ${completed} sub-agent${completed === 1 ? "" : "s"} completed` : "",
+      stopped ? `${stopped} stopped` : ""].filter(Boolean).join(" · ");
+    return [{ text: fit(`${summary}${foldedUnread ? ` · ${foldedUnread} new` : ""} · ${reviewHint}`), action: "review" }];
+  }
   const counts = { running: 0, queued: 0, paused: 0, completed: 0, failed: 0, stopped: 0 };
   for (const worker of workers) {
     const state = agentState(worker.thread, worker.metrics);
     counts[state === "starting" ? "running" : state as keyof typeof counts]++;
   }
   const totals = [
-    `${counts.running} running`, `${counts.queued} queued`,
+    counts.running ? `${counts.running} running` : undefined, counts.queued ? `${counts.queued} queued` : undefined,
     counts.paused ? `${counts.paused} paused` : undefined,
     counts.completed ? `${counts.completed} done` : undefined,
     counts.failed ? `${counts.failed} failed` : undefined,
@@ -99,8 +118,9 @@ export function fleetOverview(
     const { thread, metrics: info } = worker, state = agentState(thread, info);
     const symbol = ({ running: "●", starting: "●", queued: "○", paused: "Ⅱ", completed: "✓", failed: "!", stopped: "■" } as Record<string, string>)[state] ?? "·";
     const nameWidth = width >= 20 ? Math.max(1, Math.min(Math.floor(width * 0.4), width - state.length - 3)) : width;
-    const lead = truncateToWidth(`${focused ? "› " : ""}${symbol} ${agentLabel(thread.path)}`, nameWidth, "…");
-    const rest = truncateToWidth(` · ${state} · ${singleLine(thread.type, 24)} · ${agentStats(thread, info, now)}`, Math.max(0, width - visibleWidth(lead)), "…");
+    const lead = truncateToWidth(`${focused ? "› " : ""}${symbol} ${agentLabel(thread.path, info?.name)}`, nameWidth, "…");
+    const unread = options.unread?.(thread) ?? 0;
+    const rest = truncateToWidth(` · ${state}${unread ? ` · ${unread} new` : ""} · ${singleLine(thread.type, 24)} · ${elapsed(thread, now)}`, Math.max(0, width - visibleWidth(lead)), "…");
     return { text: lead + rest, parts: [{ text: lead, tone: focused ? "accent" : agentTone(thread) },
       { text: rest, tone: state === "failed" ? "error" : "muted" }], selection: { path: thread.path, identity: agentIdentity(thread) } };
   }
@@ -115,9 +135,13 @@ export function fleetOverview(
   const start = selected ? Math.max(0, Math.min(selectedIndex - count + 1, entries.length - count)) : 0;
   for (const [offset, worker] of entries.slice(start, start + count).entries()) {
     const row = workerRow(worker, start + offset); rows.push(row);
-    if (perWorker === 2 && worker) rows.push({ text: fit(`  └ ${agentActivity(worker.thread, worker.metrics)} · ${singleLine(worker.thread.task, 100)}`), selection: row.selection });
+    if (perWorker === 2 && worker) rows.push({ text: fit(`  └ ${agentActivity(worker.thread, worker.metrics)}`), selection: row.selection });
   }
   const hidden = Math.max(0, entries.length - count);
-  rows.push({ text: fit(`${hidden ? `+${hidden} more · ` : ""}${selected ? "↑↓ select · Enter view · Esc Main" : options.keyboard === false ? "/agents tasks · inspect and steer" : "←/↓ tasks · click to view"}`) });
+  const foldedLabel = [folded.filter(thread => thread.state === "completed").length,
+    folded.filter(thread => thread.state === "stopped").length]
+    .map((count, i) => count ? `${count} ${i === 0 ? "completed" : "stopped"}` : "").filter(Boolean).join(" · ");
+  rows.push({ text: fit(`${hidden ? `+${hidden} more · ` : ""}${foldedLabel ? `${foldedLabel} · ` : ""}${foldedUnread ? `${foldedUnread} new · ` : ""}${selected ? "↑↓ select · Enter view · Esc Main" : folded.length ? reviewHint : options.keyboard === false ? "/agents tasks · inspect and steer" : "←/↓ tasks · click to view"}`),
+    ...(folded.length ? { action: "review" as const } : {}) });
   return rows.slice(0, limit);
 }

@@ -1,5 +1,7 @@
 import type { createManagedSupervisor } from "./manager-service.ts";
-import type { Control, Receipt } from "./contracts.ts";
+import { limits, type Control, type Receipt } from "./contracts.ts";
+import type { AgentSelection } from "./fleet-view.ts";
+import type { TaskControls, TaskTarget } from "./task-controls.ts";
 import type { ThreadService } from "./upstream/src/types.ts";
 
 /** Root tools and human navigation share the same admission/protocol boundary. */
@@ -7,10 +9,31 @@ export function createRootThreadService(
   service: ReturnType<typeof createManagedSupervisor>,
   control: (request: Control) => Promise<Receipt>,
   caller="/root",
-): ThreadService {
+): ThreadService & TaskControls {
   const base = service.manager.scope(caller);
+  function taskTarget(selection: AgentSelection): TaskTarget | undefined {
+    if (!selection.path || selection.path === caller || selection.identity === undefined) return;
+    try {
+      const view = base.get(selection.path);
+      if ((view.costId ?? view.createdAt) !== selection.identity) return;
+      const handle = service.handleFor(view.path), current = handle && service.inspect(handle.threadId);
+      if (handle && current) return { path: view.path, identity: selection.identity, threadId: handle.threadId, runId: current.runId };
+    } catch { /* A reaped/replaced task cannot acquire a new target. */ }
+  }
   return {
     ...base,
+    taskTarget,
+    async sendTask(target, mode, message) {
+      const current = taskTarget(target);
+      if (!current || current.threadId !== target.threadId || current.runId !== target.runId)
+        return { status: "rejected", reason: "stale_target" };
+      if (!["steer", "follow_up"].includes(mode) || typeof message !== "string" || !message.trim() || Buffer.byteLength(message, "utf8") > limits.mailboxBytesPerThread)
+        return { status: "rejected", reason: "invalid_message" };
+      try {
+        const receipt = await control({ version: 1, operation: mode, threadId: target.threadId, expectedRunId: target.runId, message });
+        return { status: receipt.status, receipt, ...(receipt.error?.code === "stale_run" ? { reason: "stale_target" as const } : {}) };
+      } catch { return { status: "unknown_delivery" }; }
+    },
     async spawn() { throw Error("Use the reviewed agent_spawn admission adapter"); },
     async steer(path, message, timeoutMs) {
       if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 30000 || timeoutMs > 300000))

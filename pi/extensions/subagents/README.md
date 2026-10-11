@@ -89,8 +89,12 @@ Tasks · 1 running · 1 queued
 ←/↓ tasks · click to view
 ```
 
-- Main shows a bounded task list with role colors, state, observed usage, elapsed
-  time and a separate activity line. Rows stay in creation order as tasks settle.
+- Main shows a bounded task list with short display names, role colors, state,
+  unread counts, elapsed time and a separate activity line. Completed/stopped rows fold after five seconds
+  at the idle prompt; all-settled fleets show “1 sub-agent completed” or
+  “N sub-agents completed” with a review action. Failed/paused
+  tasks remain visible. Expanding restores every retained task in creation order;
+  no completion collapse occurs while selecting. Open details stay open.
   Full/Minimal controls the idle dock's height; selection can reach every task.
 - In the integrated theme, an empty focused prompt's **←** or **↓** focuses the
   list at Main. **↑/↓** select without wrapping; **Enter** opens a task. **Esc**,
@@ -99,27 +103,48 @@ Tasks · 1 running · 1 queued
 - **Left-click a task** in fullscreen mode, or use **`/agents tasks`** from any
   theme. `/agents tasks /root/name` opens a specific task. The panel uses Pi's
   public TUI overlay handle; cleanup removes only this panel. The theme retains
-  its root editor and footer.
-- Details show task, actual model/thinking level, metrics and hard turn cap when
+  its root editor and footer. Clicking the completed summary expands selection.
+  Folding rows never reaps sessions, consumes outcomes or frees capacity.
+- Details show full target path, task, actual model/thinking level, metrics and hard turn cap when
   known, wrapped user/assistant messages and tool names/states. Thinking content,
   raw tool payloads and provider error bodies are excluded. Tokens are cumulative
   usage; tool count covers the current run, not context fullness.
 - In the panel, **↑/↓**, **PgUp/PgDn** scroll; **End** follows live output.
   Reading older messages suspends tail following. **←/→** switches tasks in
-  stable order while browsing or with an empty steering draft.
+  stable order while browsing or with an empty steering draft. Scroll anchors,
+  follow mode and drafts survive switching and reopening per task lifetime.
+  New agent text increments unread indicators without jumping the viewport;
+  following the tail marks the current projection seen. Counts cover the bounded
+  recent text projection, not an archival message total. The session-owned UI
+  store retains hashes and reading metadata, never raw snapshots or disk transcripts.
 - **Enter** or **Tab** starts composing in the panel's dedicated multiline editor.
-  **Enter** sends; the configured newline binding inserts a newline. **Tab** or
+  While browsing, **S** chooses **Steer current work** and **F** chooses
+  **Follow up after completion**. Follow-up queues a distinct run behind active
+  work or continues a retained session. The initial mode is steer for active tasks,
+  follow-up for settled tasks; subsequent selections remember the chosen mode.
+  The configured submit binding sends; the configured newline binding inserts a newline. **Tab** or
   **Esc** leaves the composer with its draft kept; **Esc** from browsing closes
   the panel. Main's prompt always remains Main. Commands and `!bash` typed into
-  the steering editor are literal agent text.
-- Steering uses the existing exact-run root service, including retained-worker
-  continuation. Lifetime budgets still apply. Rejection retains the message;
-  acceptance does not prove model consumption. Drafts are private to each task
-  lifetime and are cleared on session replacement/reload.
+  the steering editor are literal agent text. Remapped submit/newline bindings
+  take priority over panel shortcuts while composing.
+- Both modes use the reviewed root service and bind lifetime/thread/run when
+  composing. A changed run rejects; reopen the composer to capture the new target.
+  Follow-up/resume controls with `expectedRunId` also reject stale runs after
+  waiting for another continuation. Unfenced formal queueing remains supported.
+  Queued, accepted, handled/applied, rejected and unknown delivery retain their
+  receipt status; no receipt proves model consumption. Rejected/uncertain sends
+  retain the draft. Unknown delivery blocks retry until **R** while browsing;
+  inspect the task first to avoid duplicate instructions. Lifetime budgets still
+  apply. Reading state, receipts and drafts clear on session replacement/reload.
 - Key releases never navigate or submit; held movement keys repeat, but held
   Enter does not open/send twice. Stale clicks and replaced identities reject.
   Small docks keep the selected recipient visible.
-- Active elapsed time refreshes once per second; messages arrive through the
+- Render/input/observer failures close the affected detail panel and remove only
+  its overlay, retaining the last saved draft. A dock failure releases navigation
+  input and shows a command fallback. Diagnostics identify the failing UI phase
+  and error class without exposing raw provider errors. `/agents tasks` retries.
+- Active elapsed time and the brief completion grace refresh once per second;
+  settled fleets stop the clock after the final collapsed render. Messages arrive through the
   live observer. Off, shutdown and session changes dispose overlays, observers,
   clocks and input hooks. Navigation never stops workers; `/agents fleet` owns
   additional stop/close/budget controls and `/agents reap` confirms cleanup.

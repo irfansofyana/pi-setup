@@ -4,6 +4,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, getKeybindings, stripTerminalSequences, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { TaskPanel, type TaskDraft } from "./task-panel.ts";
 import { limits } from "./contracts.ts";
+import type { TaskControls } from "./task-controls.ts";
+import { TaskViewStore } from "./task-view-state.ts";
 import type { ThreadService, ThreadView, TranscriptListener, TranscriptObservation, TranscriptSnapshot } from "./upstream/src/types.ts";
 
 const LEFT = "\x1b[D", RIGHT = "\x1b[C", UP = "\x1b[A", DOWN = "\x1b[B", PAGE_UP = "\x1b[5~", END = "\x1b[F", ESC = "\x1b";
@@ -22,7 +24,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function fixture(overrides: { observe?: ThreadService["observeTranscript"]; steer?: ThreadService["steer"]; drafts?: Map<string, TaskDraft>; selection?: { path?: string; identity?: string | number } } = {}) {
+function fixture(overrides: { observe?: ThreadService["observeTranscript"]; steer?: ThreadService["steer"]; taskTarget?: TaskControls["taskTarget"]; sendTask?: TaskControls["sendTask"]; views?: TaskViewStore; drafts?: Map<string, TaskDraft>; selection?: { path?: string; identity?: string | number } } = {}) {
   const threads = [thread("/root/second", 2), thread("/root/first", 1)];
   const drafts = overrides.drafts ?? new Map<string, TaskDraft>();
   const listeners = new Map<string, TranscriptListener>();
@@ -36,14 +38,101 @@ function fixture(overrides: { observe?: ThreadService["observeTranscript"]; stee
     }),
     steer: overrides.steer ?? (async (path: string, text?: string) => { sent.push({ path, text }); return threads.find(item => item.path === path)!; }),
   } as ThreadService;
+  const controls: TaskControls = {
+    taskTarget: overrides.taskTarget ?? (selection => selection.path && selection.identity !== undefined ? { path: selection.path, identity: selection.identity, threadId: "thread-test", runId: "run-test" } : undefined),
+    sendTask: overrides.sendTask ?? (async (target, _mode, text) => {
+      try { await service.steer(target.path, text); return { status: "accepted" }; }
+      catch { return { status: "rejected" }; }
+    }),
+  };
+  Object.assign(service, controls);
+  const views = overrides.views ?? new TaskViewStore();
   const panel = new TaskPanel({ host, theme, threads: () => threads, metrics: () => ({ turns: 2, toolUses: 3, totalTokens: 1234 }), service,
-    selection: overrides.selection ?? { path: "/root/first", identity: "/root/first-original" }, drafts, done() { closed++; } });
+    selection: overrides.selection ?? { path: "/root/first", identity: "/root/first-original" }, drafts, views, done() { closed++; } });
   panel.focused = true;
   const render = (width = 100) => panel.render(width).map(stripTerminalSequences).join("\n");
   const type = (text: string) => { for (const char of text) panel.handleInput(char === "\n" ? "\x1b[13;2u" : char); };
-  return { panel, threads, drafts, listeners, host, sent, render, type,
+  return { panel, threads, drafts, listeners, host, sent, render, type, views,
     get closed() { return closed; }, get disposed() { return disposed; }, get observations() { return observations; }, get renders() { return renders; } };
 }
+
+test("scroll anchor and follow mode survive switching tasks and reopening the panel", async () => {
+  const f = fixture(); await flush();
+  const history = snapshot(Array.from({ length: 80 }, (_, i) => `Saved line ${i}`).join("\n"), 2);
+  f.listeners.get("/root/first")!(history); f.render(); f.panel.handleInput(PAGE_UP);
+  const before = f.render(); const line = before.match(/Saved line \d+/)![0];
+  f.panel.handleInput(RIGHT); f.panel.handleInput(LEFT); await flush();
+  f.listeners.get("/root/first")!(history);
+  assert.match(f.render(), new RegExp(line)); assert.match(f.render(), /scrolled/);
+  f.panel.close();
+  const reopened = fixture({ drafts: f.drafts, views: f.views }); await flush();
+  try {
+    reopened.listeners.get("/root/first")!(history);
+    assert.match(reopened.render(), new RegExp(line)); assert.match(reopened.render(), /scrolled/);
+  } finally { reopened.panel.close(); }
+});
+
+test("new text while scrolled shows unread without moving the viewport", async () => {
+  const f = fixture(); await flush();
+  try {
+    const text = Array.from({ length: 80 }, (_, i) => `Read line ${i}`).join("\n");
+    f.listeners.get("/root/first")!(snapshot(text, 2)); f.render(); f.panel.handleInput(PAGE_UP);
+    const first = f.render().match(/Read line \d+/)![0];
+    f.listeners.get("/root/first")!(snapshot(`${text}\nNew tail`, 3));
+    assert.match(f.render(), /1 new/); assert.match(f.render(), new RegExp(first));
+    f.panel.handleInput(END); f.render();
+    assert.equal(f.views.unread({ path: "/root/first", identity: "/root/first-original" }), 0);
+  } finally { f.panel.close(); }
+});
+
+test("explicit follow-up sends the captured mode and shows queued receipt", async () => {
+  const calls: any[] = [];
+  const f = fixture({ sendTask: async (...args) => { calls.push(args); return { status: "queued" }; } }); await flush();
+  try {
+    f.panel.handleInput("f"); f.type("do this afterwards");
+    assert.match(f.render(), /Follow up after completion/);
+    f.panel.handleInput("\r"); await flush();
+    assert.equal(calls[0][1], "follow_up"); assert.equal(calls[0][0].runId, "run-test");
+    assert.match(f.render(), /Queued for delivery/);
+  } finally { f.panel.close(); }
+});
+
+test("uncertain delivery retains the draft and requires acknowledgement before retry", async () => {
+  let calls = 0;
+  const f = fixture({ sendTask: async () => { calls++; return { status: "unknown_delivery" }; } }); await flush();
+  try {
+    f.panel.handleInput("s"); f.type("one instruction"); f.panel.handleInput("\r"); await flush();
+    assert.match(f.render(), /Delivery uncertain/); assert.equal(f.drafts.get("/root/first")?.text, "one instruction");
+    f.panel.handleInput("\r"); f.panel.handleInput("\r"); await flush(); assert.equal(calls, 1);
+    f.panel.handleInput(ESC); f.panel.handleInput("r"); f.panel.handleInput("\r"); f.panel.handleInput("\r"); await flush();
+    assert.equal(calls, 2);
+  } finally { f.panel.close(); }
+});
+
+test("a run change while composing rejects the captured target until explicitly reopened", async () => {
+  let runId = "run-first"; const sent: string[] = [];
+  const f = fixture({
+    taskTarget: selection => ({ path: selection.path!, identity: selection.identity!, threadId: "thread-test", runId }),
+    sendTask: async target => { sent.push(target.runId); return target.runId === runId ? { status: "queued" } : { status: "rejected", reason: "stale_target" }; },
+  }); await flush();
+  try {
+    f.panel.handleInput("f"); f.type("next instruction"); runId = "run-second";
+    f.panel.handleInput("\r"); await flush();
+    assert.deepEqual(sent, ["run-first"]); assert.match(f.render(), /Task run changed/);
+    assert.equal(f.drafts.get("/root/first")?.text, "next instruction");
+    f.panel.handleInput("\r"); f.panel.handleInput("\r"); await flush();
+    assert.deepEqual(sent, ["run-first", "run-second"]);
+  } finally { f.panel.close(); }
+});
+
+test("closing an unavailable panel cannot overwrite its replacement's reading state", async () => {
+  const f = fixture(); await flush();
+  f.threads[1].costId = "replacement";
+  const replacement = { path: "/root/first", identity: "replacement" };
+  f.views.get(replacement).anchor = "replacement-anchor";
+  f.panel.refresh(); f.panel.render(100); f.panel.close();
+  assert.equal(f.views.get(replacement).anchor, "replacement-anchor");
+});
 
 test("opening a panel renders its waiting message before the transcript arrives", async () => {
   const observation = deferred<TranscriptObservation>();
@@ -54,6 +143,58 @@ test("opening a panel renders its waiting message before the transcript arrives"
     observation.resolve({ snapshot: snapshot("First live message"), unsubscribe() {} });
     await flush();
     assert.match(f.render(60), /First live message/);
+  } finally { f.panel.close(); }
+});
+
+test("late transcript callback failure closes the panel and unsubscribes without escaping", async () => {
+  const f = fixture(); await flush();
+  try {
+    const listener = f.listeners.get("/root/first")!;
+    const broken = snapshot("next", 2);
+    Object.defineProperty(broken, "tools", { get() { throw new TypeError("bad observer payload"); } });
+    assert.doesNotThrow(() => listener(broken));
+    assert.equal(f.closed, 1); assert.equal(f.disposed, 1);
+    assert.doesNotThrow(() => listener(snapshot("late", 3)));
+    assert.equal(f.closed, 1);
+  } finally { f.panel.close(); }
+});
+
+test("input failure preserves the task draft and restores the caller", async () => {
+  const f = fixture(); await flush();
+  f.panel.handleInput("\r"); f.type("keep this draft");
+  const original = f.host.requestRender;
+  try {
+    f.host.requestRender = () => { throw Error("render scheduling failed"); };
+    assert.doesNotThrow(() => f.panel.handleInput(ESC));
+    assert.equal(f.closed, 1);
+    assert.equal(f.drafts.get("/root/first")?.text, "keep this draft");
+  } finally { f.host.requestRender = original; f.panel.close(); }
+});
+
+test("a render failure before steering preserves the submission and releases its pending slot", async () => {
+  const f = fixture(); await flush();
+  f.panel.handleInput("\r"); f.type("keep unsent message");
+  const original = f.host.requestRender;
+  try {
+    f.host.requestRender = () => { throw Error("render scheduling failed"); };
+    f.panel.handleInput("\r"); await flush();
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.drafts.get("/root/first")?.text, "keep unsent message");
+    const reopened = fixture({ drafts: f.drafts }); await flush();
+    try {
+      reopened.panel.handleInput("\r"); reopened.panel.handleInput("\r"); await flush();
+      assert.deepEqual(reopened.sent, [{ path: "/root/first", text: "keep unsent message" }]);
+    } finally { reopened.panel.close(); }
+  } finally { f.host.requestRender = original; f.panel.close(); }
+});
+
+test("completion while reading leaves the detail view and selected lifetime open", async () => {
+  const f = fixture(); await flush();
+  try {
+    f.threads.find(thread => thread.path === "/root/first")!.state = "completed";
+    assert.match(f.render(), /completed/);
+    assert.equal(f.closed, 0);
+    assert.equal(f.panel.selected?.identity, "/root/first-original");
   } finally { f.panel.close(); }
 });
 
@@ -208,7 +349,7 @@ test("scrolled history remains stable as output appends, while End resumes follo
 test("completion keeps panel open and refresh does not attach another observer", async () => {
   const f = fixture(); await flush(); f.threads[1].state = "completed";
   f.panel.refresh(); f.panel.refresh(); assert.equal(f.observations, 1); assert.equal(f.closed, 0);
-  assert.match(f.render(), /completed/); assert.match(f.render(), /resume/i);
+  assert.match(f.render(), /completed/); assert.match(f.render(), /follow-up/i);
   f.panel.close(); f.panel.close(); f.panel.dispose(); assert.equal(f.closed, 1); assert.equal(f.disposed, 1);
 });
 
@@ -284,5 +425,14 @@ test("custom submission keys remain editor-owned and plain newline remains multi
     assert.match(f.render(), /Ctrl\+S send/); assert.match(f.render(), /Ctrl\+J newline/);
     f.panel.handleInput("\x13"); await flush();
     assert.equal(f.sent[0]?.text, "first\nsecond");
+  } finally { keys.setUserBindings({}); f.panel.close(); }
+});
+
+test("Tab remapped to submit sends once instead of switching out of the composer", async () => {
+  const keys = getKeybindings(); const f = fixture(); await flush();
+  try {
+    keys.setUserBindings({ "tui.input.submit": "tab" });
+    f.panel.handleInput("\r"); f.type("send with Tab"); f.panel.handleInput("\t"); await flush();
+    assert.deepEqual(f.sent, [{ path: "/root/first", text: "send with Tab" }]);
   } finally { keys.setUserBindings({}); f.panel.close(); }
 });

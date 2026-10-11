@@ -3,11 +3,13 @@ import { getKeybindings, isKeyRelease, isKeyRepeat, Key, matchesKey, Text, trunc
 import type { Component, Keybinding, OverlayHandle, TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
 import { getRootEditorKeybindings, onRootEditorInput } from "../../themes/pi-irfan-devs/root-editor.ts";
 import type { ManagerSettings } from "./upstream/src/prefs/settings.ts";
-import type { ThreadService, ThreadView } from "./upstream/src/types.ts";
+import type { ThreadView } from "./upstream/src/types.ts";
 import { DIALOG_OPTIONS } from "./upstream/src/ui/dialog.ts";
 import { createInlineNavigation, type NavigationKey } from "./inline-navigation.ts";
-import { agentIdentity, orderedAgents, type AgentMetrics, type AgentRow, type AgentSelection } from "./fleet-view.ts";
+import { agentIdentity, completionGrace, orderedAgents, type AgentMetrics, type AgentRow, type AgentSelection } from "./fleet-view.ts";
 import { TaskPanel, type TaskDraft } from "./task-panel.ts";
+import type { TaskService } from "./task-controls.ts";
+import { TaskViewStore } from "./task-view-state.ts";
 
 type EditorView = Component & { getText(): string; isShowingAutocomplete(): boolean };
 
@@ -16,7 +18,7 @@ export function createManagerPresentation(options: {
   settings(): ManagerSettings | undefined;
   threads(): ThreadView[];
   metrics?(path: string): AgentMetrics | undefined;
-  service(): ThreadService;
+  service(): TaskService;
   /** Must attest the actual root editor, not merely instanceof CustomEditor. */
   isEditor(component: unknown): component is EditorView;
   renderOther?(ctx: ExtensionContext, settings: ManagerSettings, threads: ThreadView[], ended: boolean): void;
@@ -27,6 +29,8 @@ export function createManagerPresentation(options: {
   let clock: ReturnType<typeof setInterval> | undefined, panel: TaskPanel | undefined;
   let boundEditor: EditorView | undefined, offEditorInput: (() => void) | undefined;
   let drafts = new Map<string, TaskDraft>();
+  let views = new TaskViewStore(() => guardDock(() => tui?.requestRender(), undefined, "unread update"));
+  let dockFailed = false;
   const warn = (message: string) => { try { context?.ui.notify(message, "warning"); } catch { /* UI may be closing. */ } };
   const editor = (): EditorView | undefined => {
     if (!tui || tui.hasOverlay()) return;
@@ -35,6 +39,7 @@ export function createManagerPresentation(options: {
   };
   const navigation = createInlineNavigation({
     threads: options.threads, metrics: options.metrics,
+    unread: thread => views.unread({ path: thread.path, identity: agentIdentity(thread) }),
     editor: { getText: () => editor()?.getText() ?? context?.ui.getEditorText() ?? "" },
     openDetails: selection => { if (context) launch(context, selection); },
     changed: () => tui?.requestRender(),
@@ -43,7 +48,21 @@ export function createManagerPresentation(options: {
     const focus = editor();
     if (focus === boundEditor) return;
     offEditorInput?.(); offEditorInput = undefined; boundEditor = focus;
-    if (focus) offEditorInput = onRootEditorInput(focus, data => input(data)?.consume === true);
+    // Consume the failing action itself so Enter/Escape cannot fall through to Main.
+    if (focus && !dockFailed) offEditorInput = onRootEditorInput(focus, data => guardDock(() => input(data)?.consume === true, true, "input"));
+  }
+
+  const errorKind = (error: unknown) => error instanceof TypeError ? "TypeError" : error instanceof RangeError ? "RangeError" : "Error";
+  function guardDock<T>(action: () => T, fallback: T, phase = "dock"): T {
+    if (dockFailed) return fallback;
+    try { return action(); } catch (error) {
+      dockFailed = true; stopClock();
+      try { navigation.reset(); } catch { /* Host may be closing. */ }
+      try { offEditorInput?.(); } catch { /* Continue restoring normal input. */ }
+      offEditorInput = undefined; boundEditor = undefined;
+      warn(`Task dock unavailable after a ${phase} error (${errorKind(error)}). Use /agents tasks to reopen.`);
+      return fallback;
+    }
   }
 
   function launch(ctx: ExtensionContext, selection: AgentSelection) {
@@ -55,9 +74,19 @@ export function createManagerPresentation(options: {
     opening = true;
     let view: TaskPanel | undefined;
     let overlay: OverlayHandle | undefined;
+    let failedDuringOpen = false;
+    const failed = (phase: string, error: unknown) => {
+      failedDuringOpen = true;
+      try { overlay?.hide(); } catch { /* Exact owned handle only. */ }
+      view?.dispose();
+      if (ownGeneration !== generation) return;
+      panel = undefined; opening = false;
+      try { navigation.reset(); host.requestRender(); } catch { /* Host may be closing. */ }
+      warn(`Task panel closed after a ${phase} error (${errorKind(error)}). Use /agents tasks to reopen.`);
+    };
     try {
       view = new TaskPanel({ host, theme: ctx.ui.theme, threads: options.threads, metrics: options.metrics,
-        service: options.service(), selection, drafts, done: () => {
+        service: options.service(), selection, drafts, views, onError: failed, done: () => {
           // ctx.ui.custom's close pops the top overlay in Pi 1.1.0. Retain an
           // exact public handle so cleanup cannot close another extension's UI.
           overlay?.hide(); view?.dispose();
@@ -69,29 +98,34 @@ export function createManagerPresentation(options: {
         } });
       panel = view;
       overlay = host.showOverlay(view, DIALOG_OPTIONS.overlayOptions);
+      if (failedDuringOpen) overlay.hide();
       opening = false;
-    } catch {
-      overlay?.hide(); view?.dispose(); panel = undefined; opening = false;
-      warn("Task view could not open. Try /agents tasks again.");
+    } catch (error) {
+      failed("open", error);
     }
   }
   /** Explicit command fallback also works with another theme's root editor. */
   function open(ctx: ExtensionContext, path?: string) {
     if (!ctx.hasUI) return;
     if (ctx.mode !== "tui") { ctx.ui.notify("Task panels require terminal mode. Use /agents fleet here.", "warning"); return; }
+    dockFailed = false;
+    bindEditor();
+    refreshClock();
     const thread = orderedAgents(options.threads()).find(thread => path === undefined || thread.path === path);
     if (!thread) { ctx.ui.notify("No matching task. Start a subagent first.", "info"); return; }
     launch(ctx, { path: thread.path, identity: agentIdentity(thread) });
   }
 
   function ordinaryArrow(data: string, key: NavigationKey, focus: EditorView): boolean {
+    const bindings = [getKeybindings(), getRootEditorKeybindings(focus)].filter(value => !!value);
+    if (key === "enter") return bindings.every(keys => keys.matches(data, "tui.input.submit") && !keys.matches(data, "tui.input.newLine"));
     const actions: Partial<Record<NavigationKey, Keybinding>> = {
       left: "tui.editor.cursorLeft", right: "tui.editor.cursorRight", up: "tui.editor.cursorUp", down: "tui.editor.cursorDown",
       pageUp: "tui.editor.pageUp", pageDown: "tui.editor.pageDown",
     };
     const action = actions[key];
     if (!action) return true;
-    for (const keys of [getKeybindings(), getRootEditorKeybindings(focus)].filter(value => !!value)) {
+    for (const keys of bindings) {
       if (!keys.matches(data, action)) return false;
       for (const other of Object.keys(keys.getResolvedBindings())) {
         if (other === action || other === `tui.altScreen.${key}`) continue;
@@ -136,17 +170,23 @@ export function createManagerPresentation(options: {
 
   function stopClock() { if (clock) clearInterval(clock); clock = undefined; }
   function refreshClock() {
-    const active = () => options.threads().some(thread => thread.path !== "/root" && ["starting", "running"].includes(thread.state));
+    const active = () => options.threads().some(thread => thread.path !== "/root" &&
+      (["starting", "running"].includes(thread.state) || completionGrace(thread)));
     if (!active()) { stopClock(); return; }
     if (!clock) {
-      clock = setInterval(() => {
-        if (!context || options.settings()?.subagentMode === "off" || !active()) { stopClock(); return; }
+      clock = setInterval(() => guardDock(() => {
+        if (!context || options.settings()?.subagentMode === "off") { stopClock(); return; }
+        // The final tick must draw the collapsed state before dropping the clock.
         tui?.requestRender();
-      }, 1000);
+        if (!active()) stopClock();
+      }, undefined, "clock"), 1000);
       clock.unref?.();
     }
   }
   function refresh(ctx: ExtensionContext, ended: boolean) {
+    guardDock(() => refreshContent(ctx, ended), undefined, "refresh");
+  }
+  function refreshContent(ctx: ExtensionContext, ended: boolean) {
     if (!ctx.hasUI) { if (context) clear(context); return; }
     const settings = options.settings();
     if (!settings || settings.subagentMode === "off" || !orderedAgents(options.threads()).length) { clear(ctx); return; }
@@ -156,43 +196,54 @@ export function createManagerPresentation(options: {
     context = ctx;
     // The terminal listener only discovers root replacements. Actual navigation
     // runs inside the theme's editor, after registered extension shortcuts.
-    if (!offInput) offInput = ctx.ui.onTerminalInput(() => { bindEditor(); });
+    if (!offInput) offInput = ctx.ui.onTerminalInput(() => { guardDock(bindEditor, undefined); });
     const live = new Map(orderedAgents(options.threads()).map(thread => [thread.path, agentIdentity(thread)]));
     for (const [path, draft] of drafts) if (live.get(path) !== draft.identity) drafts.delete(path);
+    views.reconcile(options.threads(), options.service());
     navigation.reconcile(); panel?.refresh(); refreshClock();
-    ctx.ui.setWidget("pi-subagent", (host, theme) => {
+    ctx.ui.setWidget("pi-subagent", (host, theme) => guardDock<Text>(() => {
       tui = host; bindEditor();
       let renderedRows: AgentRow[] = [];
       return new class extends Text {
         render(width: number) {
-          const rows = Math.max(1, Math.min(settings.widgetMode === "minimal" && !navigation.picking ? 4 : 10, host.terminal.rows - 10));
-          renderedRows = navigation.view(rows, width, !!editor() || (!!panel && !!boundEditor));
-          const palette = context?.ui.theme ?? theme;
-          this.setText(renderedRows.map(row => truncateToWidth(
-            row.parts ? row.parts.map(part => palette.fg(part.tone, part.text)).join("") : palette.fg("muted", row.text),
-            Math.max(0, width), "",
-          )).join("\n"));
-          return super.render(width);
+          return guardDock(() => {
+            const rows = Math.max(1, Math.min(settings.widgetMode === "minimal" && !navigation.picking ? 4 : 10, host.terminal.rows - 10));
+            renderedRows = navigation.view(rows, width, !!editor() || (!!panel && !!boundEditor));
+            const palette = context?.ui.theme ?? theme;
+            this.setText(renderedRows.map(row => truncateToWidth(
+              row.parts ? row.parts.map(part => palette.fg(part.tone, part.text)).join("") : palette.fg("muted", row.text),
+              Math.max(0, width), "",
+            )).join("\n"));
+            return super.render(width);
+          }, width >= 13 ? ["/agents tasks"] : [], "render");
         }
         handleMouse(event: TuiMouseEvent) {
-          if (context !== ctx || opening || panel || pasting || event.type !== "click" || event.button !== "left" ||
-            event.shift || event.alt || event.ctrl || !Number.isInteger(event.y) || event.y < 0 ||
-            ctx.mode !== "tui" || options.settings()?.subagentMode === "off") return;
-          const focus = editor();
-          if (!focus || focus.isShowingAutocomplete()) return;
-          const selection = renderedRows[event.y]?.selection;
-          if (!selection || !navigation.open(selection)) return;
-          host.requestRender(); return { handled: true, render: true };
+          return guardDock(() => {
+            if (context !== ctx || opening || panel || pasting || event.type !== "click" || event.button !== "left" ||
+              event.shift || event.alt || event.ctrl || !Number.isInteger(event.y) || event.y < 0 ||
+              ctx.mode !== "tui" || options.settings()?.subagentMode === "off") return;
+            const focus = editor();
+            if (!focus || focus.isShowingAutocomplete()) return;
+            const row = renderedRows[event.y];
+            if (row?.action === "review") {
+              navigation.focus(); host.requestRender(); return { handled: true, render: true };
+            }
+            const selection = row?.selection;
+            if (!selection || !navigation.open(selection)) return;
+            host.requestRender(); return { handled: true, render: true };
+          }, undefined, "mouse input");
         }
       }("", 0, 0);
-    });
+    }, new Text("/agents tasks", 0, 0)));
   }
   function reset() {
-    generation++; stopClock(); offInput?.(); offInput = undefined;
+    generation++; dockFailed = false; stopClock(); offInput?.(); offInput = undefined;
     offEditorInput?.(); offEditorInput = undefined; boundEditor = undefined;
     const previous = panel; panel = undefined; opening = false;
     // Replace the map so a late rejection from an old panel cannot populate a new session.
-    drafts = new Map(); previous?.close(); navigation.reset();
+    drafts = new Map(); previous?.close(); views.dispose();
+    views = new TaskViewStore(() => guardDock(() => tui?.requestRender(), undefined, "unread update"));
+    navigation.reset();
     context = undefined; tui = undefined; pasting = false; pasteTail = ""; heldAction = undefined;
   }
   function clear(ctx: ExtensionContext) {

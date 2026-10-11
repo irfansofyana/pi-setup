@@ -38,7 +38,7 @@ export function validateControl(value: unknown, currentRunId?: string): typeof a
   const needsMessage = value.operation === "message" || value.operation === "steer" || value.operation === "follow_up" || value.operation === "resume";
   if (needsRun && !id(value.expectedRunId, "run")) return reject("invalid_request");
   if (needsMessage !== (value.message !== undefined) || (needsMessage && (!text(value.message) || utf8Bytes(value.message as string) > limits.mailboxBytesPerThread))) return reject("invalid_request");
-  if (needsRun && value.expectedRunId !== currentRunId) return reject("stale_run");
+  if ((needsRun || (["follow_up", "resume"].includes(value.operation as string) && value.expectedRunId !== undefined)) && value.expectedRunId !== currentRunId) return reject("stale_run");
   return accepted;
 }
 const legacyFields = {

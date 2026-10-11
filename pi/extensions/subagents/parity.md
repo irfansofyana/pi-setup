@@ -26,7 +26,8 @@ resource-capped native runtime for manual acceptance.
 | Root notifications and Final Recap | Hidden generation-owned coalesced delivery; busy roots defer, Off suppresses; optional recap waits for outstanding detached work, including the last descendant. `parent-delivery.test.ts` and runtime integration. |
 | Child notifications | Actual manager delivery into the lexical parent's retained context, without automatic child model turns; scoped child integration. |
 | Task navigation and advanced live tree | Empty integrated-theme composer ←/↓ focuses a stable task list; Enter opens a dedicated conversation/steering overlay. `/agents tasks` works with other themes. Exact-run root steering remains shared. `/agents tree` opens the upstream viewer. Controller, presentation, task-panel and root-service tests cover these boundaries. |
-| Full/minimal presentation, icons and loaders | Compact role-colored task dock with state, usage and separate activity rows. Full/Minimal sets dock height. Identity-bound keyboard/mouse selection; release filtering, clamped arrows, retained drafts and anchored message scrolling. Public Text leaf preserves Signature budgeting. Interactive acceptance remains separate. |
+| Full/minimal presentation, icons and loaders | Compact role-colored task dock with short names, state, unread counts and separate activity rows; usage lives in details. Full/Minimal sets dock height. Identity-bound keyboard/mouse selection; release filtering, clamped arrows, retained drafts and per-agent anchored message scrolling. Public Text leaf preserves Signature budgeting. Interactive acceptance remains separate. |
+| Human steering and follow-up | Explicit modes capture task lifetime/thread/run through the reviewed root boundary. Receipts remain queued/accepted/handled/applied/rejected/unknown; uncertain delivery retains the draft and requires explicit retry acknowledgement. Session-owned reading state and bounded unread hashes clear on reload. Control, root-service, manager-service, view-state and task-panel cases authored; execution pending. |
 | Costs and footer integrations | Actual CostLedger/CostFooterController. Own usage high-water records, same-session increments, duplicate/branch restoration and reap-safe totals; active continuation spend settles during navigation/shutdown. SDK preview and cost tests; status fallback preserves Signature. |
 | Confirmed reaping | Actual candidate selection plus confirmation/revalidation; leaf-first reviewed close. Unconsumed outcomes stay separately retrievable. UI/manager tests. |
 | Session navigation and recovery | Pre-navigation drain, fresh generation attach, quarantine on unconfirmed cleanup; optional private outcomes/outbox/jobs/workflows recovery without replay. Storage/orchestration/runtime tests. |
@@ -79,6 +80,25 @@ resource-capped native runtime for manual acceptance.
   revival; evaluators and reserved automation cannot extend caller-owned budgets.
 
 ## Verification boundary
+
+Phase 2 follow-up (2026-10-12): implemented per-agent reading state and unread
+indicators, explicit steer/follow-up modes, receipt-preserving controls with stale
+run rejection and uncertain-delivery retry handling, short labels and simplified
+dock details. The completion summary uses “N sub-agents completed.” Added tests
+for queued human follow-up through orchestration, serialized run fences, reading
+state, late observer cleanup and UI delivery recovery. **Runtime tests, typecheck
+and interactive acceptance remain unexecuted** under the same host constraints
+below. The bounded compatibility job includes the new focused cases.
+
+Phase 1 follow-up (2026-10-11): added idle completion collapse, expanded-list
+stability, final grace-clock redraw, informational reporting reminders, panel/dock
+failure containment and remapped composer-submit coverage. Tests were authored
+before the corresponding implementation but **have not been executed locally**
+under the same host constraints below. A new serial CI compatibility job runs
+the real component/import tests on Pi 1.0.0, 1.0.4 and 1.1.0 inside a container
+with 2 GiB hard memory, no swap, 2 CPUs, 128 PIDs and an eight-minute command limit.
+That job has not been run as part of this change. Manual terminal acceptance is
+still required; these additions are not a claim that the old or new UI suite passed.
 
 Claude-style task-panel refactor (2026-10-11): regression tests added for task
 selection, Kitty releases/repeats, root ownership/shortcut precedence, dedicated
