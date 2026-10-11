@@ -30,7 +30,8 @@ export async function createNativeBackend(options: BackendOptions): Promise<Back
 }
 async function createReadOnlyBackend(options: BackendOptions,tools:string[]):Promise<BackendResult>{
   if (options.context && (options.context.serializedBytes !== utf8Bytes(JSON.stringify({ sourceSessionId: options.context.sourceSessionId, branchLeafId: options.context.branchLeafId, entryAnchorId: options.context.entryAnchorId, sourceEntryIds: options.context.sourceEntryIds, messages: options.context.messages, policy: options.context.policy })) || options.context.serializedBytes > limits.contextBytes || !options.context.messages.length)) return { ok: false, code: "unsupported_resource" };
-  const settingsManager = SettingsManager.inMemory({});
+  // Never replay a submitted child request after proxy readiness changes.
+  const settingsManager = SettingsManager.inMemory({ retry: { enabled: false, provider: { maxRetries: 0 } } });
   const loader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir, settingsManager,
     noExtensions: true, disabledBuiltinExtensions: ["mcp", "codemode", "tool-search"], noSkills: true,
     noPromptTemplates: true, noThemes: true, noContextFiles: true });
@@ -69,7 +70,8 @@ export class NativeBackend {
   private readonly session: AgentSession;
   private readonly releaseRoute?: () => Promise<void>;
   private readonly artifactReader?:()=>Promise<readonly Artifact[]>;
-  constructor(session: AgentSession, releaseRoute?: () => Promise<void>,artifactReader?:()=>Promise<readonly Artifact[]>) { this.session = session; this.releaseRoute = releaseRoute;this.artifactReader=artifactReader; }
+  private readonly shouldPause?:()=>boolean;
+  constructor(session: AgentSession, releaseRoute?: () => Promise<void>,artifactReader?:()=>Promise<readonly Artifact[]>,shouldPause?:()=>boolean) { this.session = session; this.releaseRoute = releaseRoute;this.artifactReader=artifactReader;this.shouldPause=shouldPause; }
   async artifacts():Promise<readonly Artifact[]>{return await this.artifactReader?.()??[];}
   get activeTools(): string[] { return this.session.getActiveToolNames(); }
   get isStreaming(): boolean { return this.session.isStreaming; }
@@ -97,6 +99,7 @@ export class NativeBackend {
       if (!this.settled) return { outcome: "failed", complete: false };
       const last = this.session.messages.filter(m => m.role === "assistant").at(-1);
       if (this.interrupted) return { outcome: "interrupted", complete: false };
+      if(this.shouldPause?.())return {outcome:"completed",complete:false};
       if (!last || prior.has(last) || !finalized || finalized.stopReason!=="stop" || last.stopReason !== "stop") return { outcome: "failed", complete: false };
       return { outcome: "completed", complete: true };
     } catch {

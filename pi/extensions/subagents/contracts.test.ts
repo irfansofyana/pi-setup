@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import { newRunIds, validateControl, validateLegacy, limits, backpressure } from "./contracts.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("./legacy-fixture.json", import.meta.url), "utf8"));
+test("model-picker identities with slash-qualified IDs and max thinking remain valid through compatibility admission",()=>{
+  assert.deepEqual(validateLegacy("Agent",{prompt:"task",description:"inspect",subagent_type:"worker",model:"fixture/org/model",thinking:"max"}),{ok:true});
+  assert.deepEqual(validateLegacy("Agent",{prompt:"task",description:"inspect",subagent_type:"worker",model:"fixture/model with spaces"}),{ok:false,code:"invalid_request"});
+});
 test("legacy fixture preserves installed tool keys and v2 event envelopes", () => {
   assert.deepEqual(Object.keys(fixture.tools.Agent.required), ["prompt", "description", "subagent_type"]);
   assert.deepEqual(fixture.tools.get_subagent_result, { agent_id: "string", wait: "boolean?", verbose: "boolean?" });

@@ -10,7 +10,7 @@ const ceilings: Record<string, { tools: string[]; extensions: string[]; skills: 
   builder: { tools: [...local, "edit", "write"], extensions: ["headroom", "fff"], skills: ["code-review"], maxTurns: 60, isolation: "worktree" },
   reviewer: { tools: local, extensions: ["headroom", "fff"], skills: ["code-review"], maxTurns: 25 },
 };
-export type Loadout = Readonly<{ role: string; provenance: "trusted-global"; routing: "native" | "headroom"; tools: readonly string[]; extensions: readonly string[]; skills: readonly string[]; model?: string; softTurns: number; graceTurns: number; hardTurns: number; isolation?: string; inheritContext: false; persistSession: false; outputTranscript: false }>;
+export type Loadout = Readonly<{ role: string; provenance: "bundled" | "trusted-global" | "trusted-project"; routing: "native" | "headroom"; tools: readonly string[]; extensions: readonly string[]; skills: readonly string[]; model?: string; softTurns: number; graceTurns: number; hardTurns: number; isolation?: string; inheritContext: false; persistSession: false; outputTranscript: false }>;
 export type Resolution = { loadout?: Loadout; error?: "unknown_role" | "disabled_role" | "untrusted_role" | "authority_expansion" | "missing_resource" | "invalid_model" | "model_unavailable" | "turn_ceiling" | "evaluator_role" };
 const equalSet = (actual: string[], expected: string[]) => actual.length === expected.length && new Set(actual).size === actual.length && actual.every((item) => expected.includes(item));
 export function resolveLoadout(role: string, definitions: Record<string, Definition>, available: Available, options: Options): Resolution {
@@ -28,7 +28,7 @@ export function resolveLoadout(role: string, definitions: Record<string, Definit
     if (!(required as string[]).every((item) => (supplied as string[]).includes(item))) return { error: "missing_resource" };
   }
   const model = def.model ?? options.model ?? options.parentModel;
-  if (model !== undefined && !/^[^\s/]+\/[^\s/]+$/.test(model)) return { error: "invalid_model" };
+  if (model !== undefined && !/^[^\s/]+\/[^\s]+$/.test(model)) return { error: "invalid_model" };
   if (model === undefined || !available.models.includes(model)) return { error: "model_unavailable" };
   if (options.maxTurns !== undefined && (!Number.isSafeInteger(options.maxTurns) || options.maxTurns < 1 || options.maxTurns > def.maxTurns)) return { error: "turn_ceiling" };
   const softTurns = options.maxTurns ?? def.maxTurns;

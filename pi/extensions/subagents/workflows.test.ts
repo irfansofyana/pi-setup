@@ -1,5 +1,13 @@
 import test from"node:test";import assert from"node:assert/strict";import{createWorkflows}from"./workflows.ts";
 async function settled(){for(let i=0;i<8;i++)await new Promise<void>(r=>setImmediate(r));}
+test("workflows use registry-backed custom roles with a bounded custom ceiling",async()=>{
+ const requests:any[]=[];
+ const engine=createWorkflows({enabled:true,isRole:(name:string)=>name==="worker",launch:async(request:any)=>{requests.push(request);return{runId:"run-worker",threadId:"thread-worker",done:Promise.resolve({complete:true,outcome:"completed",text:"ready"})};},stop:async()=>{}}as any);
+ try {assert.throws(()=>engine.start({version:1,steps:[{id:"bad",role:"worker",prompt:"task",maxTurns:41}]}),/budget/);
+  const flow=engine.start({version:1,steps:[{id:"custom",role:"worker",prompt:"Bounded task",maxTurns:40}]});
+  await settled();assert.equal(engine.inspect(flow.id).state,"completed");assert.equal(requests.length,1);assert.equal(requests[0].role,"worker");
+ }finally{await engine.dispose();}
+});
 test("skip reaches all reverse-ordered descendants and completes without a future worker callback",async()=>{
  let launches=0;const engine=createWorkflows({enabled:true,launch:async()=>{launches++;return{runId:"failed",threadId:"thread",done:Promise.resolve({outcome:"failed",complete:false})};},stop:async()=>{}});
  try{

@@ -1,5 +1,13 @@
 import test from"node:test";import assert from"node:assert/strict";import {createScheduler}from"./scheduler.ts";
 function clock(){let time=0,id=0;const timers=new Map<number,{at:number;fn:()=>void}>();return {now:()=>time,set:(fn:()=>void,delay:number)=>{const key=++id;timers.set(key,{at:time+delay,fn});return key;},clear:(key:number)=>timers.delete(key),async advance(value:number){time=value;for(const[key,timer]of[...timers])if(timer.at<=time){timers.delete(key);timer.fn();}for(let i=0;i<5;i++)await new Promise<void>(r=>setImmediate(r));},size:()=>timers.size};}
+test("schedules accept a reviewed custom role and reject removed definitions before adding timers",async()=>{
+ const fake=clock(),requests:any[]=[];
+ const scheduler=createScheduler({enabled:true,clock:fake,isRole:(name:string)=>name==="worker",launch:async(request:any)=>{requests.push(request);return{runId:"run-custom",threadId:"thread-custom",done:Promise.resolve()};},stop:async()=>{}}as any);
+ try {scheduler.add({schedule:{kind:"once",at:100},request:{role:"worker",prompt:"Custom task"}});
+  assert.throws(()=>scheduler.add({schedule:{kind:"once",at:101},request:{role:"missing",prompt:"Invalid task"}}),/invalid/);
+  await fake.advance(100);assert.equal(requests.length,1);assert.equal(requests[0].role,"worker");
+ }finally{scheduler.dispose();}
+});
 test("restored jobs stay paused without replay; launch failures pause instead of retrying forever",async()=>{
  const fake=clock();let calls=0;
  const scheduler=createScheduler({enabled:true,clock:fake,launch:async()=>{calls++;throw Error("lease lost");},stop:async()=>{}});

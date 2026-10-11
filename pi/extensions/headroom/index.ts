@@ -14,7 +14,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { publishChildRouting } from "./child-route.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type StartupMode = "manual" | "auto" | "off";
@@ -231,9 +232,9 @@ interface CompressResult {
   proxyCcrHashes: string[];
 }
 
-const ROOT_DIR = join(homedir(), ".pi", "agent", "headroom");
+const ROOT_DIR = join(getAgentDir(), "headroom");
 const CONFIG_PATH = join(ROOT_DIR, "config.json");
-const MODELS_CONFIG_PATH = join(homedir(), ".pi", "agent", "models.json");
+const MODELS_CONFIG_PATH = join(getAgentDir(), "models.json");
 const STORE_DIR = join(ROOT_DIR, "store");
 const LOG_PATH = join(ROOT_DIR, "headroom-proxy.log");
 const PID_PATH = join(ROOT_DIR, "headroom-proxy.pid");
@@ -1309,6 +1310,36 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
   let resetConfigForSave: HeadroomConfig | undefined;
   let proxyRegistration: ActiveHeadroomProxyRegistration | undefined;
+  const childRoutingReleases = new Set<() => void>();
+  const publishPublicChildRouting = (ctx: ExtensionContext) => {
+    const captured = ctx.modelRegistry.getAvailable().map(model => ({ ...model }));
+    const canonical = (provider: string, id: string) => {
+      const runtime = runtimeForRouting(ctx);
+      const shared = runtime && sharedRoutingStates().get(runtime);
+      const source = shared?.canonicalModels.find(model => model.provider === provider && model.id === id)
+        ?? captured.find(model => model.provider === provider && model.id === id);
+      const current = ctx.modelRegistry.find(provider, id);
+      const proxyBase = proxyBaseUrlForApi(config.proxyUrl, source?.api ?? "");
+      if (!source || !current || current.api !== source.api || ![source.baseUrl, proxyBase].includes(current.baseUrl)) return undefined;
+      return { provider, id, api: source.api, baseUrl: source.baseUrl };
+    };
+    childRoutingReleases.add(publishChildRouting(ctx.modelRegistry, { canonical,
+      async route(provider, id, signal) {
+        signal?.throwIfAborted();
+        const source = canonical(provider, id);
+        const active = proxyRegistration;
+        if (!source || !runtimeEnabled || !config.enabled || config.localToolResultCompression || isRemoteBlocked(config) || !active) return undefined;
+        if (active.sharedState && (active.leaseGeneration !== active.sharedState.generation || active.sharedState.references < 1)) return undefined;
+        const baseUrl = active.providers.get(provider);
+        if (!baseUrl || baseUrl !== proxyBaseUrlForApi(config.proxyUrl, source.api)) return undefined;
+        if (!(await dependencies.health(config, signal))) return undefined;
+        signal?.throwIfAborted();
+        // Parent stop/reconfiguration during readiness must not authorize a retired route.
+        if (proxyRegistration !== active || !runtimeEnabled) return undefined;
+        return { baseUrl, upstream: active.upstreamByModel.get(routeKey(provider, id)) };
+      },
+    }));
+  };
   let proxyRoutingError: string | undefined;
   let sharedReleaseInFlight: Promise<boolean> | undefined;
   const requestSharedManagedRelease = (shared: SharedHeadroomRoutingState): void => {
@@ -2071,6 +2102,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
+    publishPublicChildRouting(ctx);
     if (isSpecialistSession()) {
       disableLocalCompressionForSpecialist();
       synchronizeSharedRouting(ctx);
@@ -2087,7 +2119,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    await stopManagedProxy(ctx, false);
+    try { await stopManagedProxy(ctx, false); }
+    finally { for (const release of childRoutingReleases) release(); childRoutingReleases.clear(); }
   });
 
   pi.on("before_provider_headers", (event, ctx) => {

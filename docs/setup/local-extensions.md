@@ -97,6 +97,13 @@ uv tool install "headroom-ai[proxy]"
 
 The Headroom adapter loads from the first-party package. Its CLI and `~/.pi/agent/headroom/config.json` remain external/user-owned and must survive package updates and duplicate cleanup.
 
+The default-inert first-party subagent-manager fork can borrow parent route
+metadata through public registry identity. Before each child request it prefers
+healthy Headroom, otherwise warns and uses the exact upstream with current parent
+auth/OAuth headers. It never replays an already-submitted request or starts a
+child-owned proxy. Private Pi profiles keep Headroom config/log/PID state under
+their own agent directory; real provider/proxy behavior remains a manual gate.
+
 npm `headroom-ai` is SDK-only.
 
 Commands:

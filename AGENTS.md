@@ -40,9 +40,9 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 ## Subagent templates
 
-- Pi packages do not natively declare agent resources. Keep reviewed reusable templates under `pi/agents/` and deploy them through the approval-gated `pi-setup` skill.
-- Install reusable roles globally under `~/.pi/agent/agents/`. Do not recommend invoking project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
-- Keep Ciung mechanically scoped to `web-research`'s `web_search`/`web_fetch` plus bundled `my-web-search`; keep Laya and Prabu read-only and network-free. Every role must set `inherit_context: false`, keep bounded turns, and disable output transcripts.
+- Pi packages do not natively declare agent resources. The first-party subagent extension loads its own four bundled definitions from `pi/extensions/subagents/agents/`: researcher, scout, builder, reviewer. `code-mapper` aliases scout. Native custom Markdown/YAML definitions use `<agent-dir>/subagent-manager/agents/`, with project discovery only after explicit project trust. Retain `pi/agents/` as legacy companion compatibility; do not manually deploy those templates for the native runtime or remove installed copies without separate approval.
+- Legacy companion roles deploy globally under `~/.pi/agent/agents/` only after approval. Native overrides use the extension-owned directory above. Do not recommend invoking project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
+- Keep researcher mechanically scoped to `web-research`'s `web_search`/`web_fetch` plus bundled `my-web-search`; keep scout and reviewer read-only and network-free. All bundled roles stay fresh-context, bounded-turn and no-output-transcript by resolver policy (legacy templates additionally set `inherit_context: false`). Child progress/pause metadata controls do not grant additional filesystem/network authority.
 - Keep canonical templates model-neutral. Per-invocation or installed-copy model choices use exact `provider/model-id`; treat `scopeModels` as a guardrail, not a security boundary.
 - Builder must use Git worktree isolation and may not push, merge, deploy, publish, or handle secrets.
 - `docs/setup/subagents.md` owns team roles, deployment/rollback, orchestration prompts, and trust guidance.

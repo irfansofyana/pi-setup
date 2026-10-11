@@ -2,9 +2,24 @@
 
 For the experimental first-party runtime, see the [isolated native preview](../../pi/extensions/subagents/preview.md). It uses a separate temporary profile and does not replace the companion/deployment procedure below.
 
+Native defaults are bundled `researcher`, `scout`, `builder`, and `reviewer`;
+`code-mapper` is a compatibility alias for scout. No global template deployment
+is needed for that runtime. `/agents` opens settings; `types`, `tree`, `import`,
+`reload` and `reap` expose customization and lifecycle UI. Custom Markdown types
+and sparse YAML overrides belong to `<agent-dir>/subagent-manager/agents/`.
+Trusted project overrides use `.pi/agent/subagent-manager/agents/`; never grant
+project trust merely to load agents. Existing global companion templates are not
+removed, migrated or activated by this implementation. The legacy procedure and
+persona names below apply only to the still-installed companion, not the native
+bundled defaults. The [feature audit](../../pi/extensions/subagents/parity.md)
+records the implemented UI/runtime and exact setup differences. Manual terminal,
+provider and CI acceptance remain pending; this is not live cutover approval.
+
 ## Native runtime cutover
 
-The package contains the default-inert native implementation and an isolated
+The package contains a default-inert fork of `championswimmer/pi-subagent-manager`
+(0.20.0, pinned commit `1f037b1`, MIT), adapted to the canonical roles and one
+bounded native SDK execution pool, plus an isolated
 manual-test launcher. Existing three-companion policy stays in force until a
 separate repository cutover decision. Implementation/manual testing does not
 authorize uninstall, live configuration or theme changes.
@@ -17,7 +32,7 @@ proposal only (not an instruction to write/activate now):
 {
   "version": 1,
   "enabled": true,
-  "routing": "native",
+  "routing": "headroom-preferred",
   "concurrency": 1,
   "threads": 4,
   "slots": 8,
@@ -34,8 +49,10 @@ proposal only (not an instruction to write/activate now):
 }
 ```
 
-Lower caps above suit shared hosts. Only `routing: native` is CLI-supported;
-Headroom requests reject instead of silently bypassing the proxy. Canonical
+Lower caps above suit shared hosts. Default `routing: headroom-preferred` uses the
+parent's healthy Headroom route or warns and uses the exact upstream provider with
+parent auth/OAuth. Requests are never replayed after submission. Explicit
+`routing: native` selects direct-only mode. Canonical
 templates stay model-neutral/fresh; sessions/transcripts stay off. Snapshot,
 retention, job/workflow and artifact behavior belongs to the
 [component docs](../../pi/extensions/subagents/README.md).
@@ -52,7 +69,7 @@ Numbered cutover proposals must separately cover:
    rejects known configured Tintinweb sources before registering tools; it is not
    a sandbox or proof against arbitrary renamed extension factories.
 4. Re-read targets, back up privately, apply only approved proposals and restart
-   Pi (or `/reload` where applicable). Verify one runtime/eight tools, `/agents`,
+   Pi (or `/reload` where applicable). Verify one runtime/15 tools, `/agents tree`,
    prior-generation drain and focused acceptance before retaining the change.
 
 Rollback: stop/drain native Pi, remove its environment opt-in, restore only
@@ -61,7 +78,12 @@ verify the previous companion. Never overwrite newer state with stale backups.
 Keep native outcome/worktree evidence; do not delete it as rollback. No helper
 automatically applies migration or uninstalls a companion.
 
-This setup turns `@tintinweb/pi-subagents` into a small agent team instead of a generic delegation button. The templates live under [`pi/agents`](../../pi/agents) and are copied to the trusted global directory, not activated from a project checkout.
+## Legacy companion templates (compatibility only)
+
+The following deployment procedure applies only to `@tintinweb/pi-subagents`.
+Templates under [`pi/agents`](../../pi/agents) are deprecated for first-party native
+deployment, but retained for existing companion devices. Do not copy them for the
+native runtime or delete installed copies without separate approval.
 
 ## Team
 

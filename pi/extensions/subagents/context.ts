@@ -10,7 +10,7 @@ const excludedCategories = Object.freeze(["system", "model_change", "thinking_le
 const reject = (code: Exclude<ContextResolution, { ok: true }>["code"]): ContextResolution => ({ ok: false, code });
 
 /** The resolver is a trusted host callback, never an untrusted path or ambient current session. */
-export function resolveContext(request: ContextRequest, resolveSource: (sessionId: string) => SessionManager | undefined, role: string): ContextResolution {
+export function resolveContext(request: ContextRequest, resolveSource: (sessionId: string) => SessionManager | undefined, role: string, reviewedTools?:readonly string[]): ContextResolution {
   if (!request || typeof request !== "object" || Object.keys(request).some(k => !["mode", "sourceSessionId", "branchLeafId", "entryAnchorId"].includes(k)) || !["snapshot", "fork"].includes(request.mode) || ![request.sourceSessionId, request.branchLeafId, request.entryAnchorId].every(v => typeof v === "string" && v.length > 0)) return reject("invalid_context");
   if (request.mode === "fork") return reject("unsupported_fork");
   if (role === "researcher") return reject("privacy_sensitive_context");
@@ -21,7 +21,7 @@ export function resolveContext(request: ContextRequest, resolveSource: (sessionI
   if (!branch.some(e => e.id === request.entryAnchorId)) return reject("invalid_context");
   const projection = buildSessionProjection(source.getEntries(), request.entryAnchorId);
   const messages: TransferMessage[] = [], ids: string[] = [];
-  const allowedTools=new Set(["read","grep","find","ls","fffind","ffgrep","fff-multi-grep",...(role==="builder"?["write","edit"]:[])]);
+  const allowedTools=new Set(["read","grep","find","ls","fffind","ffgrep","fff-multi-grep",...(role==="builder"?["write","edit"]:[])].filter(name=>reviewedTools===undefined||reviewedTools.includes(name)));
   const pending = new Map<string,string>();
   for (const projected of projection.entries) {
     const entry = projected.sourceEntry;

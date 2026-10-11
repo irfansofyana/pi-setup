@@ -54,6 +54,6 @@ jobs:
             case "$test_file" in
               */headroom-backend.test.ts|*/route-transport.test.ts) continue ;;
             esac
-            node --test --test-concurrency=1 "$test_file" || exit 1
+            node --experimental-transform-types --test --test-concurrency=1 "$test_file" || exit 1
           done
           node --test --test-concurrency=1 pi/extensions/goal-loop/*.test.ts pi/extensions/loop/*.test.ts

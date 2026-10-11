@@ -7,6 +7,16 @@ function bus() {
   return {messages,on(name:string,fn:any){const handlers=listeners.get(name)??new Set();handlers.add(fn);listeners.set(name,handlers);return ()=>handlers.delete(fn);},
     async emit(name:string,value:any){messages.push([name,value]);await Promise.all([...(listeners.get(name)??[])].map(fn=>fn(value)));}};
 }
+test("RPC admits registry-backed custom/scout roles while rejecting unknown types before launch",async()=>{
+ const events=bus();let serial=0;
+ const supervisor=createSupervisor({nextId:()=>String(++serial),createBackend:async()=>({run:async()=>({outcome:"completed",complete:true}),abort:async()=>{},dispose:async()=>{}})});
+ const protocol=createProtocol({events,supervisor,start:supervisor.start,generation:"custom",isRole:(name:string)=>["worker","scout"].includes(name)}as any);
+ try {for(const type of["worker","scout","missing"]){await events.emit("subagents:rpc:spawn",{requestId:type,type,prompt:"Bounded task",options:{}});}
+  assert.equal(events.messages.find(([name])=>name.endsWith(":reply:worker"))[1].success,true);
+  assert.equal(events.messages.find(([name])=>name.endsWith(":reply:scout"))[1].success,true);
+  assert.equal(events.messages.find(([name])=>name.endsWith(":reply:missing"))[1].success,false);
+ }finally{protocol.dispose();await supervisor.dispose();}
+});
 test("concurrent duplicate spawn requests reserve identity before asynchronous preparation",async()=>{
  const events=bus();let n=0,starts=0,release:any;const gate=new Promise<void>(resolve=>release=resolve);
  const service=createSupervisor({nextId:()=>String(++n),createBackend:async()=>({run:async()=>({outcome:"completed",complete:true}),abort:async()=>{},dispose:async()=>{}})});

@@ -50,6 +50,12 @@ test("snapshot refuses tool history outside the destination role loadout",()=>{
  assert.deepEqual(resolveContext(request(manager,leaf),()=>manager,"reviewer"),{ok:false,code:"privacy_sensitive_context"});
 });
 
+test("custom snapshot uses its exact reviewed tool subset rather than every local read tool",()=>{
+  const {manager,result}=source();
+  assert.deepEqual(resolveContext(request(manager,result),()=>manager,"custom",[]),{ok:false,code:"privacy_sensitive_context"});
+  assert.equal(resolveContext(request(manager,result),()=>manager,"custom",["read"]).ok,true);
+});
+
 test("private categories, image payloads and oversized serialized snapshots reject without truncation", () => {
   const { manager } = source();
   const hidden = manager.appendCustomMessageEntry("secret", "private", false);

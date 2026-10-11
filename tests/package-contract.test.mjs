@@ -144,11 +144,13 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     "npm:pi-stats-ext@0.2.0",
     "npm:@ff-labs/pi-fff@0.10.5",
   ];
-  for (const field of ["dependencies", "optionalDependencies", "bundledDependencies"]) {
+  assert.deepEqual(manifest.dependencies, { fuzzysort: "4.0.2", "shell-quote": "1.8.3", yaml: "2.8.1" }, "only reviewed upstream viewer libraries are runtime dependencies");
+  for (const field of ["optionalDependencies", "bundledDependencies"]) {
     assert.equal(manifest[field], undefined, `companions must not appear in ${field}`);
   }
   for (const spec of expected) {
     const name = spec.replace(/^npm:/, "").replace(/@[^@]+$/, "");
+    assert.equal(manifest.dependencies?.[name], undefined, `${name} must remain a separate Pi source`);
     assert.equal(manifest.peerDependencies?.[name], undefined, `${name} must remain a separate Pi source`);
   }
   assert.deepEqual(manifest.piSetup.requiredPackages, expected);

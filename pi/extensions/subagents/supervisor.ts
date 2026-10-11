@@ -7,13 +7,13 @@ import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
 export type Backend = { run(prompt: string, emit: (event: any) => void): Promise<{ outcome: "completed" | "failed" | "interrupted"; complete: boolean }>; artifacts?():Promise<RunResult["artifacts"]>;hasRetainedContext?(): boolean; abort(): Promise<void>; dispose(): Promise<void>; message?(text: string): Promise<{ status: "unknown_delivery" | "rejected" }>; steer?(text: string): Promise<{ status: "queued" | "handled" | "unknown_delivery" | "rejected" }> };
 export type Budget = { softTurns: number; hardTurns: number; maxTokens?: number; maxCost?: number; elapsedMs?: number };
-export type StartRequest = { prompt: string; maxTurns?: number; evaluator?: boolean; role?: string; context?: ContextRequest; model?: string; thinking?: string; files?: string[];artifactId?:string };
-export type PreparedRun = { budget: Budget;model?:string; createBackend(context?: ContextSnapshot): Promise<Backend> };
+export type StartRequest = { prompt: string; maxTurns?: number; evaluator?: boolean; role?: string; context?: ContextRequest; model?: string; thinking?: string; files?: string[];artifactId?:string;managerPath?:string;budgetExtendable?:false };
+export type PreparedRun = { budget: Budget;model?:string;thinking?:string;contextTools?:readonly string[]; createBackend(context?: ContextSnapshot): Promise<Backend> };
 type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
 const emptyUsage = (): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 });
 type Options = { createBackend(context?: ContextSnapshot): Promise<Backend>; prepare?(request: StartRequest): Promise<PreparedRun>; resolveSource?: (sessionId: string) => SessionManager | undefined; nextId(): string; concurrency?: number; pending?: number; slots?: number; bytes?: number; threads?: number; budget?: Budget; evaluatorSupported?: boolean; now?: () => number;cleanupMs?:number };
-type Entry = { agentId: string; threadId: string; runId: string; prompt: string; state: RunState; backend?: Backend; stop: boolean; exhausted: boolean; turns: number;usage:Usage;usageKnown:boolean;toolUses:number; softNotified: boolean; budget?: Budget; seen: Set<string>; seenObjects: WeakSet<object>; timer?: ReturnType<typeof setTimeout>; result?: RunResult;artifacts?:RunResult["artifacts"]; consumed: boolean; text: string; truncated: boolean; resolve: (value: RunResult) => void; done: Promise<RunResult> };
-type Thread = { agentId: string; id: string; state: "open" | "closing" | "closed"; current: Entry; runs: Entry[];model?:string; context?: ContextSnapshot; factory?: PreparedRun["createBackend"]; usage: Usage; turns: number; softNotified: boolean; deadline?: number; mailbox: string[]; mailboxBytes: number; backend?: Backend; executing: boolean; cleanup?: Promise<void> };
+type Entry = { agentId: string; threadId: string; runId: string; prompt: string; state: RunState; backend?: Backend; stop: boolean; retainContext?: boolean; exhausted: boolean; turns: number;usage:Usage;usageKnown:boolean;toolUses:number; softNotified: boolean; budget?: Budget; seen: Set<string>; seenObjects: WeakSet<object>; timer?: ReturnType<typeof setTimeout>; result?: RunResult;artifacts?:RunResult["artifacts"]; consumed: boolean; text: string; truncated: boolean; resolve: (value: RunResult) => void; done: Promise<RunResult> };
+type Thread = { agentId: string; id: string; state: "open" | "closing" | "closed"; current: Entry; runs: Entry[];model?:string;thinking?:string; context?: ContextSnapshot; factory?: PreparedRun["createBackend"]; usage: Usage; turns: number; softNotified: boolean; initialSoftTurns?: number; budgetExtensions: number; deadline?: number; mailbox: string[]; mailboxBytes: number; backend?: Backend; executing: boolean; cleanup?: Promise<void> };
 type Started = Receipt & { ok: true; agentId: string; threadId: string; runId: string };
 type FleetEvent = { runId: string; threadId: string; type: "state" | "native" | "result"; state?: RunState; event?: any; result?: RunResult };
 const failure = (code: Rejection["code"], domain?: Rejection["domain"]): Rejection => ({ ok: false, code, ...(domain ? { domain, recovery: domain === "results" ? "consume_or_close" : "retry_after_drain" } : {}) });
@@ -24,6 +24,7 @@ export function createSupervisor(options: Options) {
   const concurrency = options.concurrency ?? 3, pending = options.pending ?? limits.pendingRunsPerRoot;
   const slots = options.slots ?? limits.resultSlots, bytes = options.bytes ?? limits.queuedBytes;
   const threads = options.threads ?? limits.threadsPerRoot;
+  let admissionConcurrency=concurrency,admissionThreads=threads;
   const cleanupMs=options.cleanupMs??10000;
   if(!Number.isSafeInteger(cleanupMs)||cleanupMs<1||cleanupMs>30000)throw new RangeError("Invalid cleanup grace");
   if (![concurrency, pending, slots, bytes, threads].every(n => Number.isSafeInteger(n) && n > 0) ||
@@ -85,7 +86,7 @@ export function createSupervisor(options: Options) {
   function makeEntry(agentId: string, threadId: string, runId: string, prompt: string, effective?: Budget): Entry {
     let resolve!: (value: RunResult) => void;
     const done = new Promise<RunResult>(r => { resolve = r; });
-    return { agentId, threadId, runId, prompt, state: "queued", stop: false, exhausted: false, turns: 0,usage:emptyUsage(),usageKnown:false,toolUses:0, softNotified: false, budget: effective, seen: new Set(), seenObjects: new WeakSet(), consumed: false, text: "", truncated: false, resolve, done };
+    return { agentId, threadId, runId, prompt, state: "queued", stop: false, exhausted: false, turns: 0,usage:emptyUsage(),usageKnown:false,toolUses:0, softNotified: false, budget: effective&&Object.freeze({...effective}), seen: new Set(), seenObjects: new WeakSet(), consumed: false, text: "", truncated: false, resolve, done };
   }
   function exhaust(entry: Entry) {
     if (entry.result || entry.stop || entry.exhausted) return;
@@ -124,12 +125,22 @@ export function createSupervisor(options: Options) {
     }
   }
   function enqueue(entry: Entry) { entries.set(entry.runId, entry); queue.push(entry); queuedBytes += utf8Bytes(entry.prompt); prune(); state(entry, "queued"); pump(); }
+  const reacquiring: { thread: Thread; entry: Entry; resolve(): void; reject(error: Error): void }[] = [];
+  const slotOwners = new Set<string>(), yielding = new Set<string>();
   function pump() {
-    while (!disposed && active < concurrency) {
+    for (let index=0;index<reacquiring.length;) {
+      const waiter=reacquiring[index];
+      if(disposed||waiter.entry.stop||waiter.entry.exhausted||waiter.thread.state!=="open"){
+        reacquiring.splice(index,1);waiter.reject(abortError());continue;
+      }
+      if(active>=admissionConcurrency)break;
+      reacquiring.splice(index,1);active++;slotOwners.add(waiter.thread.id);waiter.resolve();
+    }
+    while (!disposed && active < admissionConcurrency) {
       const index = queue.findIndex(e => { const t = byThread.get(e.threadId)!; return t.state === "open" && !t.executing && t.current === e && !e.stop; });
       if (index < 0) break;
       const entry = queue.splice(index, 1)[0]; queuedBytes -= utf8Bytes(entry.prompt);
-      active++; const thread = byThread.get(entry.threadId)!; thread.executing = true; state(entry, "initializing"); void execute(entry);
+      active++; slotOwners.add(entry.threadId); const thread = byThread.get(entry.threadId)!; thread.executing = true; state(entry, "initializing"); void execute(entry);
     }
   }
   async function execute(entry: Entry) {
@@ -176,16 +187,30 @@ export function createSupervisor(options: Options) {
       }
     } catch { finish(entry, entry.exhausted ? "budget_exhausted" : entry.stop || disposed ? "interrupted" : "failed", false); }
     finally {
-      if (thread.state === "closing" || entry.stop || entry.exhausted || disposed) {
+      if (thread.state === "closing" || (entry.stop && !entry.retainContext) || entry.exhausted || disposed) {
         try { if (thread.backend) await cleanup(thread); thread.backend = undefined; }
         catch { state(entry, "quarantined"); return; }
       }
       if (entry.stop || entry.exhausted || !thread.backend) for (const next of thread.runs) if (next.state === "queued" && !next.result) cancelQueued(next);
-      thread.executing = false; active--;
+      thread.executing = false; if(slotOwners.delete(thread.id))active--;
       if (thread.state === "closing") { thread.state = "closed"; prune(); }
       else { const next = thread.runs.find(e => e.state === "queued" && !e.result); if (next) thread.current = next; }
       pump();
     }
+  }
+  /** Owner-only cooperative wait. It yields model execution, not thread ownership or budgets. */
+  async function withYieldedSlot<T>(threadId:string,runId:string,work:()=>Promise<T>):Promise<T>{
+    const thread=byThread.get(threadId),entry=entries.get(runId);
+    if(!thread||!entry||thread.current!==entry||!thread.executing||entry.result||entry.stop||disposed||
+      !slotOwners.has(threadId)||yielding.has(threadId))throw Error("Only the current executing owner can yield a slot");
+    yielding.add(threadId);slotOwners.delete(threadId);active--;pump();
+    try{
+      let value!:T,error:unknown,failed=false;
+      try{value=await work();}catch(reason){error=reason;failed=true;}
+      await new Promise<void>((resolve,reject)=>{reacquiring.push({thread,entry,resolve,reject});pump();});
+      if(failed)throw error;
+      return value;
+    }finally{yielding.delete(threadId);}
   }
   function capacity(prompt: string): Rejection | undefined {
     const size = utf8Bytes(prompt);
@@ -194,11 +219,13 @@ export function createSupervisor(options: Options) {
     if (reserved() >= slots) return failure("backpressure", "results");
   }
   async function start(request: unknown): Promise<Started | Rejection> {
-    if (disposed || !request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).some(k => !["prompt", "maxTurns", "evaluator", "role", "context", "model", "thinking", "files","artifactId"].includes(k)) || typeof (request as {prompt?: unknown}).prompt !== "string" || !(request as {prompt: string}).prompt.trim()) return failure("invalid_request");
+    if (disposed || !request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).some(k => !["prompt", "maxTurns", "evaluator", "role", "context", "model", "thinking", "files","artifactId","managerPath","budgetExtendable"].includes(k)) || typeof (request as {prompt?: unknown}).prompt !== "string" || !(request as {prompt: string}).prompt.trim()) return failure("invalid_request");
+    if ((request as StartRequest).budgetExtendable!==undefined&&(request as StartRequest).budgetExtendable!==false)return failure("invalid_request");
+    if((request as StartRequest).managerPath!==undefined&&(typeof(request as StartRequest).managerPath!=="string"||!/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test((request as StartRequest).managerPath!)))return failure("invalid_request");
     const { prompt, maxTurns, evaluator, role, context, model, thinking, files } = request as StartRequest;
     if((request as StartRequest).artifactId!==undefined&&(role!=="builder"||typeof(request as StartRequest).artifactId!=="string"||!/^[a-f0-9-]{36}$/.test((request as StartRequest).artifactId!)))return failure("invalid_request");
-    if ((model !== undefined && (typeof model !== "string" || !/^[^\s/]+\/[^\s/]+$/.test(model))) ||
-      (thinking !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinking)) ||
+    if ((model !== undefined && (typeof model !== "string" || !/^[^\s/]+\/[^\s]+$/.test(model))) ||
+      (thinking !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) ||
       (files !== undefined && (!Array.isArray(files) || files.length > 64 || !files.every(f => typeof f === "string" && f.length > 0 && f.length <= 1024)))) return failure("invalid_request");
     if ((role !== undefined && (typeof role !== "string" || !role)) || (context !== undefined && (!role || !options.resolveSource))) return failure("invalid_request");
     const resolved = context && resolveContext(context, options.resolveSource!, role!);
@@ -207,6 +234,7 @@ export function createSupervisor(options: Options) {
     let prepared: PreparedRun | undefined;
     try { prepared = await options.prepare?.(Object.freeze({ ...(request as StartRequest), ...(files ? { files: [...files] } : {}) })); }
     catch { return failure("invalid_request"); }
+    if(snapshot&&prepared?.contextTools&&snapshot.messages.some(message=>message.role==="assistant"&&message.content.some(block=>block.type==="toolCall"&&!prepared!.contextTools!.includes(block.name))))return failure("privacy_sensitive_context");
     const budget = prepared?.budget ?? options.budget;
     if (prepared && (!budget || ![budget.softTurns, budget.hardTurns].every(n => Number.isSafeInteger(n) && n > 0) || budget.hardTurns < budget.softTurns ||
       (budget.elapsedMs !== undefined && (!Number.isSafeInteger(budget.elapsedMs) || budget.elapsedMs < 0)) ||
@@ -216,11 +244,11 @@ export function createSupervisor(options: Options) {
     if (evaluator !== undefined && (evaluator !== true || !options.evaluatorSupported || !budget || budget.softTurns < 2 || budget.hardTurns < 2)) return failure("unsupported_field");
     const effective = budget && (evaluator ? { ...budget, softTurns: 2, hardTurns: 2 } : { ...budget, softTurns: maxTurns ?? budget.softTurns, hardTurns: Math.min(budget.hardTurns, (maxTurns ?? budget.softTurns) + (budget.hardTurns - budget.softTurns)) });
     const cap = capacity(prompt); if (cap) return cap;
-    if ([...byThread.values()].filter(t => t.state !== "closed").length >= threads) return failure("backpressure", "threads");
+    if ([...byThread.values()].filter(t => t.state !== "closed").length >= admissionThreads) return failure("backpressure", "threads");
     // Generate all identities before mutating queue/threads; a failed generator cannot leak a reservation.
     const agentId = id("agent"), threadId = id("thread"), runId = id("run"), controlId = id("control");
     const entry = makeEntry(agentId, threadId, runId, prompt, effective);
-    byThread.set(threadId, { agentId, id: threadId, state: "open", current: entry, runs: [entry],model:prepared?.model, context: snapshot, factory: prepared?.createBackend, usage: emptyUsage(), turns: 0, softNotified: false, mailbox: [], mailboxBytes: 0, executing: false });
+    byThread.set(threadId, { agentId, id: threadId, state: "open", current: entry, runs: [entry],model:prepared?.model,thinking:prepared?.thinking, context: snapshot, factory: prepared?.createBackend, usage: emptyUsage(), turns: 0, softNotified: false, initialSoftTurns:evaluator||(request as StartRequest).budgetExtendable===false?undefined:effective?.softTurns,budgetExtensions:0, mailbox: [], mailboxBytes: 0, executing: false });
     enqueue(entry);
     return { ok: true, version: 1, controlId, runId, threadId, agentId, status: "accepted" };
   }
@@ -258,6 +286,17 @@ export function createSupervisor(options: Options) {
       return receipt(controlId, entry.runId);
     }
     if (thread.state !== "open" || disposed) return receipt(controlId, entry.runId, failure("stale_run"));
+    if (request.operation === "extend_budget") {
+      const current=entry.budget,base=thread.initialSoftTurns,additional=request.additionalTurns!;
+      if (!current || !base || !thread.backend || entry.exhausted || entry.stop || thread.budgetExtensions>=2 || additional>base ||
+        (thread.deadline!==undefined&&now()>=thread.deadline) ||
+        (current.maxTokens!==undefined&&thread.usage.totalTokens>=current.maxTokens) ||
+        (current.maxCost!==undefined&&thread.usage.cost>=current.maxCost)) return receipt(controlId,entry.runId,failure("backpressure"));
+      const next=Object.freeze({...current,softTurns:current.softTurns+additional,hardTurns:current.hardTurns+additional});
+      for(const run of thread.runs)if(run===entry||!run.result)run.budget=next;
+      thread.budgetExtensions++;thread.softNotified=false;
+      return receipt(controlId,entry.runId);
+    }
     if (request.operation === "resume" && (!thread.backend || thread.executing || !entry.result?.complete || thread.backend.hasRetainedContext?.() !== true)) return receipt(controlId, entry.runId, failure("unsupported_field"));
     if (request.operation === "follow_up" || request.operation === "resume") {
       if (!thread.executing && !thread.backend) return receipt(controlId, entry.runId, failure("unsupported_field"));
@@ -293,7 +332,7 @@ export function createSupervisor(options: Options) {
     const entry = runId===undefined?thread.current:thread.runs.find(run=>run.runId===runId);
     if(!entry)return;
     const context = thread.context && Object.freeze({ sourceSessionId: thread.context.sourceSessionId, branchLeafId: thread.context.branchLeafId, entryAnchorId: thread.context.entryAnchorId, sourceEntryIds: thread.context.sourceEntryIds, serializedBytes: thread.context.serializedBytes, policy: thread.context.policy });
-    return Object.freeze({ agentId: entry.agentId, threadId, runId: entry.runId,model:thread.model, state: entry.state, threadState: thread.state, context, turns: thread.turns,budget:entry.budget,runTurns:entry.turns,runUsage:Object.freeze({...entry.usage}),toolUses:entry.toolUses, usage: Object.freeze({ ...thread.usage }), consumed: entry.consumed, result: entry.result });
+    return Object.freeze({ agentId: entry.agentId, threadId, runId: entry.runId,model:thread.model,thinking:thread.thinking, state: entry.state, threadState: thread.state, context, turns: thread.turns,budget:entry.budget,budgetExtensions:thread.budgetExtensions,runTurns:entry.turns,runUsage:Object.freeze({...entry.usage}),toolUses:entry.toolUses, usage: Object.freeze({ ...thread.usage }), consumed: entry.consumed, result: entry.result });
   }
   async function wait(runIds: readonly string[], signal?: AbortSignal, timeoutMs?: number): Promise<readonly RunResult[]> {
     const runs = runIds.map(runId => { const e = entries.get(runId); if (!e) throw new Error(`Unknown run: ${runId}`); return e.done; });
@@ -312,24 +351,39 @@ export function createSupervisor(options: Options) {
     });
   }
   function subscribe(listener: (event: FleetEvent) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }
+  /** Owner-only upstream stop: retain the same in-memory session and lifetime budget. */
+  function suspend(threadId: string, runId: string): Receipt {
+    const entry = entries.get(runId), thread = byThread.get(threadId), controlId = id("ctl");
+    if (!entry || !thread || thread.current !== entry || entry.threadId !== threadId || entry.result || disposed)
+      return receipt(controlId, runId, failure("stale_run"));
+    entry.retainContext = true;
+    for (const run of thread.runs) if (run !== entry && !run.result) stop(run);
+    stop(entry); pump();
+    return receipt(controlId, runId);
+  }
   async function drain() {
-    if (disposed && !active) return;
+    if (disposed && !active && ![...byThread.values()].some(thread=>thread.executing)) return;
     disposed = true;
     for (const thread of byThread.values()) { if (thread.state !== "closed") thread.state = "closing"; thread.mailbox = []; thread.mailboxBytes = 0; }
     for (const entry of queue.splice(0)) cancelQueued(entry);
     queuedBytes = 0;
     for (const entry of entries.values()) if (!entry.result) stop(entry);
+    pump();
     for (const thread of byThread.values()) if (!thread.executing && thread.backend) {
       try { await cleanup(thread); thread.backend = undefined; thread.state = "closed"; }
       catch { state(thread.current, "quarantined"); throw new Error("Backend cleanup unconfirmed; admission slot quarantined"); }
     }
     await Promise.all([...entries.values()].map(e => e.done));
-    while (active) {
+    while (active || [...byThread.values()].some(thread=>thread.executing)) {
       if ([...entries.values()].some(e => e.state === "quarantined")) throw new Error("Backend cleanup unconfirmed; admission slot quarantined");
       await new Promise<void>(resolve => setImmediate(resolve));
     }
     listeners.clear();
   }
   function dispose(){return disposing??=bounded(drain(),()=>{for(const thread of byThread.values())if(thread.executing||thread.backend)state(thread.current,"quarantined");});}
-  return { start, control, inspect, wait, subscribe, dispose };
+  function setAdmissionLimits(next:{concurrency:number;threads:number}){
+    if(!Number.isSafeInteger(next.concurrency)||next.concurrency<1||next.concurrency>concurrency||!Number.isSafeInteger(next.threads)||next.threads<1||next.threads>threads)throw Error("Admission limits exceed deployment ceiling");
+    admissionConcurrency=next.concurrency;admissionThreads=next.threads;pump();
+  }
+  return { start, control, inspect, wait, subscribe, suspend, dispose, setAdmissionLimits, withYieldedSlot };
 }

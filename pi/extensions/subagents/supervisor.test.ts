@@ -1,6 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSupervisor } from "./supervisor.ts";
+
+test("lowered UI admission limits preserve running work and prevent new over-cap starts", async () => {
+  let serial=0; const releases: (()=>void)[]=[];
+  const service=createSupervisor({nextId:()=>`${++serial}`,concurrency:2,threads:4,createBackend:async()=>({
+    abort:async()=>{},dispose:async()=>{},run:()=>new Promise<any>(resolve=>releases.push(()=>resolve({outcome:"completed",complete:true}))),
+  })});
+  try {
+    assert.equal(typeof (service as any).setAdmissionLimits,"function");
+    (service as any).setAdmissionLimits({concurrency:1,threads:2});
+    const first=await service.start({prompt:"one"}), second=await service.start({prompt:"two"});
+    await new Promise<void>(resolve=>setImmediate(resolve));assert.equal(releases.length,1);
+    assert.equal((await service.start({prompt:"over thread cap"})).ok,false);
+    releases[0]();await service.wait([first.runId]);await new Promise<void>(resolve=>setImmediate(resolve));
+    assert.equal(releases.length,2);releases[1]();await service.wait([second.runId]);
+    assert.throws(()=>(service as any).setAdmissionLimits({concurrency:3,threads:4}),/ceiling/);
+  } finally {for(const release of releases)release();await service.dispose();}
+});
 test("hung initialization has a bounded drain failure, quarantines admission and never frees the unresolved slot",async()=>{
  let n=0,release:any;const setup=new Promise<any>(resolve=>release=resolve);
  const supervisor=createSupervisor({nextId:()=>String(++n),cleanupMs:10,createBackend:async()=>setup});
@@ -36,6 +53,14 @@ function harness(options: { concurrency?: number; pending?: number; slots?: numb
   return { fleet, gates, started, aborted, disposed, messages, steers, get maxRunning() { return maxRunning; } };
 }
 async function tick() { await new Promise<void>(r => setImmediate(r)); }
+
+test("UI-selected slash-qualified exact models and max thinking survive supervised admission",async()=>{
+  let serial=0;
+  const fleet=createSupervisor({nextId:()=>String(++serial),createBackend:async()=>({run:async()=>({outcome:"completed",complete:true}),abort:async()=>{},dispose:async()=>{}})});
+  try { const started=await fleet.start({prompt:"bounded work",model:"fixture/org/model",thinking:"max"});
+    assert.equal(started.ok,true); if(started.ok)assert.equal((await fleet.wait([started.runId]))[0].outcome,"completed");
+  }finally {await fleet.dispose();}
+});
 
 test("exact-run inspection distinguishes a queued continuation from its running predecessor",async()=>{
  const gate=deferred<{outcome:"completed";complete:true}>();let n=0;

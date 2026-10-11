@@ -6,7 +6,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { Available, Definition, Options, Loadout, Resolution } from "./roles.ts";
 import { resolveLoadout } from "./roles.ts";
 import { DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, createAgentSession, createWriteToolDefinition, createEditToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { AgentSession, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { HeadroomChildLease } from "../headroom/index.ts";
 import { assertWritable, validateWorktree,inspectWorktree } from "./worktrees.ts";
 import type { WorktreeLease } from "./worktrees.ts";
@@ -14,6 +14,7 @@ import { NativeBackend } from "./backend.ts";
 import type { BackendResult } from "./backend.ts";
 import type {ContextSnapshot}from"./context.ts";
 import {limits,utf8Bytes}from"./contracts.ts";
+import { canonicalRole, delegationTools, resolveAgentDefinition, type AgentDefinition } from "./registry.ts";
 
 export type TrustedResolution = { ok: true; loadout: Loadout; prompt: string; thinking: "medium" | "high"; fingerprint: string } |
   { ok: false; code: NonNullable<Resolution["error"]> | "invalid_definition" };
@@ -80,9 +81,12 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
   routing?: "native" | "headroom"; reviewedHeadroom?: Readonly<{ enabled: boolean }>;
   /** Caller-reviewed request credential, kept in the child runtime only; no parent auth-store copy. */
   headroom?: { registry: ModelRegistry; proxyUrl: string; apiKey: string };
-  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"; expectedDefinition?: string;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; expectedDefinition?: string;
   extensionFactories?: Record<string, () => unknown>;
   fffPath?: string; skillPaths?: Record<string, string>; fffMultigrepEnabled?: boolean;
+  /** Immutable registry snapshot captured at admission; legacy callers omit it. */
+  definition?: AgentDefinition;
+  childTools?: ToolDefinition[]; shouldPause?:()=>boolean;
   worktreeLease?: WorktreeLease;context?:ContextSnapshot }): Promise<BackendResult> {
   if(options.context&&(options.role==="researcher"||options.context.serializedBytes>limits.contextBytes||options.context.serializedBytes!==utf8Bytes(JSON.stringify({sourceSessionId:options.context.sourceSessionId,branchLeafId:options.context.branchLeafId,entryAnchorId:options.context.entryAnchorId,sourceEntryIds:options.context.sourceEntryIds,messages:options.context.messages,policy:options.context.policy}))))return {ok:false,code:"unsupported_resource"};
   if (options.reviewedHeadroom && typeof options.reviewedHeadroom.enabled !== "boolean") return { ok: false, code: "unsupported_routing" };
@@ -91,9 +95,17 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
   if (routing !== "native" && routing !== "headroom") return { ok: false, code: "unsupported_routing" };
   if (routing === "headroom" && (!options.headroom || typeof options.headroom.apiKey !== "string" ||
     !options.headroom.apiKey.trim() || options.provider || options.role !== "researcher")) return { ok: false, code: "unsupported_routing" };
-  const resolved = await resolveTrustedRole(options.role, options.agentDir, options.available, { model: options.model, routing });
+  let resolved: TrustedResolution | AgentDefinition;
+  try {
+    resolved = options.definition ? resolveAgentDefinition(options.definition.type, { model: options.model, models: options.available.models, modelSelection: "use-current" }) :
+      await resolveTrustedRole(options.role, options.agentDir, options.available, { model: options.model, routing });
+  } catch { return { ok: false, code: "unsupported_resource" }; }
   if (!resolved.ok) return { ok: false, code: resolved.code === "model_unavailable" || resolved.code === "invalid_model" ? "unsupported_provider" : "unsupported_resource" };
+  if (options.definition && (canonicalRole(options.role) !== resolved.loadout.role || options.definition.fingerprint !== resolved.fingerprint || routing !== "native")) return { ok: false, code: "unsupported_resource" };
+  if (options.definition && ![[resolved.loadout.tools, options.available.tools], [resolved.loadout.extensions, options.available.extensions], [resolved.loadout.skills, options.available.skills]].every(([required, supplied]) => required.every(name => supplied.includes(name)))) return { ok: false, code: "unsupported_resource" };
   if (options.expectedDefinition && resolved.fingerprint !== options.expectedDefinition) return { ok: false, code: "unsupported_resource" };
+  if(options.childTools?.length&&(!options.definition||options.childTools.some(tool=>!["agent_update","agent_pause"].includes(tool.name)&&(!(delegationTools as readonly string[]).includes(tool.name)||!(resolved as AgentDefinition).toolNames.includes(tool.name)))||new Set(options.childTools.map(tool=>tool.name)).size!==options.childTools.length))return{ok:false,code:"unsupported_resource"};
+  if(options.definition&&(resolved as AgentDefinition).toolNames.some(name=>(delegationTools as readonly string[]).includes(name)&&!options.childTools?.some(tool=>tool.name===name)))return{ok:false,code:"unsupported_resource"};
   const assignment = resolved.loadout.model!;
   const slash = assignment.indexOf("/"), providerId = assignment.slice(0, slash), modelId = assignment.slice(slash + 1);
   if (routing === "native" && (!options.provider || providerId !== options.provider.id)) return { ok: false, code: "unsupported_provider" };
@@ -101,12 +113,14 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
   if (routing === "headroom" && providerId !== "openai") return { ok: false, code: "unsupported_provider" };
   if (resolved.loadout.isolation === "worktree" && (!options.worktreeLease || options.cwd !== options.worktreeLease.path || !(await validateWorktree(options.worktreeLease)))) return { ok: false, code: "unsupported_resource" };
   const research = options.role === "researcher";
-  const extensionPath = research ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath;
-  if (!extensionPath || (!research && !["code-mapper", "reviewer", "builder"].includes(options.role))) return { ok: false, code: "unsupported_resource" };
+  const extensionPaths = options.definition ? resolved.loadout.extensions.map(name => name === "web-research" ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath) :
+    [research ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath];
+  if (extensionPaths.some(path => !path) || (!options.definition && !research && !["code-mapper", "reviewer", "builder"].includes(options.role))) return { ok: false, code: "unsupported_resource" };
   const skillPaths = research ? { "my-web-search": new URL("../../../skills/my-web-search/SKILL.md", import.meta.url).pathname } : options.skillPaths ?? {};
   if (Object.keys(skillPaths).sort().join() !== [...resolved.loadout.skills].sort().join()) return { ok: false, code: "unsupported_resource" };
-  const expectedExtensions = research ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"];
-  const expectedTools = research ? expectedExtensions : ["read", "grep", "find", "ls", ...expectedExtensions, ...(options.role === "builder" ? ["edit", "write"] : [])];
+  const expectedExtensions = options.definition ? resolved.loadout.extensions.flatMap(name => name === "web-research" ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"]) : research ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"];
+  const expectedTools = options.definition ? (resolved as AgentDefinition).toolNames.filter(name=>!(delegationTools as readonly string[]).includes(name)) : research ? expectedExtensions : ["read", "grep", "find", "ls", ...expectedExtensions, ...(options.role === "builder" ? ["edit", "write"] : [])];
+  expectedTools.push(...(options.childTools??[]).map(tool=>tool.name));
   let lease: HeadroomChildLease | undefined, session: AgentSession | undefined, transferred = false;
   try {
     if (routing === "headroom") {
@@ -123,20 +137,26 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
       if (!new RegExp(`^---\\r?\\nname: ${name}\\r?\\n`, "m").test(text) && !research) return { ok: false, code: "unsupported_resource" };
       texts.push(`<approved-skill name="${name}">\n${text}\n</approved-skill>`);
     }
-    if (!(await lstat(extensionPath)).isFile()) return { ok: false, code: "unsupported_resource" };
+    for (const extensionPath of extensionPaths) if (!(await lstat(extensionPath!)).isFile()) return { ok: false, code: "unsupported_resource" };
     // The actual FFF 0.10.5 reads this flag at factory load. We do not mutate
     // process.env; callers must opt in before invoking the loader.
-    if (!research && options.fffMultigrepEnabled && process.env.PI_FFF_MULTIGREP !== "1") return { ok: false, code: "unsupported_resource" };
-    const settingsManager = SettingsManager.inMemory({});
+    if (expectedExtensions.includes("fff-multi-grep") && options.fffMultigrepEnabled && process.env.PI_FFF_MULTIGREP !== "1") return { ok: false, code: "unsupported_resource" };
+    // Parent retry preferences must not silently replay a child through another route.
+    const settingsManager = SettingsManager.inMemory({ retry: { enabled: false, provider: { maxRetries: 0 } } });
     const loader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir, settingsManager,
       noExtensions: true, noSkills: true, noContextFiles: true, noThemes: true, noPromptTemplates: true,
       disabledBuiltinExtensions: ["mcp", "codemode", "tool-search"], extensionFactories: [],
-      additionalExtensionPaths: [extensionPath], additionalSkillPaths: Object.values(skillPaths),
+      additionalExtensionPaths: extensionPaths as string[], additionalSkillPaths: Object.values(skillPaths),
+      ...(options.definition ? { extensionsOverride: base => {
+        const names = base.extensions.flatMap(extension => [...extension.tools.keys()]);
+        if (base.errors.length || names.sort().join() !== [...expectedExtensions].sort().join()) throw Error("Unexpected approved extension tools");
+        return { ...base, extensions: base.extensions.map(extension => ({ ...extension, tools: new Map([...extension.tools].filter(([name]) => expectedTools.includes(name))) })) };
+      } } : {}),
       systemPrompt: resolved.prompt, appendSystemPrompt: texts });
     await loader.reload();
     const loaded = loader.getExtensions(), skills = loader.getSkills();
-    if (loaded.errors.length || loaded.extensions.length !== 1 ||
-      [...loaded.extensions[0].tools.keys()].sort().join() !== expectedExtensions.sort().join() ||
+    if (loaded.errors.length || loaded.extensions.length !== extensionPaths.length ||
+      loaded.extensions.flatMap(extension => [...extension.tools.keys()]).sort().join() !== expectedExtensions.filter(name => !options.definition || expectedTools.includes(name)).sort().join() ||
       skills.diagnostics.length || skills.skills.map(skill => skill.name).sort().join() !== [...resolved.loadout.skills].sort().join()) return { ok: false, code: "unsupported_resource" };
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
       credentials: { read: async () => undefined, list: async () => [], modify: async (_id, fn) => fn(undefined), delete: async () => {} } });
@@ -152,21 +172,25 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
     }
     const model = runtime.getModel(providerId, modelId);
     if (!model || !(await runtime.checkAuth(providerId)) || !(await runtime.getAuth(model))) return { ok: false, code: "unsupported_provider" };
-    const customTools = options.role === "builder" ? [createWriteToolDefinition(options.cwd), createEditToolDefinition(options.cwd)].map(tool => ({ ...tool,
+    const customTools = [...(options.childTools??[]),...(resolved.loadout.isolation === "worktree" ? [createWriteToolDefinition(options.cwd), createEditToolDefinition(options.cwd)].filter(tool => expectedTools.includes(tool.name)).map(tool => ({ ...tool,
       execute: async (id: string, params: any, signal: AbortSignal | undefined, update: any, ctx: any) => {
         if (ctx && ctx.cwd !== options.worktreeLease!.path) throw Error("forbidden changed worktree cwd");
         const path = await assertWritable(options.worktreeLease!, params.path);
         return tool.execute(id, { ...params, path }, signal, update, ctx);
-      } })) : [];
+      } })) : [])];
     const sessionManager=SessionManager.inMemory(options.cwd);
     for(const message of options.context?.messages??[])sessionManager.appendMessage(structuredClone(message));
     ({ session } = await createAgentSession({ cwd: options.cwd, agentDir: options.agentDir, modelRuntime: runtime, model,
       resourceLoader: loader, settingsManager, sessionManager,
       tools: expectedTools, customTools, thinkingLevel: options.thinking ?? resolved.thinking }));
     await session.bindExtensions({});
+    if(options.shouldPause){
+      const finishTurn=session.agent.finishTurn;
+      session.agent.finishTurn=async(turn,signal)=>{const decision=await finishTurn?.(turn,signal);if(options.shouldPause!()){session!.clearQueue();return{action:"end"};}return decision;};
+    }
     if (session.getActiveToolNames().sort().join() !== expectedTools.sort().join() ||
       session.getCallableToolNames().sort().join() !== expectedTools.sort().join()) return { ok: false, code: "unsupported_resource" };
-    const backend = new NativeBackend(session, lease ? () => lease!.release() : undefined,options.worktreeLease?async()=>Object.freeze([await inspectWorktree(options.worktreeLease!)]):undefined);
+    const backend = new NativeBackend(session, lease ? () => lease!.release() : undefined,options.worktreeLease?async()=>Object.freeze([await inspectWorktree(options.worktreeLease!)]):undefined,options.shouldPause);
     transferred = true;
     return { ok: true, backend };
   } catch { return { ok: false, code: "initialization_failed" }; }

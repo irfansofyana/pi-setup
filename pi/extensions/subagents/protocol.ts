@@ -2,7 +2,7 @@ import type { createSupervisor, StartRequest } from "./supervisor.ts";
 type Supervisor=ReturnType<typeof createSupervisor>;
 type Events={on(name:string,handler:(value:any)=>any):()=>void;emit(name:string,value:any):any};
 type Record={id:string;threadId:string;runId:string;type:string;description:string;isBackground:boolean;started:number;requestId?:string};
-export function createProtocol(options:{events:Events;supervisor:Supervisor;start:(request:StartRequest,metadata?:any)=>ReturnType<Supervisor["start"]>;generation:string;cwd?:()=>string;now?:()=>number}) {
+export function createProtocol(options:{events:Events;supervisor:Supervisor;start:(request:StartRequest,metadata?:any)=>ReturnType<Supervisor["start"]>;generation:string;cwd?:()=>string;now?:()=>number;isRole?:(name:string)=>boolean}) {
   const records=new Map<string,Record>(),runs=new Map<string,Record>(),early=new Map<string,any>(),outbox=new Map<string,any>(),requests=new Map<string,string>(),cancelled=new Set<string>();
   const preparing=new Set<string>();
   let live=true;const now=options.now??Date.now;
@@ -58,7 +58,7 @@ export function createProtocol(options:{events:Events;supervisor:Supervisor;star
           reply({success:receipt.status!=="rejected",...(receipt.status==="rejected"?{error:receipt.error?.code}:{data:receipt})});return;
         }
         const fields=raw.options??{};
-        if(typeof raw.prompt!=="string"||!raw.prompt.trim()||!["researcher","code-mapper","builder","reviewer","Explore"].includes(raw.type)||Object.keys(fields).some(k=>!["description","isBackground","inheritContext","maxTurns","cwd","model","thinking","files"].includes(k))||
+        if(typeof raw.prompt!=="string"||!raw.prompt.trim()||typeof raw.type!=="string"||!(options.isRole?.(raw.type)??["researcher","scout","code-mapper","builder","reviewer","Explore"].includes(raw.type))||Object.keys(fields).some(k=>!["description","isBackground","inheritContext","maxTurns","cwd","model","thinking","files"].includes(k))||
           (fields.inheritContext!==undefined&&fields.inheritContext!==false)||(fields.cwd!==undefined&&fields.cwd!==options.cwd?.())||
           (fields.isBackground!==undefined&&typeof fields.isBackground!=="boolean")||(fields.description!==undefined&&(typeof fields.description!=="string"||Buffer.byteLength(fields.description)>512)))throw Error("unsupported_request");
         if(cancelled.has(raw.requestId)||requests.has(raw.requestId)||preparing.has(raw.requestId))throw Error("cancelled_or_duplicate_request");

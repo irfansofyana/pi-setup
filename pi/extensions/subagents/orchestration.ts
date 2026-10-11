@@ -7,7 +7,7 @@ import type{createSupervisor,StartRequest}from"./supervisor.ts";
 import type{RunResult,Control}from"./contracts.ts";
 type Supervisor=ReturnType<typeof createSupervisor>;
 type Retained={result:RunResult;consumed:boolean;owner:string;pending?:boolean};
-export async function createOrchestration(options:{agentDir:string;config:any;owner:string;start:(request:StartRequest,metadata?:any)=>ReturnType<Supervisor["start"]>;wait:Supervisor["wait"];control:(request:Control)=>ReturnType<Supervisor["control"]>;notify:(text:string)=>void;outbox:()=>any[]}){
+export async function createOrchestration(options:{agentDir:string;config:any;owner:string;start:(request:StartRequest,metadata?:any)=>ReturnType<Supervisor["start"]>;wait:Supervisor["wait"];control:(request:Control)=>ReturnType<Supervisor["control"]>;notify:(text:string)=>void;outbox:()=>any[];isRole?:(name:string)=>boolean}){
  const store=await openStore<any>({root:join(options.agentDir,"subagents-state"),owner:options.config.profileOwner??"profile",enabled:options.config.persist===true});
  let saved:any,revision=0;
  try{saved=await store.load();}catch(error){await store.close();throw error;}
@@ -55,13 +55,13 @@ export async function createOrchestration(options:{agentDir:string;config:any;ow
   }finally{if(launches)reservations--;}
  }
  async function launch(request:StartRequest){
-  const accepted=await admit(request,{type:request.role,description:"Scheduled/workflow specialist",isBackground:true});if(!accepted.ok)throw Error(accepted.code);
+  const accepted=await admit({...request,budgetExtendable:false},{type:request.role,description:"Scheduled/workflow specialist",isBackground:true});if(!accepted.ok)throw Error(accepted.code);
   const done=(async()=>{const[result]=await options.wait([accepted.runId]);try{return result;}finally{await control({version:1,operation:"close",threadId:accepted.threadId,expectedRunId:accepted.runId});await control({version:1,operation:"consume",threadId:accepted.threadId,expectedRunId:accepted.runId});}})();
   return {runId:accepted.runId,threadId:accepted.threadId,done};
  }
  const stop=async(run:{runId:string;threadId:string})=>{await options.control({version:1,operation:"interrupt",threadId:run.threadId,expectedRunId:run.runId});};
- scheduler=createScheduler({enabled:options.config.schedules===true,launch,stop,lease:async()=>{if(options.config.persist)await store.load();},changed:()=>{if(workflows)void persist();}});
- workflows=createWorkflows({enabled:options.config.workflows===true,launch,stop,changed:()=>{void persist();}});
+ scheduler=createScheduler({enabled:options.config.schedules===true,isRole:options.isRole,launch,stop,lease:async()=>{if(options.config.persist)await store.load();},changed:()=>{if(workflows)void persist();}});
+ workflows=createWorkflows({enabled:options.config.workflows===true,isRole:options.isRole,launch,stop,changed:()=>{void persist();}});
  try{
   if(options.config.workflows)for(const snapshot of saved?.data.workflows??[])workflows.restore(snapshot);
   if(options.config.schedules)for(const snapshot of saved?.data.jobs??[])scheduler.restore(snapshot);

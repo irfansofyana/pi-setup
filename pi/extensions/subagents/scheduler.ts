@@ -19,7 +19,7 @@ function nextCron(schedule:Extract<Schedule,{kind:"cron"}>,now:number){
    (raw[2]==="*"?week:raw[4]==="*"?day:day||week))return at;
  }throw Error("invalid cron: no fire within 366 days");
 }
-export function createScheduler(options:{enabled:boolean;clock?:Clock;launch:(request:StartRequest)=>Promise<Launch>;stop:(run:Launch)=>Promise<void>;lease?:()=>Promise<void>;changed?:()=>void}){
+export function createScheduler(options:{enabled:boolean;clock?:Clock;launch:(request:StartRequest)=>Promise<Launch>;stop:(run:Launch)=>Promise<void>;lease?:()=>Promise<void>;changed?:()=>void;isRole?:(name:string)=>boolean}){
  const clock=options.clock??{now:Date.now,set:setTimeout,clear:clearTimeout},jobs=new Map<string,Job>();let disposed=false;
  const notify=()=>{try{options.changed?.();}catch{}};
  const next=(schedule:Schedule,now:number)=>schedule.kind==="once"?schedule.at:schedule.kind==="interval"?now+schedule.everyMs:nextCron(schedule,now);
@@ -41,7 +41,7 @@ export function createScheduler(options:{enabled:boolean;clock?:Clock;launch:(re
  function add(input:{schedule:Schedule;request:StartRequest;id?:string},restored=false){
   if(!options.enabled||disposed)throw Error("scheduler disabled");if(jobs.size>=32)throw Error("scheduler capacity");
   const schedule=structuredClone(input.schedule),request=structuredClone(input.request);
-  if(!schedule||!["once","interval","cron"].includes(schedule.kind)||!request||!["researcher","code-mapper","builder","reviewer"].includes(request.role!)||typeof request.prompt!=="string"||!request.prompt.trim()||Buffer.byteLength(JSON.stringify(request))>65536)throw Error("invalid schedule request");
+  if(!schedule||!["once","interval","cron"].includes(schedule.kind)||!request||typeof request.role!=="string"||!(options.isRole?.(request.role)??["researcher","scout","code-mapper","builder","reviewer"].includes(request.role))||typeof request.prompt!=="string"||!request.prompt.trim()||Buffer.byteLength(JSON.stringify(request))>65536)throw Error("invalid schedule request");
   const allowed=schedule.kind==="once"?["kind","at"]:schedule.kind==="interval"?["kind","everyMs"]:["kind","expression","timezone"];
   if(Object.keys(schedule).some(key=>!allowed.includes(key))||Object.keys(request).some(key=>!["role","prompt","files","maxTurns","model","thinking"].includes(key)))throw Error("invalid schedule request");
   if(schedule.kind==="once"&&(!Number.isSafeInteger(schedule.at)||schedule.at<0||(!restored&&schedule.at<=clock.now())))throw Error("invalid one-shot");

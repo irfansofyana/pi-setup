@@ -21,17 +21,19 @@ const id = (value: unknown, prefix: string) => typeof value === "string" && new 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const fields = (value: Record<string, unknown>, allowed: readonly string[]) => Object.keys(value).every((key) => allowed.includes(key));
 const text = (value: unknown) => typeof value === "string" && value.length > 0;
-const model = (value: unknown) => typeof value === "string" && /^[^\s/]+\/[^\s/]+$/.test(value);
+const model = (value: unknown) => typeof value === "string" && /^[^\s/]+\/[^\s]+$/.test(value);
 export const utf8Bytes = (value: string): number => Buffer.byteLength(value, "utf8");
-export type Operation = "create" | "message" | "steer" | "follow_up" | "interrupt" | "wait" | "result" | "consume" | "resume" | "close";
-export type Control = { version: 1; operation: Operation; threadId: string; expectedRunId?: string; message?: string; controlId?: string };
-const operations: readonly Operation[] = ["create", "message", "steer", "follow_up", "interrupt", "wait", "result", "consume", "resume", "close"];
+export type Operation = "create" | "message" | "steer" | "follow_up" | "interrupt" | "wait" | "result" | "consume" | "resume" | "close" | "extend_budget";
+export type Control = { version: 1; operation: Operation; threadId: string; expectedRunId?: string; message?: string; controlId?: string; additionalTurns?: number };
+const operations: readonly Operation[] = ["create", "message", "steer", "follow_up", "interrupt", "wait", "result", "consume", "resume", "close", "extend_budget"];
 export function validateControl(value: unknown, currentRunId?: string): typeof accepted | Rejection {
   if (!record(value)) return reject("invalid_request");
-  if (!fields(value, ["version", "operation", "threadId", "expectedRunId", "message", "controlId"])) return reject("unsupported_field");
+  if (!fields(value, ["version", "operation", "threadId", "expectedRunId", "message", "controlId", "additionalTurns"])) return reject("unsupported_field");
   if (value.version !== 1 || !operations.includes(value.operation as Operation) || !id(value.threadId, "thread") || (value.controlId !== undefined && !id(value.controlId, "control"))) return reject("invalid_request");
   if (value.expectedRunId !== undefined && !id(value.expectedRunId, "run")) return reject("invalid_request");
-  const needsRun = value.operation === "steer" || value.operation === "interrupt";
+  const needsRun = value.operation === "steer" || value.operation === "interrupt" || value.operation === "extend_budget";
+  if ((value.operation === "extend_budget") !== (value.additionalTurns !== undefined) ||
+    (value.additionalTurns !== undefined && (!Number.isSafeInteger(value.additionalTurns) || (value.additionalTurns as number) < 1))) return reject("invalid_request");
   const needsMessage = value.operation === "message" || value.operation === "steer" || value.operation === "follow_up" || value.operation === "resume";
   if (needsRun && !id(value.expectedRunId, "run")) return reject("invalid_request");
   if (needsMessage !== (value.message !== undefined) || (needsMessage && (!text(value.message) || utf8Bytes(value.message as string) > limits.mailboxBytesPerThread))) return reject("invalid_request");
@@ -50,7 +52,7 @@ export function validateLegacy(tool: keyof typeof legacyFields, value: unknown):
     if (!text(value.prompt) || !text(value.description) || !text(value.subagent_type) ||
       (value.model !== undefined && !model(value.model)) ||
       (value.name !== undefined && (typeof value.name !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(value.name))) ||
-      (value.thinking !== undefined && (typeof value.thinking !== "string" || !["off", "minimal", "low", "medium", "high", "xhigh"].includes(value.thinking))) ||
+      (value.thinking !== undefined && (typeof value.thinking !== "string" || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value.thinking))) ||
       (value.isolation !== undefined && value.isolation !== "worktree") ||
       (value.max_turns !== undefined && (!Number.isSafeInteger(value.max_turns) || (value.max_turns as number) < 1)) ||
       (value.run_in_background !== undefined && typeof value.run_in_background !== "boolean") ||

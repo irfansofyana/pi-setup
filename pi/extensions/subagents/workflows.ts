@@ -29,17 +29,17 @@ function matches(value:any,schema:any):boolean{
   for(const[key,item]of Object.entries(value)){if(Object.hasOwn(schema.properties??{},key)){if(!matches(item,schema.properties[key]))return false;}else if(schema.additionalProperties===false)return false;}
  }return true;
 }
-function validate(plan:Plan,policyMaxTurns=128){
+function validate(plan:Plan,policyMaxTurns=128,isRole=(name:string)=>["researcher","scout","code-mapper","builder","reviewer"].includes(name)){
  if(!plan||plan.version!==1||Object.keys(plan).some(k=>!["version","steps","maxTurns","parallel"].includes(k))||!Array.isArray(plan.steps)||plan.steps.length<1||plan.steps.length>16||Buffer.byteLength(JSON.stringify(plan))>65536)throw Error("invalid workflow");
  if((plan.parallel!==undefined&&(!Number.isSafeInteger(plan.parallel)||plan.parallel<1||plan.parallel>3))||(plan.maxTurns!==undefined&&(!Number.isSafeInteger(plan.maxTurns)||plan.maxTurns<1||plan.maxTurns>policyMaxTurns)))throw Error("invalid workflow budget");
  const ids=new Set<string>();let total=0;
  for(const step of plan.steps){
   if(!step||Object.keys(step).some(k=>!["id","kind","role","prompt","maxTurns","files","dependsOn","schema"].includes(k))||!/^[A-Za-z0-9_-]{1,64}$/.test(step.id)||ids.has(step.id)||typeof step.prompt!=="string"||!step.prompt.trim()||
-   (step.kind!==undefined&&!["task","verification"].includes(step.kind))||((step.kind??"task")==="task"&&!["researcher","code-mapper","builder","reviewer"].includes(step.role!))||
+   (step.kind!==undefined&&!["task","verification"].includes(step.kind))||((step.kind??"task")==="task"&&(typeof step.role!=="string"||!isRole(step.role)))||
    (step.dependsOn!==undefined&&(!Array.isArray(step.dependsOn)||new Set(step.dependsOn).size!==step.dependsOn.length))||
    (step.schema!==undefined&&!schemaValid(step.schema)))throw Error("invalid workflow step");
   if(step.kind!=="verification"){
-   const ceiling=step.role==="builder"?60:step.role==="researcher"?20:25,turns=step.maxTurns??2;
+   const ceiling=step.role==="builder"?60:step.role==="researcher"?20:["scout","code-mapper","reviewer"].includes(step.role!)?25:40,turns=step.maxTurns??2;
    if(!Number.isSafeInteger(turns)||turns<1||turns>ceiling)throw Error("invalid workflow budget");total+=turns+5;
    if(step.role==="builder"&&(!Array.isArray(step.files)||!step.files.length))throw Error("invalid builder file scopes");
   }ids.add(step.id);
@@ -49,7 +49,7 @@ function validate(plan:Plan,policyMaxTurns=128){
  const visit=(id:string)=>{if(visiting.has(id))throw Error("workflow cycle");if(visited.has(id))return;visiting.add(id);const step=plan.steps.find(s=>s.id===id)!;for(const parent of step.dependsOn??[]){if(!ids.has(parent))throw Error("invalid dependency");visit(parent);}visiting.delete(id);visited.add(id);};
  for(const id of ids)visit(id);
 }
-export function createWorkflows(options:{enabled:boolean;maxTurns?:number;launch:(request:StartRequest)=>Promise<Run>;stop:(run:Run)=>Promise<void>;changed?:()=>void}){
+export function createWorkflows(options:{enabled:boolean;maxTurns?:number;launch:(request:StartRequest)=>Promise<Run>;stop:(run:Run)=>Promise<void>;changed?:()=>void;isRole?:(name:string)=>boolean}){
  const policyMaxTurns=options.maxTurns??128;
  if(!Number.isSafeInteger(policyMaxTurns)||policyMaxTurns<1||policyMaxTurns>256)throw Error("invalid reviewed workflow budget");
  const workflows=new Map<string,Workflow>(),pending=new Set<Promise<void>>();let disposed=false;
@@ -93,12 +93,12 @@ export function createWorkflows(options:{enabled:boolean;maxTurns?:number;launch
  }
  function inspect(id:string){const workflow=find(id);return structuredClone({id:workflow.id,fingerprint:workflow.fingerprint,plan:workflow.plan,state:workflow.state,reservedTurns:workflow.reservedTurns,steps:workflow.steps.map(({run,...state})=>state)});}
  const cancel=async(id:string)=>{const workflow=find(id);if(["completed","completed_with_skips","cancelled"].includes(workflow.state))return;workflow.state="cancelled";workflow.epoch++;for(const step of workflow.steps){if(!["succeeded","failed","skipped"].includes(step.state))step.state="cancelled";if(step.run)await options.stop(step.run);}notify();};
- return {start(input:Plan){if(!options.enabled||disposed)throw Error("workflows disabled");if(workflows.size>=8)throw Error("workflow capacity");const plan=structuredClone(input);validate(plan,policyMaxTurns);plan.maxTurns??=policyMaxTurns;
+ return {start(input:Plan){if(!options.enabled||disposed)throw Error("workflows disabled");if(workflows.size>=8)throw Error("workflow capacity");const plan=structuredClone(input);validate(plan,policyMaxTurns,options.isRole);plan.maxTurns??=policyMaxTurns;
    const workflow:Workflow={id:randomUUID(),fingerprint:createHash("sha256").update(JSON.stringify(plan)).digest("hex"),plan,state:"running",steps:plan.steps.map(definition=>({definition,state:"pending",attempt:0})),reservedTurns:0,epoch:0,active:0};workflows.set(workflow.id,workflow);pump(workflow);return inspect(workflow.id);},
   inspect,list:()=>[...workflows.keys()].map(inspect),
   restore(input:any){
    if(!options.enabled||disposed||workflows.size>=8)throw Error("workflows disabled or at capacity");
-   const snapshot=structuredClone(input);validate(snapshot.plan,policyMaxTurns);
+   const snapshot=structuredClone(input);validate(snapshot.plan,policyMaxTurns,options.isRole);
    if(snapshot.fingerprint!==createHash("sha256").update(JSON.stringify(snapshot.plan)).digest("hex"))throw Error("workflow fingerprint mismatch");
    if(!["running","paused","blocked","cancelled","completed","completed_with_skips"].includes(snapshot.state)||!/^[A-Za-z0-9_-]{1,128}$/.test(snapshot.id)||workflows.has(snapshot.id)||!Array.isArray(snapshot.steps)||snapshot.steps.length!==snapshot.plan.steps.length||
     !Number.isSafeInteger(snapshot.reservedTurns)||snapshot.reservedTurns<0||snapshot.reservedTurns>(snapshot.plan.maxTurns??128))throw Error("invalid journal");
