@@ -18,7 +18,8 @@
 | Hindsight diagnose | `/hindsight diagnose` |
 | BTW status | `/btw status` |
 | Caveman status | `/caveman status` |
-| Search/manage project todos | `/todos` |
+| View/manage session plan | `/todos plan`; `/todos collapse` toggles the panel |
+| Search/manage project todos | `/todos project [search]` |
 | Disposable structured-question smoke UI | `/ask-demo` |
 | Goal status | `/goal` (or `/goal status`) |
 | Context diagnostics | `/context` |
@@ -82,7 +83,7 @@ Inside Pi:
 /settings
 ```
 
-Todos verification: open `/todos` and search existing entries, then close without edits. Confirm `todo` is registered once and resolves the intended project store (or `PI_TODO_PATH` override). Do not create/delete tasks, migrate old data, or enable GC merely to verify installation. See [Todos](local-extensions.md#todos).
+Todos verification: open `/todos project` and search existing entries, then close without edits. Open `/todos plan` to inspect the current session's plan. Confirm `todo` is registered once and resolves the intended project store (or `PI_TODO_PATH` override). Do not create/delete tasks, migrate old data, or enable GC merely to verify installation. See [Todos](local-extensions.md#todos).
 
 Structured-question verification: confirm `ask_user_question` is registered once, then invoke `/ask-demo` yourself. Check custom answers, single-select previews (wide side-by-side and narrow stacked), Space multi-select toggles, arrow/number selection, Enter advance, Tab/ShiftTab navigation, and final review before submission. Repeat with Esc: the whole questionnaire must cancel without partial answers. Demo must not auto-submit a model turn or write state files. RPC uses native select/input dialogs and review; print/JSON must report that interactive UI is required, not invent answers. Use non-sensitive sample text: normal tool answers remain in session results. See [Structured questions](local-extensions.md#structured-questions), the [component README](../../pi/extensions/ask-user-question/README.md), and [design research](ask-user-question-research.md).
 

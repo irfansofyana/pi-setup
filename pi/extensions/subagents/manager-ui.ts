@@ -16,7 +16,7 @@ export function createManagerUI(options: {
   /** Private previews must never scan the real home profile. */
   importHomeDir?: string;
 }) {
-  const defaults: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS, maxConcurrent: options.caps.concurrency,
+  const defaults: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS, widgetMode: "minimal", maxConcurrent: options.caps.concurrency,
     maxThreads: options.caps.threads, maxLevels: options.caps.levels };
   let settings: ManagerSettings;
   function validate(next: ManagerSettings) {

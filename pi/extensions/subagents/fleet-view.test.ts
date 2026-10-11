@@ -1,11 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentActivity, agentState, agentStats, agentTone, fleetOverview, orderedAgents } from "./fleet-view.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { agentActivity, agentState, agentStats, agentTone, compactFleetOverview, fleetOverview, orderedAgents } from "./fleet-view.ts";
 import type { ThreadView } from "./upstream/src/types.ts";
 
 function thread(path: string, state: ThreadView["state"] = "running"): ThreadView {
   return { path, parent: "/root", owner: "/root", type: "researcher", color: "accent", task: "Research official sources", status: "Tool: web_fetch", state, createdAt: 1, updatedAt: 1, costId: path, elapsedMs: 12000, inputTokens: 2000, outputTokens: 400 };
 }
+
+test("resting fleet folds completed agents immediately and preserves unread totals", () => {
+  const workers = [thread("/root/first", "completed"), thread("/root/second", "completed")];
+  workers.forEach(worker => worker.updatedAt = Date.now());
+  const rows = compactFleetOverview(workers, 4, undefined, { unread: () => 1 });
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].text, /Subagents · 2 completed · 2 unread/);
+  assert.equal(rows[0].action, "review");
+  assert.doesNotMatch(rows[0].text, /retained|remaining budget|select|Enter|Esc/);
+});
+
+test("resting fleet gives attention priority and keeps running rows compact and clickable", () => {
+  const workers = [thread("/root/done", "completed"), thread("/root/active"), thread("/root/blocked", "paused")];
+  const rows = compactFleetOverview(workers, 3, undefined, { width: 80 });
+  assert.equal(rows.length, 3);
+  assert.equal(rows[1].selection?.path, "/root/blocked");
+  assert.match(rows[1].text, /Waiting for your decision/);
+  assert.equal(rows[2].selection?.path, "/root/active");
+  assert.match(rows[2].text, /Tool: web_fetch/);
+  assert.match(rows[0].text, /1 completed/);
+  assert.ok(rows.every(row => visibleWidth(row.text) <= 80));
+});
 
 test("fleet shows all states, safe latest activity, metrics and identity-bound detail rows", () => {
   const workers = [thread("/root/done", "completed"), thread("/root/queued"), thread("/root/active"), thread("/root/paused", "paused")];
@@ -75,7 +98,7 @@ test("activity remains visible on narrow terminals and every row fits by termina
   const worker = thread("/root/漢字-agent"); worker.task = "A very long task description ".repeat(5);
   const rows = fleetOverview([worker], 6, undefined, 12000, { width: 40 });
   assert.ok(rows.some(row => row.text.includes("Tool: web_fetch")));
-  assert.ok(rows.every(row => row.text.length <= 40));
+  assert.ok(rows.every(row => visibleWidth(row.text) <= 40));
 });
 
 test("navigation order does not change when a worker completes or queues", () => {

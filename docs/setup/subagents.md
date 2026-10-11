@@ -53,12 +53,18 @@ from upstream behavior.
 
 ## Inline navigation
 
-Main displays a compact Claude-style task list with short names, state, elapsed
-time, unread counts and current activity. Usage details live in the inspector.
-Completed/stopped rows fold after five seconds when you
-are at the main prompt. When all tasks finish, the dock becomes a single review
-summary: **1 subagent completed** or **N subagents completed**. Failed and paused tasks remain visible. Entering task selection expands
-the retained list; rows keep their order as workers finish. Open details stay open.
+Main displays a compact summary and one current-activity row per visible active
+subagent. Completed/stopped rows immediately fold into the summary, preserving
+unread counts: **Subagents · 2 completed · 2 unread**. Failed and paused agents
+get display priority. Details retain usage and session-retention information.
+Entering selection expands the retained list with roles, state and elapsed time;
+rows keep their order as workers finish. Open details stay open.
+
+When Todos is active, both sections share one presentation area with Todos first:
+at most six resting rows total, up to ten during subagent selection, and fewer on
+short terminals. Either extension works alone. Navigation hints appear only while
+selecting; `/agents tasks` and `/todos plan` remain available. The shared renderer
+allocates rows and routes clicks; each extension owns its state and controls.
 
 In the integrated theme, **←** or **↓** from an empty focused prompt enters task
 selection. **↑/↓** chooses; **Enter** opens the live detail panel. Fullscreen

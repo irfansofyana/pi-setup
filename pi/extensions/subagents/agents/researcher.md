@@ -2,7 +2,7 @@
 name: researcher
 description: Evidence-first public web research, primary sources and factual verification
 thinkingLevel: medium
-color: accent
+color: syntaxVariable
 tools:
   allow: [web_search, web_fetch]
 ---

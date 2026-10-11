@@ -72,6 +72,43 @@ export function agentStats(thread: ThreadView, metrics?: AgentMetrics, now = Dat
   ].filter(Boolean).join(" · ");
 }
 
+/** Resting summary: completed lifetimes remain accessible without taking individual rows. */
+export function compactFleetOverview(
+  threads: readonly ThreadView[], maxLines: number,
+  metrics: (path: string) => AgentMetrics | undefined = () => undefined,
+  options: { width?: number; unread?(thread: ThreadView): number } = {},
+): AgentRow[] {
+  const all = orderedAgents(threads);
+  const limit = Math.max(0, Math.floor(maxLines));
+  if (!all.length || !limit) return [];
+  const width = Math.max(0, options.width ?? 10000);
+  const fit = (text: string) => truncateToWidth(text, width, "…");
+  const counts = new Map<string, number>();
+  let unread = 0;
+  for (const thread of all) {
+    const state = agentState(thread, metrics(thread.path));
+    const label = state === "starting" ? "running" : state;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+    unread += options.unread?.(thread) ?? 0;
+  }
+  const labels = ["failed", "paused", "running", "queued", "completed", "stopped"]
+    .filter(state => counts.has(state)).map(state => `${counts.get(state)} ${state}`);
+  if (unread) labels.push(`${unread} unread`);
+  const heading = fit(`Subagents · ${labels.join(" · ")}`);
+  const rows: AgentRow[] = [{ text: heading, action: "review", parts: [{ text: heading, tone: counts.has("failed") ? "error" : counts.has("paused") ? "warning" : "muted" }] }];
+  const attention = (thread: ThreadView) => ["failed", "paused"].includes(thread.state) ? 0 : 1;
+  const active = all.filter(thread => !["completed", "stopped"].includes(thread.state)).sort((a, b) => attention(a) - attention(b));
+  for (const thread of active.slice(0, limit - 1)) {
+    const info = metrics(thread.path), state = agentState(thread, info);
+    const symbol = state === "failed" ? "!" : state === "paused" ? "Ⅱ" : state === "queued" ? "○" : "●";
+    const lead = truncateToWidth(`  ${symbol} ${agentLabel(thread.path, info?.name)}`, Math.max(1, Math.floor(width * 0.45)), "…");
+    const detail = truncateToWidth(` · ${state === "paused" ? "Waiting for your decision" : agentActivity(thread, info)}`, Math.max(0, width - visibleWidth(lead)), "…");
+    const tone = state === "failed" ? "error" : state === "paused" ? "warning" : "muted";
+    rows.push({ text: lead + detail, parts: [{ text: lead, tone }, { text: detail, tone }], selection: { path: thread.path, identity: agentIdentity(thread) } });
+  }
+  return rows;
+}
+
 /** One task list for idle display and keyboard selection; every worker row is identity-bound. */
 export function fleetOverview(
   threads: readonly ThreadView[],
@@ -135,7 +172,7 @@ export function fleetOverview(
   const start = selected ? Math.max(0, Math.min(selectedIndex - count + 1, entries.length - count)) : 0;
   for (const [offset, worker] of entries.slice(start, start + count).entries()) {
     const row = workerRow(worker, start + offset); rows.push(row);
-    if (perWorker === 2 && worker) rows.push({ text: fit(`  └ ${agentActivity(worker.thread, worker.metrics)}`), selection: row.selection });
+    if (perWorker === 2 && worker && !["completed", "stopped"].includes(worker.thread.state)) rows.push({ text: fit(`  └ ${agentActivity(worker.thread, worker.metrics)}`), selection: row.selection });
   }
   const hidden = Math.max(0, entries.length - count);
   const foldedLabel = [folded.filter(thread => thread.state === "completed").length,

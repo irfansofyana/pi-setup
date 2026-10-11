@@ -1,5 +1,5 @@
 import type { ThreadView } from "./upstream/src/types.ts";
-import { agentIdentity, fleetOverview, orderedAgents, type AgentMetrics, type AgentRow, type AgentSelection } from "./fleet-view.ts";
+import { agentIdentity, compactFleetOverview, fleetOverview, orderedAgents, type AgentMetrics, type AgentRow, type AgentSelection } from "./fleet-view.ts";
 
 export type NavigationKey = "left" | "right" | "up" | "down" | "enter" | "escape" | "pageUp" | "pageDown" | "edit";
 export type NavigationContext = { focused: boolean; autocomplete: boolean };
@@ -66,6 +66,7 @@ export function createInlineNavigation(options: Options) {
   }
   function view(maxLines = 12, width?: number, keyboard = true): AgentRow[] {
     reconcile();
+    if (!picking) return compactFleetOverview(workers(), maxLines, options.metrics, { width, unread: options.unread });
     return fleetOverview(workers(), maxLines, options.metrics, Date.now(), { width, keyboard, collapseCompleted: !picking,
       focused: picking && keyboard ? highlighted : undefined, unread: options.unread });
   }

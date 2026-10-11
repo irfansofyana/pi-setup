@@ -2,7 +2,7 @@
 name: reviewer
 description: Independent read-only correctness, security and lifecycle review
 thinkingLevel: high
-color: error
+color: mdLink
 tools:
   allow: [read, grep, find, ls, fffind, ffgrep, fff-multi-grep]
 ---

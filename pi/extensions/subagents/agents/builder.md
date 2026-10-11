@@ -2,7 +2,7 @@
 name: builder
 description: Scoped implementation and test authoring in an owned Git worktree
 thinkingLevel: high
-color: warning
+color: mdCodeBlockBorder
 tools:
   allow: [read, grep, find, ls, edit, write, fffind, ffgrep, fff-multi-grep]
 ---

@@ -80,24 +80,34 @@ launcher or synthetic demo command is shipped.
   Root navigation drains before changing branches/sessions, then attaches a fresh
   generation. Settled cost records survive branch navigation and reaping.
 
+## Presentation defaults
+
+Bundled role colors: `syntaxVariable` (researcher), `success` (scout),
+`mdCodeBlockBorder` (builder), and `mdLink` (reviewer). Themes resolve these
+semantic tokens. Default widget mode is `minimal`; existing user/project
+settings and agent overrides remain authoritative.
+
 ## Inline navigation
 
 ```text
 Subagents · 1 running · 1 queued
-● research · running · researcher · 12.0s
-  └ Tool: web_fetch
-○ review · queued · reviewer · 1.0s
-  └ Waiting for an execution slot
-←/↓ subagents · click to view
+  ● research · Tool: web_fetch
+  ○ review · Waiting for an execution slot
 ```
 
-- Main shows a bounded task list with short display names, role colors, state,
-  unread counts, elapsed time and a separate activity line. Completed/stopped rows fold after five seconds
-  at the idle prompt; all-settled fleets show “1 subagent completed” or
-  “N subagents completed” with a review action. Failed/paused
-  tasks remain visible. Expanding restores every retained task in creation order;
-  no completion collapse occurs while selecting. Open details stay open.
-  Full/Minimal controls the idle dock's height; selection can reach every task.
+- At rest, Main shows a compact summary and one activity row per visible active
+  subagent. Completed/stopped agents immediately fold into the heading, including
+  unread counts, e.g. `Subagents · 2 completed · 2 unread`. Failed/paused agents
+  get priority. Retention/budget explanations live in details; navigation hints
+  appear only while selecting. Expanding restores retained tasks in creation order,
+  with roles, state, unread counts and elapsed time. Selection and open details
+  stay stable as agents finish.
+- Todos and Subagents use a [shared presentation component](../shared/README.md):
+  Todos first, at most six resting rows total, up to ten while selecting agents,
+  fewer on short terminals. Either extension also works alone. Full/Minimal caps
+  the resting Subagents section at six/three rows, subject to the shared budget;
+  selection can reach every retained agent. Other sections keep a summary during
+  navigation. No editor replacement or new global keybindings.
 - In the integrated theme, an empty focused prompt's **←** or **↓** focuses the
   list at Main. **↑/↓** select without wrapping; **Enter** opens a task. **Esc**,
   **→**, or **↑** above Main returns prompt focus. Typing/paste returns to Main

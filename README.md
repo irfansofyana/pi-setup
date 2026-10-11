@@ -38,7 +38,7 @@ Existing devices use the same install, then [review migration proposals](docs/se
 
 - **UI:** `pi-irfan-devs` green palette, integrated editor, Signature UI, and π welcome panel; blue/Gruvbox alternatives remain available.
 - **Research:** native `web_search`/`web_fetch`, Tavily-first routing, optional Exa, and bundled `my-web-search`.
-- **Todos:** local `todo` tool and searchable `/todos` manager; project files, session claims, cleanup off by default.
+- **Todos:** live session plans with manual editing, plus searchable project todos; shared `todo` tool, persistent project files, cleanup off by default.
 - **Questions:** included `ask_user_question` with custom answers, multi-select, previews, and final review; disposable `/ask-demo` smoke UI.
 - **Memory:** local Hindsight adapter and generated Managed Skills.
 - **Context:** Headroom proxy integration and read-only `/context` diagnostics.

@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { userInfo } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme, WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { createWatermarkPresentation } from "./watermark-ui.ts";
+import { footerUsage, separateFooterStatus } from "./footer-usage.ts";
+import { footerStyle, cavemanLevel } from "./footer-style.ts";
 
 type WatermarkPresentation = ReturnType<typeof createWatermarkPresentation>;
 
@@ -317,50 +318,32 @@ function alignFooterLine(left: string, right: string, width: number): string {
 	return left + " ".repeat(Math.max(1, width - leftWidth - visibleWidth(truncatedRight))) + truncatedRight;
 }
 
-type FooterUsage = {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-};
-
-function footerUsage(ctx: ExtensionContext): FooterUsage {
-	const usage: FooterUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-	for (const entry of ctx.sessionManager.getEntries()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const message = entry.message as AssistantMessage;
-		usage.input += message.usage.input;
-		usage.output += message.usage.output;
-		usage.cacheRead += message.usage.cacheRead;
-		usage.cacheWrite += message.usage.cacheWrite;
-		usage.cost += message.usage.cost.total;
-	}
-	return usage;
-}
-
-function footerStatsLine(ctx: ExtensionContext, theme: Theme, footerData: ReadonlyFooterDataProvider, width: number): string {
-	const usage = footerUsage(ctx);
+function footerStatsLine(ctx: ExtensionContext, theme: Theme, footerData: ReadonlyFooterDataProvider, width: number, thinkingLevel: string): string {
+	const usage = footerUsage(ctx.sessionManager.getEntries());
+	const ink = footerStyle(theme);
 	const leftParts: string[] = [];
 	if (usage.input) leftParts.push(theme.fg("dim", `↑${formatTokens(usage.input)}`));
 	if (usage.output) leftParts.push(theme.fg("dim", `↓${formatTokens(usage.output)}`));
 	if (usage.cacheRead) leftParts.push(theme.fg("dim", `R${formatTokens(usage.cacheRead)}`));
 	if (usage.cacheWrite) leftParts.push(theme.fg("dim", `W${formatTokens(usage.cacheWrite)}`));
-	if (usage.cost) leftParts.push(theme.fg("dim", `$${usage.cost.toFixed(3)}`));
+	if (usage.cost) leftParts.push(ink.cost(`$${usage.cost.toFixed(3)}`));
 
 	const contextUsage = ctx.getContextUsage();
 	const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow;
 	if (contextWindow) {
 		const percent = contextUsage?.percent;
 		const label = percent == null ? `?/${formatTokens(contextWindow)}` : `${percent.toFixed(1)}%/${formatTokens(contextWindow)}`;
-		const color = percent != null && percent > 90 ? "error" : percent != null && percent > 70 ? "warning" : "dim";
-		leftParts.push(theme.fg(color, label));
+		leftParts.push(ink.context(label, percent));
 	}
 
 	const left = leftParts.length ? leftParts.join(" ") : theme.fg("dim", "fresh session");
-	let model = ctx.model?.id ?? "no-model";
-	if (footerData.getAvailableProviderCount() > 1 && ctx.model?.provider) model = `(${ctx.model.provider}) ${model}`;
-	return alignFooterLine(left, theme.fg("dim", model), width);
+	let model = ink.model(ctx.model?.id ?? "no-model");
+	if (ctx.model?.reasoning) model += ink.separator(" · ") + ink.model(`thinking ${thinkingLevel}`);
+	if (footerData.getAvailableProviderCount() > 1 && ctx.model?.provider) {
+		const withProvider = `${theme.fg("dim", `(${ctx.model.provider})`)} ${model}`;
+		if (visibleWidth(left) + 2 + visibleWidth(withProvider) <= width) model = withProvider;
+	}
+	return alignFooterLine(left, model, width);
 }
 
 type StatusChip = { priority: number; text: string };
@@ -368,52 +351,57 @@ type StatusChip = { priority: number; text: string };
 function compactStatusChip(key: string, text: string, theme: Theme): StatusChip | undefined {
 	const plain = sanitizeStatusText(text);
 	if (!plain) return undefined;
+	const ink = footerStyle(theme);
 
 	const goal = plain.match(/^goal\s+([◐◓◑◒])(?:\s+loops)?\s+(\d+\/\d+)/i);
 	if (goal) return { priority: 10, text: `${theme.fg("accent", "goal")} ${theme.fg("muted", goal[1]!)} ${theme.fg("dim", goal[2]!)}` };
 
 	if (/^(headroom|hr)\s+off$/i.test(plain)) return { priority: 20, text: theme.fg("dim", "hr off") };
 	const headroom = plain.match(/^headroom\s+(?:managed|external|proxy\?)\s+·\s+saved\s+([^ ]+)\s+tok\s+·\s+([\d.]+)%\s+↓$/i) ?? plain.match(/^hr\s+(?:[mx?]\s+)?([^ ]+)\s+↓([\d.]+)%$/i);
-	if (headroom) return { priority: 20, text: `${theme.fg("accent", "hr")} ${theme.fg("dim", headroom[1]!)} ${theme.fg("success", `↓${headroom[2]}%`)}` };
+	if (headroom) return { priority: 20, text: `${ink.label("hr")} ${theme.fg("dim", headroom[1]!)} ${ink.healthy(`↓${headroom[2]}%`)}` };
 
 	if (/^(hindsight|mem)\s+off$/i.test(plain)) return { priority: 30, text: theme.fg("dim", "mem off") };
 	const hindsight = plain.match(/^hindsight\s+on\s+·\s+([^·]+)\s+·\s+(working|checking|offline)$/i) ?? plain.match(/^mem(?::([^ ]+))?\s+(ok|checking|offline)$/i);
 	if (hindsight) {
 		const state = hindsight[2]!.toLowerCase() === "working" ? "ok" : hindsight[2]!.toLowerCase();
-		const color = state === "offline" ? "error" : state === "checking" ? "warning" : "success";
-		return { priority: state === "offline" ? 0 : 30, text: `${theme.fg("accent", "mem")} ${theme.fg(color, state)}` };
+		const value = state === "offline" ? theme.fg("error", state) : state === "checking" ? theme.fg("warning", state) : ink.healthy(state);
+		return { priority: state === "offline" ? 0 : 30, text: `${ink.label("mem")} ${value}` };
 	}
 
 	const mcp = plain.match(/^MCP:?\s+(\d+)\/(\d+)\s+servers?/i);
 	if (mcp) {
 		const ready = Number(mcp[1]);
 		const total = Number(mcp[2]);
-		const color = ready === total && total > 0 ? "success" : ready === 0 ? "warning" : "accent";
-		return { priority: 40, text: `${theme.fg("accent", "MCP")} ${theme.fg(color, `${ready}/${total}`)}` };
+		const count = `${ready}/${total}`;
+		const value = ready === total && total > 0 ? ink.healthy(count) : theme.fg(ready === 0 ? "warning" : "accent", count);
+		return { priority: 40, text: `${ink.label("MCP")} ${value}` };
 	}
 
-	const caveman = plain.match(/^caveman(?:\s+level:)?\s+(.+)$/i);
-	if (caveman) return { priority: 50, text: `${theme.fg("accent", "caveman")} ${theme.fg("warning", caveman[1]!.trim())}` };
+	const caveman = theme.name === IRFAN_DEVS_THEME ? cavemanLevel(plain) : plain.match(/^caveman(?:\s+level:)?\s+(.+)$/i)?.[1]?.trim();
+	if (caveman) return { priority: 50, text: `${ink.label("caveman")} ${ink.mode(caveman)}` };
 
 	const yolo = plain.match(/^yolo\s+(\d+)\s+running\s+agents?/i);
-	if (yolo) return { priority: 60, text: `${theme.fg("accent", "yolo")} ${theme.fg("warning", `${yolo[1]} agent`)}` };
+	if (yolo) return { priority: 60, text: `${ink.label("yolo")} ${ink.active(`${yolo[1]} agent`)}` };
 
 	const hasProblem = /\b(error|failed|offline|blocked)\b/i.test(plain);
-	const color = hasProblem ? "error" : /\b(checking|pending|running|working)\b/i.test(plain) ? "warning" : "dim";
-	return { priority: hasProblem ? 0 : 100, text: theme.fg(color, truncateToWidth(`${key}: ${plain}`, 34, "…")) };
+	const label = truncateToWidth(`${key}: ${plain}`, 34, "…");
+	const active = /\b(checking|pending|running|working)\b/i.test(plain);
+	return { priority: hasProblem ? 0 : 100, text: hasProblem ? theme.fg("error", label) : active ? ink.active(label) : theme.fg("dim", label) };
 }
 
 function footerStatusLine(footerData: ReadonlyFooterDataProvider, theme: Theme, width: number): string | undefined {
 	const chips = Array.from(footerData.getExtensionStatuses().entries())
+		.filter(([key]) => separateFooterStatus(key))
 		.map(([key, text]) => compactStatusChip(key, text, theme))
 		.filter((chip): chip is StatusChip => Boolean(chip))
 		.sort((a, b) => a.priority - b.priority)
 		.map((chip) => chip.text);
 	if (!chips.length) return undefined;
-	return truncateToWidth(theme.fg("dim", "• ") + chips.join(theme.fg("dim", " · ")), width, theme.fg("dim", "…"));
+	const ink = footerStyle(theme);
+	return truncateToWidth(ink.separator("• ") + chips.join(ink.separator(" · ")), width, theme.fg("dim", "…"));
 }
 
-function compactFooter(ctx: ExtensionContext, presentation: WatermarkPresentation) {
+function compactFooter(ctx: ExtensionContext, presentation: WatermarkPresentation, getThinkingLevel: () => string) {
 	return (tui: { requestRender: () => void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
 		const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
 		const component = {
@@ -427,12 +415,12 @@ function compactFooter(ctx: ExtensionContext, presentation: WatermarkPresentatio
 					width,
 					theme.fg("dim", "…"),
 				);
-				const lines = [pathLine, footerStatsLine(ctx, theme, footerData, width)];
+				const lines = [pathLine, footerStatsLine(ctx, theme, footerData, width, getThinkingLevel())];
 				const statuses = footerStatusLine(footerData, theme, width);
 				if (statuses) lines.push(statuses);
 				const rendered = theme.name === IRFAN_DEVS_THEME ? lines.map((line) => {
 					const clipped = truncateToWidth(line, width, "");
-					return theme.bg("toolPendingBg", clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped))));
+					return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
 				}) : lines;
 				presentation.footer(component, rendered.length);
 				return rendered;
@@ -455,7 +443,7 @@ export default function piSignature(pi: ExtensionAPI) {
 		ctx.ui.setHeader(signatureHeader(owner, ctx, presentation));
 		ctx.ui.setWorkingMessage("");
 		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
-		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx, presentation));
+		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx, presentation, () => pi.getThinkingLevel()));
 		presentation.install();
 		ctx.ui.setTitle(`π · ${owner} · Irfan's Pi setup`);
 	});

@@ -19,7 +19,9 @@ export function welcomeStage(columns: number, rows: number, fixedRows: number): 
 	if (columns < 48 || rows < 28 || fixedRows < 0) return undefined;
 	// Two panel margins, native widget separator, and eight transcript rows. Pi owns allocation
 	// and clipping alongside other widgets; never inspect their render trees.
-	const height = Math.min(16, Math.floor(rows * 0.4), rows - Math.ceil(fixedRows) - 11);
+	// A taller bottom-anchored panel both enlarges the artwork and lifts its center.
+	// Keep the renderer's 24-row limit and yield to the input dock on short screens.
+	const height = Math.min(24, Math.floor(rows * 0.55), rows - Math.ceil(fixedRows) - 11);
 	if (height < 12) return undefined;
 	return {
 		row: 1,

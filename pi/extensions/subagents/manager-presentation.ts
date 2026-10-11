@@ -6,7 +6,8 @@ import type { ManagerSettings } from "./upstream/src/prefs/settings.ts";
 import type { ThreadView } from "./upstream/src/types.ts";
 import { DIALOG_OPTIONS } from "./upstream/src/ui/dialog.ts";
 import { createInlineNavigation, type NavigationKey } from "./inline-navigation.ts";
-import { agentIdentity, completionGrace, orderedAgents, type AgentMetrics, type AgentRow, type AgentSelection } from "./fleet-view.ts";
+import { agentIdentity, orderedAgents, type AgentMetrics, type AgentRow, type AgentSelection } from "./fleet-view.ts";
+import { createActivityDock } from "../shared/activity-dock.ts";
 import { TaskPanel, type TaskDraft } from "./task-panel.ts";
 import type { TaskService } from "./task-controls.ts";
 import { TaskViewStore } from "./task-view-state.ts";
@@ -27,6 +28,7 @@ export function createManagerPresentation(options: {
   let pasting = false, pasteTail = "", generation = 0, opening = false;
   let heldAction: NavigationKey | undefined;
   let clock: ReturnType<typeof setInterval> | undefined, panel: TaskPanel | undefined;
+  let dock: ReturnType<typeof createActivityDock> | undefined;
   let boundEditor: EditorView | undefined, offEditorInput: (() => void) | undefined;
   let drafts = new Map<string, TaskDraft>();
   let views = new TaskViewStore(() => guardDock(() => tui?.requestRender(), undefined, "unread update"));
@@ -171,12 +173,12 @@ export function createManagerPresentation(options: {
   function stopClock() { if (clock) clearInterval(clock); clock = undefined; }
   function refreshClock() {
     const active = () => options.threads().some(thread => thread.path !== "/root" &&
-      (["starting", "running"].includes(thread.state) || completionGrace(thread)));
+      ["starting", "running"].includes(thread.state));
     if (!active()) { stopClock(); return; }
     if (!clock) {
       clock = setInterval(() => guardDock(() => {
         if (!context || options.settings()?.subagentMode === "off") { stopClock(); return; }
-        // The final tick must draw the collapsed state before dropping the clock.
+        // Render final activity before stopping the elapsed-time clock.
         tui?.requestRender();
         if (!active()) stopClock();
       }, undefined, "clock"), 1000);
@@ -201,22 +203,27 @@ export function createManagerPresentation(options: {
     for (const [path, draft] of drafts) if (live.get(path) !== draft.identity) drafts.delete(path);
     views.reconcile(options.threads(), options.service());
     navigation.reconcile(); panel?.refresh(); refreshClock();
+    dock?.dispose(); dock = undefined;
     ctx.ui.setWidget("pi-subagent", (host, theme) => guardDock<Text>(() => {
       tui = host; bindEditor();
       let renderedRows: AgentRow[] = [];
-      return new class extends Text {
-        render(width: number) {
+      dock = createActivityDock(host, {
+        id: "subagents",
+        state: () => ({
+          rows: dockFailed ? 1 : navigation.picking ? 10 : Math.min(settings.widgetMode === "minimal" ? 3 : 6, 1 + orderedAgents(options.threads()).filter(thread => !["completed", "stopped"].includes(thread.state)).length),
+          focused: navigation.picking,
+          attention: options.threads().some(thread => ["paused", "failed"].includes(thread.state)),
+        }),
+        render(width: number, rows: number) {
           return guardDock(() => {
-            const rows = Math.max(1, Math.min(settings.widgetMode === "minimal" && !navigation.picking ? 4 : 10, host.terminal.rows - 10));
             renderedRows = navigation.view(rows, width, !!editor() || (!!panel && !!boundEditor));
             const palette = context?.ui.theme ?? theme;
-            this.setText(renderedRows.map(row => truncateToWidth(
+            return renderedRows.map(row => truncateToWidth(
               row.parts ? row.parts.map(part => palette.fg(part.tone, part.text)).join("") : palette.fg("muted", row.text),
               Math.max(0, width), "",
-            )).join("\n"));
-            return super.render(width);
+            ));
           }, width >= 13 ? ["/agents tasks"] : [], "render");
-        }
+        },
         handleMouse(event: TuiMouseEvent) {
           return guardDock(() => {
             if (context !== ctx || opening || panel || pasting || event.type !== "click" || event.button !== "left" ||
@@ -233,10 +240,12 @@ export function createManagerPresentation(options: {
             host.requestRender(); return { handled: true, render: true };
           }, undefined, "mouse input");
         }
-      }("", 0, 0);
+      });
+      return dock;
     }, new Text("/agents tasks", 0, 0)));
   }
   function reset() {
+    dock?.dispose(); dock = undefined;
     generation++; dockFailed = false; stopClock(); offInput?.(); offInput = undefined;
     offEditorInput?.(); offEditorInput = undefined; boundEditor = undefined;
     const previous = panel; panel = undefined; opening = false;

@@ -98,7 +98,7 @@ test("settled idle dock collapses but expanding retains every task and exact rec
   const f = fixture();
   for (const item of f.threads) { item.state = "completed"; item.updatedAt = Date.now() - 6000; }
   assert.equal(f.nav.view().length, 1);
-  assert.match(f.nav.render()[0], /2 subagents completed/);
+  assert.match(f.nav.render()[0], /Subagents · 2 completed/);
   f.nav.handle("left", active); f.nav.handle("down", active);
   assert.match(f.nav.render().join("\n"), /›.*map/);
   f.nav.handle("enter", active);

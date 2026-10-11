@@ -38,7 +38,9 @@ Package-owned code may read user-owned paths, but updates must not replace them.
 
 ## Todos storage
 
-Package-owned `pi/extensions/todos/index.ts` uses `.pi/todos` under Pi's current working directory by default. `PI_TODO_PATH` overrides it: relative values resolve against that cwd; absolute values are used directly. Restart Pi after changing the environment.
+Package-owned `pi/extensions/todos/index.ts` stores project todos in `.pi/todos` under Pi's current working directory by default. `PI_TODO_PATH` overrides it: relative values resolve against that cwd; absolute values are used directly. Restart Pi after changing the environment.
+
+Session plans (`/todos plan`, `todo` with `scope: "session"`) live in Pi conversation history instead. They need no extra configuration or project files; `/todos collapse` controls the panel for the current session. Reload resets the display's collapse/folding state while restoring the branch's saved plan.
 
 The resolved store owns its `settings.json` and todo files, not the installed package. Local safety defaults are `gc: false` and `gcDays: 7`; startup garbage collection is optional and opt-in. Enabling it can delete closed todos based on `created_at`, not closure time. Do not enable it or migrate old rpiv-todo data as part of installation. See [Todos behavior and storage](local-extensions.md#todos) before approving cleanup settings.
 

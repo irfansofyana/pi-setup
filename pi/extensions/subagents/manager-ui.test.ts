@@ -7,6 +7,12 @@ import { createAgentRegistry } from "./registry.ts";
 import { createDialogDriver } from "./upstream/tests/helpers/dialogDriver.ts";
 import { ImportPicker } from "./upstream/src/ui/import-picker.ts";
 
+test("setup defaults use minimal widget without creating settings", async t => {
+  const f = await fixture(t, []);
+  assert.equal(f.ui.settings.widgetMode, "minimal");
+  await assert.rejects(access(join(f.root, "subagent-manager", "settings.json")));
+});
+
 const theme: any = { fg: (_color: string, text: string) => text, colors: new Proxy({}, { get: () => ({ kind: "rgb", r: 0, g: 170, b: 0 }) }), style: (text: string) => text };
 async function fixture(t: any, choices: (string | undefined)[]) {
   const module = await import("./manager-ui.ts").catch(() => undefined);

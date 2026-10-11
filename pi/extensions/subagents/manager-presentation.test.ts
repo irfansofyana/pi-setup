@@ -7,6 +7,7 @@ import { createManagerPresentation } from "./manager-presentation.ts";
 import { createRootThreadService } from "./root-service.ts";
 import type { TaskPanel } from "./task-panel.ts";
 import type { ThreadView } from "./upstream/src/types.ts";
+import { PlanController } from "../todos/plan-controller.ts";
 import { markRootEditor, dispatchRootEditorInput } from "../../themes/pi-irfan-devs/root-editor.ts";
 
 const previousKeys = getKeybindings();
@@ -87,7 +88,7 @@ test("Kitty arrow release does not move selection twice; Enter release/repeat ne
   } finally { f.presentation.clear(f.ctx); }
 });
 
-test("completion grace clock renders the collapsed summary before it stops", () => {
+test("completed idle agents fold immediately and stop the elapsed-time clock", () => {
   const set = globalThis.setInterval, clear = globalThis.clearInterval, now = Date.now;
   let time = 10000, clears = 0; const ticks: (() => void)[] = [];
   Date.now = () => time;
@@ -98,14 +99,43 @@ test("completion grace clock renders the collapsed summary before it stops", () 
     f = fixture();
     for (const thread of f.threads) { thread.state = "completed"; thread.updatedAt = time; }
     f.refresh(); assert.equal(ticks.length, 1);
-    assert.match(f.render().join("\n"), /map/);
-    time += 5000; const before = f.renders; ticks[0]();
-    assert.ok(f.renders > before); assert.equal(clears, 1);
-    assert.equal(f.render().length, 1); assert.match(f.render()[0], /2 subagents completed/);
+    assert.equal(clears, 1);
+    assert.equal(f.render().length, 1); assert.match(f.render()[0], /Subagents · 2 completed/);
     f.component.handleMouse({ type: "click", button: "left", y: 0 });
     assert.match(f.render().join("\n"), /Main/);
     assert.equal(f.opens, 0, "summary expands without choosing a recipient");
   } finally { f?.presentation.clear(f.ctx); Date.now = now; globalThis.setInterval = set; globalThis.clearInterval = clear; }
+});
+
+test("Todos and Subagents share rows and clicks still open the rendered agent", () => {
+  const f = fixture();
+  const events = new Map<string, any>();
+  const entries: unknown[] = [];
+  f.ctx.sessionManager = { getSessionId: () => "joint", getBranch: () => entries };
+  f.ctx.isIdle = () => false;
+  const plans = new PlanController({ on: (name: string, handler: any) => events.set(name, handler), appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }) } as any);
+  let todoComponent: any;
+  try {
+    plans.start(f.ctx);
+    assert.equal(plans.execute({ action: "create", title: "Verify shared dock", status: "in_progress", note: "Checking navigation" }, f.ctx).isError, undefined);
+    todoComponent = f.widgets.get("todo-plan")(f.tui, f.ctx.ui.theme);
+    let rows = [...f.render(100), ...todoComponent.render(100)];
+    assert.ok(rows.length <= 6);
+    assert.match(rows[0], /Todos/);
+    assert.ok(rows.some(row => row.includes("Subagents")));
+    assert.doesNotMatch(rows.join("\n"), /\/todos|Enter view|Esc Main/);
+    const target = rows.findIndex(row => row.includes("● map"));
+    assert.ok(target >= 0);
+    todoComponent.handleMouse({ type: "click", button: "left", x: 0, y: target });
+    assert.equal(f.opens, 1);
+    assert.match(f.panel!.render(100).join("\n"), /map/);
+    f.close();
+    rows = [...f.render(100), ...todoComponent.render(100)];
+    assert.ok(rows.length <= 10);
+    assert.match(rows.join("\n"), /›.*map/);
+    events.get("session_shutdown")({}, f.ctx);
+    assert.match(f.render(100).join("\n"), /Subagents/);
+  } finally { todoComponent?.dispose(); f.presentation.clear(f.ctx); }
 });
 
 test("panel render failure restores Main and leaves its draft and callback intact", () => {

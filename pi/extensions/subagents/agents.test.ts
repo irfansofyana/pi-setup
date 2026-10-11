@@ -3,6 +3,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
 const roles = ["builder", "researcher", "reviewer", "scout"];
+
+test("bundled role colors match reviewed personal defaults", () => {
+  for (const [role, color] of Object.entries({ researcher: "syntaxVariable", scout: "success", builder: "mdCodeBlockBorder", reviewer: "mdLink" })) {
+    assert.match(read(role), new RegExp(`^color: ${color}$`, "m"));
+  }
+});
 const read = (role: string) => readFileSync(new URL(`./agents/${role}.md`, import.meta.url), "utf8");
 const tools = (role: string) => {
   const match = read(role).match(/\n  allow: \[([^\]]+)\]/);

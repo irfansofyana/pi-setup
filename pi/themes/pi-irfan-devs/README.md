@@ -30,8 +30,10 @@ the editor. This is a layout-owned widget, not an overlay or background layer.
 - Other palettes retain their existing orbit header.
 
 Artwork is centered inside its reserved panel, not at an arbitrary screen
-coordinate. It uses at most 60×16 artwork cells plus margins. Usually at least
-48×30 terminal cells are needed; exact eligibility depends on input/dock rows.
+coordinate. It uses at most 60×24 artwork cells plus margins, targeting 55% of
+terminal height while preserving the dock/transcript budget. The taller bottom-anchored
+panel makes the logo larger and raises its center compared with the former 16-row cap.
+Usually at least 48×30 terminal cells are needed; exact eligibility depends on input/dock rows.
 
 ### Content gets priority
 
@@ -56,6 +58,37 @@ Status reports draft, activity/history, focus/dialog, autocomplete, mode, size,
 unknown dock content or missing widget registration. Startup/reload eligibility
 also requires an unpersisted metadata-only session. Resumes/forks are excluded.
 Use `/new` for a fresh session when history/persistence blocks artwork.
+
+## Footer presentation
+
+For `pi-irfan-devs`, the footer uses the terminal's default background rather
+than a filled panel. Cost uses primary text; model and normal context use
+secondary text. Tokens, paths, providers and service labels stay muted. Healthy
+service values use footer-local soft green (`#8fbd9c`); separators use subdued
+`#59665f`. Active work retains accent color; failures and context pressure retain
+warning/error colors (context warning above 70%, error above 90%). Caveman status
+shows its mode once, without the rock icon or duplicated label.
+
+Reasoning-capable models show the current configured thinking level beside their
+name (for example, `gpt-6-astra · thinking high`, including `thinking off`). The
+level is read on each render; models without reasoning omit it. The provider
+prefix is omitted when space is needed for the model/thinking label.
+
+These are footer-only styles: global palette, editor thinking border, agent badge
+colors and other palettes remain unchanged. Layout and accounting are unchanged.
+
+## Footer accounting
+
+The single dollar value combines main-session assistant cost and settled subagent
+costs from persisted `pi-subagent:cost:v1` records. Per-child high-water marks
+prevent duplicate charges after resumes, reloads, or branch navigation. Running
+children contribute when they settle; the value is not a live billing meter.
+Input/output/cache tokens and context usage still describe the main session only.
+
+Signature hides the separate `subagent_cost` status chip because its cost is
+already included. The subagent extension still publishes that key/event for other
+footer consumers; agent task details retain individual costs. No user settings or
+external footer configuration are changed.
 
 ## Editor and ownership
 

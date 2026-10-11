@@ -17,14 +17,16 @@ async function fixture(t: any) {
 	const tools: any[] = [];
 	const commands = new Map<string, any>();
 	const events = new Map<string, any>();
+	const entries: unknown[] = [];
 	todosExtension({
 		registerTool(tool: any) { tools.push(tool); },
 		registerCommand(name: string, command: any) { commands.set(name, command); },
 		on(name: string, handler: any) { events.set(name, handler); },
+		appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", customType, data }); },
 	} as any);
 	const ctx: any = {
-		cwd, mode: "print", hasUI: false,
-		sessionManager: { getSessionId: () => "session-a", getSessionFile: () => "session-a.jsonl" },
+		cwd, mode: "print", hasUI: false, isIdle: () => true,
+		sessionManager: { getSessionId: () => "session-a", getSessionFile: () => "session-a.jsonl", getBranch: () => entries },
 	};
 	const call = (params: any, context = ctx) => tools[0].execute("call", params, undefined, undefined, context);
 	return { cwd, dir: path.join(cwd, ".pi/todos"), tools, commands, events, ctx, call };
@@ -39,6 +41,21 @@ test("registers bundled tool and command without creating storage on startup", a
 	await f.events.get("session_start")({}, f.ctx);
 	await assert.rejects(access(f.dir), { code: "ENOENT" });
 	assert.deepEqual((await f.call({ action: "list" })).details.todos, []);
+});
+
+test("session tool plans stay separate from project files and reject wrong-scope fields", async (t) => {
+	const f = await fixture(t);
+	await f.events.get("session_start")({}, f.ctx);
+	const created = await f.call({ scope: "session", action: "create", title: "Inspect the code" });
+	assert.equal(created.details.plan.steps[0].id, "PLAN-1");
+	assert.equal(created.details.scope, "session");
+	assert.equal((await f.call({ scope: "session", action: "update", id: "PLAN-1", status: "in_progress", expectedRevision: 1 })).details.plan.steps[0].status, "in_progress");
+	assert.deepEqual((await f.call({ action: "list" })).details.todos, []);
+	await assert.rejects(access(f.dir), { code: "ENOENT" });
+	assert.equal((await f.call({ scope: "session", action: "create", title: "Wrong scope", tags: ["project"] })).isError, true);
+	assert.equal((await f.call({ action: "reorder", order: ["PLAN-1"] })).isError, true);
+	assert.equal((await f.call({ action: "update", id: "PLAN-1", note: "Wrong scope" })).isError, true);
+	assert.equal((await f.call({ scope: "session", action: "claim", id: "PLAN-1" })).isError, true);
 });
 
 test("CRUD round trips JSON front matter, markdown, tags, and IDs", async (t) => {
