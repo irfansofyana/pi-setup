@@ -1,4 +1,5 @@
 import registerSignature from "./signature.ts";
+import { markRootEditor, withRootEditorInput } from "./root-editor.ts";
 import {
 	CustomEditor,
 	type ExtensionAPI,
@@ -242,7 +243,7 @@ export default function irfanDevsUi(pi: ExtensionAPI) {
 
 			handleInput(data: string): void {
 				const before = this.getText();
-				super.handleInput(data);
+				withRootEditorInput(this, data, () => super.handleInput(data));
 				if (hadError && this.getText() !== before) {
 					hadError = false;
 					requestRender();
@@ -354,7 +355,7 @@ export default function irfanDevsUi(pi: ExtensionAPI) {
 			}
 		}
 
-		irfanDevsEditorFactory = (tui, theme, keybindings) => new IrfanDevsEditor(tui, theme, keybindings);
+		irfanDevsEditorFactory = (tui, theme, keybindings) => markRootEditor(new IrfanDevsEditor(tui, theme, keybindings), keybindings);
 		if (previousFactory && !initialConflictWarned) {
 			ctx.ui.notify(
 				`Multiple custom editors detected. Irfan Devs editor is loading after another editor; Pi can show only one, so the last loaded editor wins. Theme ${ctx.ui.theme.name} remains selected.`,

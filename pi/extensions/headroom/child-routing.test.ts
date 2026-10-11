@@ -109,7 +109,7 @@ test("child bridge admits only audited Pi version and already-owned exact proxy 
 
 test("an available parent route alone does not authorize Ciung without child request ownership", async () => fixture(async ({ home, registry, proxyUrl, start, stop, requests }) => {
   await mkdir(join(home, "agents"));
-  await writeFile(join(home, "agents", "researcher.md"), await readFile(new URL("../../agents/researcher.md", import.meta.url), "utf8"));
+  await writeFile(join(home, "agents", "researcher.md"), await readFile(new URL("../subagents/test-fixtures/legacy-researcher.txt", import.meta.url), "utf8"));
   await start();
   const route = `${proxyUrl}/v1`;
   assert.equal(registry.find("openai", "gpt-4")?.baseUrl, route);

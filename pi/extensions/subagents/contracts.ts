@@ -1,4 +1,5 @@
 // M0 wire vocabulary only: no runner, registration, storage or execution here.
+import type { RunFailure } from "./failures.ts";
 export const limits = Object.freeze({
   pendingRunsPerRoot: 32, followUpsPerThread: 8, queuedBytes: 1024 * 1024,
   mailboxPerThread: 32, mailboxBytesPerThread: 256 * 1024, mailboxBytesTotal: 4 * 1024 * 1024,
@@ -68,7 +69,7 @@ export type Outcome = "completed" | "failed" | "interrupted" | "cancelled" | "bu
 export type Receipt = { version: 1; controlId: string; runId?: string; status: "accepted" | "queued" | "handled" | "applied" | "rejected" | "unknown_delivery"; error?: Rejection; result?: RunResult };
 export type Artifact = Readonly<{id?:string;path:string;repo:string;branch:string;base:string;commit:string;dirty:boolean;status:string;diff?:string;truncated:boolean;files:readonly string[]}>;
 export type RunUsage=Readonly<{input:number;output:number;cacheRead:number;cacheWrite:number;totalTokens:number;cost:number}>;
-export type RunResult = { version: 1; agentId: string; threadId: string; runId: string; outcome: Outcome; complete: boolean; truncated: boolean; text?: string;artifacts?:readonly Artifact[];usage?:RunUsage;turns?:number;toolUses?:number };
+export type RunResult = { version: 1; agentId: string; threadId: string; runId: string; outcome: Outcome; complete: boolean; truncated: boolean; text?: string;error?:RunFailure;artifacts?:readonly Artifact[];usage?:RunUsage;turns?:number;toolUses?:number };
 export interface Supervisor {
   start(request: unknown): Promise<Receipt>;
   control(request: Control): Promise<Receipt>;

@@ -5,6 +5,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { ContextSnapshot } from "./context.ts";
 import { limits, utf8Bytes } from "./contracts.ts";
 import type { Artifact } from "./contracts.ts";
+import { runFailure, type RunFailure } from "./failures.ts";
 
 export type BackendError = "unsupported_provider" | "unsupported_resource" | "unsupported_routing" | "initialization_failed";
 export type BackendResult = { ok: false; code: BackendError } | { ok: true; backend: NativeBackend };
@@ -20,7 +21,7 @@ export async function createEvaluatorBackend(options: BackendOptions): Promise<B
   if(options.context||options.extensions?.length||options.tools?.length||!options.model.startsWith(`${options.provider.id}/`))return {ok:false,code:"unsupported_resource"};
   return createReadOnlyBackend(options,["read","grep","find","ls"]);
 }
-type RunOutcome = { outcome: "completed" | "failed" | "interrupted"; complete: boolean };
+type RunOutcome = { outcome: "completed" | "failed" | "interrupted"; complete: boolean; error?: RunFailure };
 
 /** Only a single read-only built-in tool is approved for this offline feasibility spike. */
 export async function createNativeBackend(options: BackendOptions): Promise<BackendResult> {
@@ -102,8 +103,8 @@ export class NativeBackend {
       if(this.shouldPause?.())return {outcome:"completed",complete:false};
       if (!last || prior.has(last) || !finalized || finalized.stopReason!=="stop" || last.stopReason !== "stop") return { outcome: "failed", complete: false };
       return { outcome: "completed", complete: true };
-    } catch {
-      return { outcome: this.interrupted ? "interrupted" : "failed", complete: false };
+    } catch (error) {
+      return { outcome: this.interrupted ? "interrupted" : "failed", complete: false, ...(!this.interrupted ? { error: runFailure(error) } : {}) };
     } finally { unsubscribe(); this.running = false; }
   }
   async control(_request: { operation: string; message?: string }): Promise<ControlReceipt> {

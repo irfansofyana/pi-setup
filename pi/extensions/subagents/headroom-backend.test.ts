@@ -32,7 +32,7 @@ async function fixture(run: (value: any) => Promise<void>) {
   const originalFetch = globalThis.fetch;
   try {
     await mkdir(join(agentDir, "agents"), { recursive: true }); await mkdir(cwd);
-    await writeFile(join(agentDir, "agents", "researcher.md"), await readFile(new URL("../../agents/researcher.md", import.meta.url), "utf8"));
+    await writeFile(join(agentDir, "agents", "researcher.md"), await readFile(new URL("./test-fixtures/legacy-researcher.txt", import.meta.url), "utf8"));
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const address = server.address(); assert.ok(address && typeof address !== "string");
     const proxyUrl = `http://127.0.0.1:${address.port}`;

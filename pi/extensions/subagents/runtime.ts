@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { readFile,readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createManagedSupervisor as createSupervisor } from "./manager-service.ts";
 import { createRootThreadService } from "./root-service.ts";
 import { agentTools } from "./upstream/src/orch/tools.ts";
 import { AgentNavigationController } from "./upstream/src/ui/status-ui.ts";
+import { updateWidget } from "./upstream/src/ui/ui.ts";
 import { resolveTrustedRole, createTrustedRoleBackend } from "./trusted.ts";
 import { parentProvider } from "./parent-provider.ts";
 import { committedBase, createWorktree, inspectWorktree,recoverWorktree,discardWorktree,reviewWorktree } from "./worktrees.ts";
@@ -21,12 +22,13 @@ import {claimOwner}from"./ownership.ts";
 import {fleetLines,activityDetail,displayText}from"./presentation.ts";
 import {humanMenu}from"./human-ui.ts";
 import {inspectStorageLease,reconcileStorageLease}from"./storage.ts";
-import {validateNativeConfig,companionConfigured}from"./config.ts";
-import {createDemo}from"./demo.ts";
+import {nativeActivation} from "./activation.ts";
+import { parentSearchTools, optionalSearchTools, usesBundledResources, shouldUseBuiltinFallback } from "./parent-resources.ts";
 import { createAgentRegistry, canonicalRole, resolveAgentDefinition, delegationTools } from "./registry.ts";
 import { createChildTools } from "./child-tools.ts";
 import { createManagerUI } from "./manager-ui.ts";
 import { createManagerPresentation } from "./manager-presentation.ts";
+import { isRootEditor } from "../../themes/pi-irfan-devs/root-editor.ts";
 import { createParentDelivery } from "./parent-delivery.ts";
 import { subagentPrompt } from "./upstream/src/orch/prompt.ts";
 import { CostLedger, COST_ENTRY } from "./upstream/src/orch/cost-ledger.ts";
@@ -34,28 +36,13 @@ import { CostFooterController } from "./upstream/src/ui/cost-footer.ts";
 import type { DriverOptions } from "./upstream/src/types.ts";
 import { parentPath } from "./upstream/src/orch/paths.ts";
 
-/** Experimental, exclusive temporary-profile adapter. No live-package cutover. */
-export async function registerPreview(pi: ExtensionAPI) {
-  const agentDir = getAgentDir();
-  if (!process.argv.includes("--no-extensions") || process.env.PI_SETUP_SUBAGENTS_PROFILE !== join(agentDir, "subagents-preview.json")) throw Error("Use the isolated subagents preview launcher");
-  const config = JSON.parse(await readFile(process.env.PI_SETUP_SUBAGENTS_PROFILE!, "utf8"));
-  const approved=[new URL("./index.ts",import.meta.url).pathname,...(config.headroom?[new URL("../headroom/index.ts",import.meta.url).pathname]:[]),...(config.integration?["goal-loop","loop"].map(name=>new URL(`../${name}/index.ts`,import.meta.url).pathname):[]),...(config.themeUI?[new URL("../../themes/pi-irfan-devs/index.ts",import.meta.url).pathname]:[])];
-  for(let i=0;i<process.argv.length;i++)if(["-e","--extension"].includes(process.argv[i])&&!approved.includes(process.argv[i+1]))throw Error("Preview forbids additional extension entrypoints");
-  const settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8"));
-  if (config.version !== 1 || config.agentDir !== agentDir || !["native","headroom-preferred"].includes(config.routing) || settings.packages?.length || settings.extensions?.length) throw Error("Non-exclusive preview profile rejected");
-  return registerRuntime(pi,agentDir,{...config,concurrency:1,threads:4,slots:8,pending:4},true);
-}
-/** Global user-owned config, never project activation; gate before any registration. */
+/** In-memory defaults; preserve user config and gate companion collisions before registration. */
 export async function registerNative(pi:ExtensionAPI){
- const agentDir=getAgentDir(),input=JSON.parse(await readFile(join(agentDir,"subagents-native.json"),"utf8"));
- const config=validateNativeConfig(input);
- for(const path of [join(agentDir,"settings.json"),join(process.cwd(),".pi/settings.json")]){
-  let settings;try{settings=JSON.parse(await readFile(path,"utf8"));}catch(error){if((error as any).code==="ENOENT")continue;throw error;}
-  if(companionConfigured(settings))throw Error("Native subagents companion conflict: review/disable Tintinweb source first; no tools registered");
- }
+ const agentDir=getAgentDir(),config=await nativeActivation(agentDir,process.cwd());
+ if(!config)return;
  return registerRuntime(pi,agentDir,config);
 }
-async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privatePreview=false){
+async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any){
   let supervisor: ReturnType<typeof createSupervisor> | undefined;
   let protocol: ReturnType<typeof createProtocol> | undefined;
   let orchestration:Awaited<ReturnType<typeof createOrchestration>>|undefined;
@@ -76,14 +63,24 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
   const registerTool=(tool:any)=>{const guarded={...tool,async execute(...args:any[]){const ctx=args[4]??runtimeContext;await init(ctx);adoptContext(ctx);if(managerUI?.settings.subagentMode==="off")throw Error("Subagent Mode is off");return tool.execute(...args);}};publicTools.push(guarded);pi.registerTool(guarded);};
   const records = new Map<string, { threadId: string; runId: string; role: string;model?:string;task?:string;name?:string }>();
   const driverOptions=new Map<string,DriverOptions>();
+  const resourcesFor = (type: any, ctx: any) => {
+    const writable = (type.tools?.allow ?? []).some((name: string) => ["edit", "write"].includes(name) && !type.tools?.block?.includes(name));
+    const parentTools = writable ? [] : parentSearchTools(ctx);
+    const bundled = usesBundledResources(type);
+    const availableTools = [...parentTools.map(tool => tool.name), ...(!bundled && config.fffPath ? optionalSearchTools.filter(name => name !== "fff-multi-grep" || process.env.PI_FFF_MULTIGREP === "1") : [])];
+    // Bundled roles never load third-party packages or external skills into their child runtime.
+    return { parentTools, availableTools, availableSkills: bundled ? [] : Object.keys(config.skillPaths ?? {}) };
+  };
   const receipts=new Map<string,string>();
   const artifacts = new Map<string, any>();
   const activity = new Map<string,string>();
   const viewers = new Set<() => void>();
   const pruneRecords=()=>{pruneRuntimeRecords(records,activity,receipts,id=>supervisor?.inspect(id));const paths=new Set(supervisor?.manager.list().map(thread=>thread.path)??[]);for(const path of driverOptions.keys())if(!paths.has(path))driverOptions.delete(path);};
   let refreshFleet=()=>{};
-  const presentation=createManagerPresentation(pi,{settings:()=>managerUI?.settings,threads:()=>supervisor?.manager.list()??[],
-    async openTree(ctx){await init(ctx);adoptContext(ctx);await navigation.open(ctx,rootThreads(),undefined,managerUI!.settings.nerdFontIcons,managerUI!.settings.loaderStyle);}});
+  const presentation=createManagerPresentation({settings:()=>managerUI?.settings,threads:()=>supervisor?.manager.list()??[],
+    metrics(path){const handle=supervisor?.handleFor(path);const snapshot=handle&&supervisor?.inspect(handle.threadId);return snapshot?{runState:snapshot.state,turns:snapshot.turns,toolUses:snapshot.toolUses,totalTokens:snapshot.usage.totalTokens,softTurns:snapshot.budget?.softTurns,hardTurns:snapshot.budget?.hardTurns}:undefined;},
+    service:()=>rootThreads(),isEditor:(component):component is CustomEditor=>component instanceof CustomEditor && isRootEditor(component),
+    renderOther(ctx,settings,threads,ended){updateWidget(ctx,threads,settings.widgetMode,settings.nerdFontIcons,ended,settings.loaderStyle,false);}});
   const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], details: value });
   const initialize = async (ctx: any) => {
     ownership=claimOwner(agentDir);
@@ -93,7 +90,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
     registry=createAgentRegistry({agentDir,cwd:ctx.cwd,includeProject:ctx.isProjectTrusted?.()===true});
     for(const diagnostic of registry.diagnostics)if(ctx.hasUI)ctx.ui.notify(diagnostic,"warning");
     presentation.reset();
-    managerUI=createManagerUI({agentDir,cwd:ctx.cwd,store:registry,pi,...(privatePreview?{importHomeDir:agentDir}:{}),caps:{concurrency:config.concurrency,threads:config.threads,levels:4},
+    managerUI=createManagerUI({agentDir,cwd:ctx.cwd,store:registry,pi,caps:{concurrency:config.concurrency,threads:config.threads,levels:4},
       apply(settings){supervisor?.setAdmissionLimits({concurrency:settings.maxConcurrent,threads:settings.maxThreads});supervisor?.manager.setLimits({...settings,maxConcurrent:config.threads});syncTools();refreshFleet();delivery?.flush();},
       reap:{candidates:()=>supervisor?.manager.reapCandidates()??[],async close(confirmed){
         const eligible=new Set(supervisor!.manager.reapCandidates(confirmed)),closed:string[]=[];
@@ -124,9 +121,10 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
           if(ctx.scopedModels?.length&&!ctx.scopedModels.some((entry:any)=>`${entry.model.provider}/${entry.model.id}`===assignment))throw Error("Evaluator model outside parent scope");
           return {model:assignment,budget:{softTurns:2,hardTurns:2,elapsedMs:Math.min(config.elapsedMs??120000,120000),maxTokens:config.maxTokens,maxCost:config.maxCost},createBackend:async()=>{const result=await createEvaluatorBackend({agentDir,cwd,model:assignment,provider});if(!result.ok)throw Error(result.code);return result.backend;}};
         }
-        const available = { tools: ["read", "grep", "find", "ls", "edit", "write", "ext:web-research/web_search", "ext:web-research/web_fetch", "ext:fff/fffind", "ext:fff/ffgrep", "ext:fff/fff-multi-grep",...delegationTools],
-          extensions: ["web-research", ...(config.fffPath ? ["fff"] : [])], skills: ["my-web-search", ...Object.keys(config.skillPaths ?? {})], models: ctx.modelRegistry.getAvailable().map((m: any) => `${m.provider}/${m.id}`) };
-        const resolved = resolveAgentDefinition(registry!.get(role), { model: assignment, explicitModel:request.model, models: available.models, thinking:parentSettings?.thinking??ctx.thinkingLevel,
+        const type = registry!.get(role), resources = resourcesFor(type, runtimeContext);
+        const available = { tools: ["read", "grep", "find", "ls", "edit", "write", "ext:web-research/web_search", "ext:web-research/web_fetch", ...resources.availableTools.map(name => `ext:fff/${name}`), ...delegationTools],
+          extensions: ["web-research", ...(resources.availableTools.length ? ["fff"] : [])], skills: ["my-web-search", ...resources.availableSkills], models: ctx.modelRegistry.getAvailable().map((m: any) => `${m.provider}/${m.id}`) };
+        const resolved = resolveAgentDefinition(type, { ...resources, model: assignment, explicitModel:request.model, models: available.models, thinking:parentSettings?.thinking??ctx.thinkingLevel,
           scopedModels:ctx.scopedModels?.map((entry:any)=>`${entry.model.provider}/${entry.model.id}`),maxTurns:request.maxTurns,modelSelection:managerUI!.settings.modelSelection });
         if(request.budgetExtendable===false&&resolved.toolNames.includes("agent_spawn"))throw Error("Scheduled/workflow turn reservations cannot fund nested delegation; use a non-delegating custom type");
         if(ctx.scopedModels?.length && !ctx.scopedModels.some((entry:any)=>`${entry.model.provider}/${entry.model.id}`===resolved.loadout.model)) throw Error("Model outside parent scope");
@@ -144,13 +142,20 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
             const lease = recovered??(base ? await createWorktree({ repo: base.repo, base: base.base, root: join(agentDir, "worktrees"), files: request.files! }) : undefined);
             if (lease) artifacts.set(lease.id, lease);
             const skillPaths = Object.fromEntries(resolved.loadout.skills.filter(n => n !== "my-web-search").map(n => [n, config.skillPaths[n]]));
-            const result = await createTrustedRoleBackend({ role, agentDir, cwd: lease?.path ?? cwd, model: resolved.loadout.model!, routing: "native", provider,context,
+            const backendOptions = { role, agentDir, cwd: lease?.path ?? cwd, model: resolved.loadout.model!, routing: "native" as const, provider,context,
               ...(driver?{shouldPause:driver.shouldPause,childTools:createChildTools({path:driver.path,allowed:resolved.toolNames,service:supervisor!,orchestration:()=>orchestration!,types:()=>registry!.list(),resolve:type=>{
-                const child=resolveAgentDefinition(type,{model:resolved.loadout.model,models:available.models,thinking:resolved.thinking,scopedModels:ctx.scopedModels?.map((entry:any)=>`${entry.model.provider}/${entry.model.id}`),modelSelection:managerUI!.settings.modelSelection});
+                const child=resolveAgentDefinition(type,{...resourcesFor(type,runtimeContext),model:resolved.loadout.model,models:available.models,thinking:resolved.thinking,scopedModels:ctx.scopedModels?.map((entry:any)=>`${entry.model.provider}/${entry.model.id}`),modelSelection:managerUI!.settings.modelSelection});
                 return{model:child.loadout.model!,thinkingLevel:child.thinking};
               }})}:{}),
-              definition:resolved, expectedDefinition: resolved.fingerprint, thinking: (request.thinking??resolved.thinking) as any, available, fffPath: config.fffPath, skillPaths, fffMultigrepEnabled: true, worktreeLease: lease });
-            if (!result.ok) { if(ctx.hasUI)ctx.ui.notify(`Subagent initialization: ${result.code}`, "warning"); throw Error(result.code); }
+              definition:resolved, parentTools: resources.parentTools.filter(tool => resolved.toolNames.includes(tool.name)), expectedDefinition: resolved.fingerprint, thinking: (request.thinking??resolved.thinking) as any, available, fffPath: config.fffPath, skillPaths, fffMultigrepEnabled: true, worktreeLease: lease };
+            let result = await createTrustedRoleBackend(backendOptions);
+            if (!result.ok && shouldUseBuiltinFallback(resolved.type, resolved.loadout.extensions.includes("fff"), result.code, Boolean(context))) {
+              // Initialization only: no model request was submitted, and optional authority only narrows.
+              const core = resolveAgentDefinition(resolved.type, { model: resolved.loadout.model, models: available.models, modelSelection: "use-current", maxTurns: resolved.loadout.softTurns, availableTools: [], availableSkills: [] });
+              result = await createTrustedRoleBackend({ ...backendOptions, definition: core, parentTools: [], expectedDefinition: core.fingerprint });
+              if (result.ok && ctx.hasUI) try { ctx.ui.notify("Optional parent search unavailable; subagent using built-in search.", "warning"); } catch { /* optional UI cannot block child startup */ }
+            }
+            if (!result.ok) { if(ctx.hasUI)try { ctx.ui.notify(`Subagent initialization: ${result.code}`, "warning"); } catch {} throw Error(result.code); }
             return result.backend;
           } };
       } }, {maxLevels:4,onDriver(driver){driverOptions.set(driver.path,driver);},getType(name){return name==="Explore"?{name,description:"Bounded read-only evaluator",systemPrompt:"",tools:{}}:registry!.get(name);},onEvent(event) {
@@ -169,7 +174,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
       const ctx=runtimeContext;
       if(ctx.hasUI&&!closingGeneration){
         if(managerUI?.settings.subagentMode==="off"){costFooter.clear();costFooter.reset(ctx);}else costFooter.refresh(ctx);
-        ctx.ui.setStatus("native-subagents",`agents: ${[...records.values()].filter(record=>{const snapshot=supervisor?.inspect(record.threadId);return snapshot&&snapshot.state!=="terminal";}).length} active`);
+        ctx.ui.setStatus("native-subagents",ctx.mode==="tui"||managerUI?.settings.subagentMode==="off"?undefined:`agents: ${[...records.values()].filter(record=>{const snapshot=supervisor?.inspect(record.threadId);return snapshot&&snapshot.state!=="terminal";}).length} active`);
         if(managerUI?.settings.subagentMode==="off"){ctx.ui.setWidget?.("native-subagents",undefined);presentation.clear(ctx);}
         else if(ctx.ui.theme){ctx.ui.setWidget?.("native-subagents",undefined);presentation.refresh(ctx,rootTurnEnded);}
         else ctx.ui.setWidget?.("native-subagents",fleetLines({model:ctx.model&&`${ctx.model.provider}/${ctx.model.id}`},[...records].map(([id,record])=>({id,...record,snapshot:supervisor?.inspect(record.threadId)}))));
@@ -203,6 +208,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
     closingGeneration=true;
     delivery?.close();delivery=undefined;
     navigation.close();
+    if(runtimeContext)presentation.clear(runtimeContext);
     costFooter.clear();if(runtimeContext)costFooter.reset(runtimeContext);
     let failure:unknown;
     try{await boot;}catch{}
@@ -242,7 +248,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
     return createRootThreadService(supervisor, orchestration.control);
   };
   for (const tool of agentTools(() => ({ scope: rootThreads }), "/root", types,
-    type => { if (!currentModel) throw Error("Choose an exact parent model first"); const resolved=resolveAgentDefinition(type,{model:currentModel,thinking:runtimeContext.thinkingLevel,models:runtimeContext.modelRegistry.getAvailable().map((model:any)=>`${model.provider}/${model.id}`),scopedModels:runtimeContext.scopedModels?.map((entry:any)=>`${entry.model.provider}/${entry.model.id}`),modelSelection:managerUI!.settings.modelSelection});return {model:resolved.loadout.model!,thinkingLevel:resolved.thinking}; })) {
+    type => { if (!currentModel) throw Error("Choose an exact parent model first"); const resolved=resolveAgentDefinition(type,{...resourcesFor(type,runtimeContext),model:currentModel,thinking:runtimeContext.thinkingLevel,models:runtimeContext.modelRegistry.getAvailable().map((model:any)=>`${model.provider}/${model.id}`),scopedModels:runtimeContext.scopedModels?.map((entry:any)=>`${entry.model.provider}/${entry.model.id}`),modelSelection:managerUI!.settings.modelSelection});return {model:resolved.loadout.model!,thinkingLevel:resolved.thinking}; })) {
     if (["agent_update", "agent_pause"].includes(tool.name)) continue;
     const adapted = { ...tool };
     if (tool.name === "agent_spawn") {
@@ -303,15 +309,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
     async execute(_id,p,_signal,_update,ctx){await init(ctx);try{const value=await orchestration!.jobs(p.action,p);await orchestration!.flush();return reply(value);}catch{return reply({ok:false,code:"invalid_or_disabled_job"});}}});
   registerTool({name:"subagent_workflow",label:"Optional declarative workflow",description:"Opt-in bounded specialist graph; no scripts or shell grants. Structured result validation is local. Verification requires parent-owned evidence through human UI, not this tool.",parameters:Type.Object({action:Type.Union(["list","start","inspect","pause","resume","retry","skip","cancel"].map(v=>Type.Literal(v))),workflow_id:Type.Optional(Type.String()),step_id:Type.Optional(Type.String()),plan:Type.Optional(Type.Any())}),
     async execute(_id,p,_signal,_update,ctx){await init(ctx);try{const value=await orchestration!.workflow(p.action,p);await orchestration!.flush();return reply(value);}catch{return reply({ok:false,code:"invalid_or_disabled_workflow"});}}});
-  pi.registerCommand("agents-demo",{description:"Disposable synthetic inspector; no SDK model/provider or filesystem operations",handler:async(_args,ctx)=>{
-    if(!ctx.hasUI)return;const demo=createDemo();let text="Synthetic demo: no model or tool requests. Escape closes the view.\n";
-    const listeners=new Set<()=>void>();const unsub=demo.service.subscribe(event=>{text=appendInspector(text,event.type==="native"?activityDetail(event.event):`\n${event.state??event.result?.outcome}\n`);for(const listener of listeners)listener();});
-    try{await demo.service.start({prompt:"synthetic"});
-      if(ctx.mode==="tui")await ctx.ui.custom((tui,_theme,_keys,done)=>new Inspector(tui,()=>text,listener=>{listeners.add(listener);return()=>listeners.delete(listener);},done));
-      else await ctx.ui.select(displayText(text,16000),["Back"]);
-    }finally{unsub();await demo.service.dispose();}
-  }});
-  pi.registerCommand("agents", { description: "Agent settings/types/tree/import/reload/reap and exact-run controls; import asks the current model to migrate selected definitions", handler: async (_args, ctx) => {
+  pi.registerCommand("agents", { description: "Agent tasks/settings/types/tree/import/reload/reap and exact-run controls; import asks the current model to migrate selected definitions", handler: async (_args, ctx) => {
     if (!ctx.hasUI) return;
     try{
     if(_args.trim()==="storage"){
@@ -324,6 +322,7 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
     adoptContext(ctx);
     const topic=_args.trim()||"settings";
     if(!topic)return;
+    if(topic==="tasks" || topic.startsWith("tasks ")){presentation.open(ctx,topic==="tasks"?undefined:topic.slice(6).trim());return;}
     if(await managerUI!.command(topic,ctx))return;
     if(topic==="tree" || topic.startsWith("tree ") || topic.startsWith("/root/")){await navigation.open(ctx,rootThreads(),topic==="tree"?undefined:topic.startsWith("tree ")?topic.slice(5).trim():topic,managerUI!.settings.nerdFontIcons,managerUI!.settings.loaderStyle);return;}
     if(["results","notifications","jobs","workflows"].includes(topic)){await humanMenu(topic,ctx.ui as any,orchestration);return;}
@@ -346,9 +345,9 @@ async function registerRuntime(pi:ExtensionAPI,agentDir:string,config:any,privat
       await discardWorktree(lease,{expectedStatus:artifact.status,expectedFingerprint:reviewed.fingerprint,discardDirty:true});artifacts.delete(lease.id);
       ctx.ui.notify("Owned worktree removed. Branch/record retained; discarded uncommitted files are not recoverable.","warning");return;
     }
-    if(topic!=="fleet")throw Error("Use /agents [tree|/root/task|fleet|results|notifications|jobs|workflows|artifacts]");
+    if(topic!=="fleet")throw Error("Use /agents [tasks|tree|/root/task|fleet|results|notifications|jobs|workflows|artifacts]");
     const choices = [...records].map(([id,r]) => `${id} | ${r.role} | ${supervisor?.inspect(r.threadId)?.state}`);
-    const selected = await ctx.ui.select("Native preview fleet", choices.length ? choices : ["No workers. Ask Pi to use Agent."]);
+    const selected = await ctx.ui.select("Native agent fleet", choices.length ? choices : ["No workers. Ask Pi to use Agent."]);
     const record = selected && records.get(selected.split(" | ")[0]); if (!record || !supervisor) return;
     const action = await ctx.ui.select("Worker controls", ["Inspect", "Message", "Steer", "Follow up", "Resume", "Extend turn budget", "Interrupt", "Consume result", "Close thread"]);
     if (!action) return;

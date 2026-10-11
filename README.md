@@ -40,8 +40,8 @@ Existing devices use the same install, then [review migration proposals](docs/se
 - **Context:** Headroom proxy integration and read-only `/context` diagnostics.
 - **Workflow:** persisted `/goal`, paced `/loop`, side-channel `/btw`, and `/caveman` response style.
 - **Prompts:** seven packaged research, planning, debugging, review, and push workflows.
-- **Delegation:** reviewed Ciung, Laya, Sangkur, and Prabu templates; global deployment needs separate approval.
-- **Native subagents:** default-inert pi-subagent-manager fork with four bundled roles, custom types, settings/tree UI, scoped worktrees and optional schedules/workflows; [isolated manual testing](pi/extensions/subagents/preview.md) precedes cutover.
+- **Delegation:** bundled researcher, scout, builder and reviewer; `code-mapper` aliases scout. No manual role deployment.
+- **Native subagents:** enabled by default; `/agents` settings/tree UI, four bundled roles, custom types and scoped worktrees. Persistence, schedules and workflows remain opt-in; existing legacy companions take precedence.
 - **Setup:** bundled audit/proposal/migration skill; native Pi MCP guidance.
 
 Pi loads declared extensions, themes, skills, and prompts from the package.
@@ -52,19 +52,19 @@ Headroom's Python CLI and Hindsight's daemon remain separate tools.
 
 ## Required companion packages
 
-Three companions remain **separate Pi package sources**, installed only after approval.
+Two companions remain **separate Pi package sources**, installed only after approval.
 Root `piSetup.requiredPackages` owns their sources and minimum versions; newer installed versions satisfy minimums.
 
 | Package | Minimum version | Purpose |
 | --- | --- | --- |
 | `@ff-labs/pi-fff` | `>=0.10.5` | Specialist search |
-| `@tintinweb/pi-subagents` | `>=0.14.3` | Delegated agents |
 | `pi-stats-ext` | `>=0.2.0` | Usage statistics |
 
 Todos is package-owned, replacing `npm:@juicesharp/rpiv-todo`.
 If that old source remains installed, remove it only through a separately approved proposal to avoid duplicate tools.
 No automatic todo-data migration or settings activation. See [Todos](docs/setup/local-extensions.md#todos).
 Structured questions are also package-owned. See [Structured questions](docs/setup/local-extensions.md#structured-questions).
+Subagents are package-owned; legacy Tintinweb removal requires separate approval. See [Subagents](docs/setup/subagents.md#native-runtime-cutover).
 
 ## Configuration and safety
 

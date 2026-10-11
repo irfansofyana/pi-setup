@@ -11,15 +11,15 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `~/.pi/agent/settings.json` | Global Pi | Pi settings and selected theme |
 | `~/.pi/agent/themes/` | Global Pi | Themes |
 | `~/.pi/agent/extensions/` | Global Pi | Extensions |
-| `~/.pi/agent/agents/` | Global Pi | Trusted reusable subagent roles |
+| `~/.pi/agent/subagent-manager/agents/` | Global Pi | Native custom definitions and sparse overrides; built-ins stay package-owned |
 | `~/.pi/agent/prompts/` | Global Pi | User-owned prompt templates; separate from package prompts |
 | `<project>/.pi/todos/` | Project-local | Default Todos files and store-local `settings.json`; `PI_TODO_PATH` can override |
 | `<project>/.pi/prompts/` | Project-local | Project prompt templates; review before granting trust |
-| `~/.pi/agent/subagents.json` | Global Pi | Subagent concurrency, UI, model-scope, and transcript defaults |
+| `~/.pi/agent/subagents-native.json` | Global Pi | Optional native runtime caps, approved resource paths and opt-out |
 | `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/web-research/artifacts/` | Global Pi | Owner-only bounded native-web artifacts; package code owns format, user owns retained state |
-| `<project>/.pi/agents/` | Project-local | Project agent definitions; trusted repositories only |
-| `<project>/.agents/agents/` | Project-local | Shared project agent definitions; trusted repositories only |
-| `<project>/.pi/subagents.json` | Project-local | Subagent settings overriding global defaults |
+| `<project>/.pi/agent/subagent-manager/agents/` | Project-local | Native project definitions; explicit trust required |
+| `~/.pi/agent/subagent-manager/settings.json` | Global Pi | Native manager UI/model preferences; edited through `/agents` |
+| `<project>/.pi/agent/subagent-manager/settings.json` | Project-local | Trusted project manager preferences |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter config |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon config |
 | `~/.pi/agent/managed-skills/config.json` | Global Pi | Managed skills config |
@@ -34,7 +34,7 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `.pi/mcp.json` | Project-local | Native Pi project MCP servers; trust required |
 | `~/.pi/agent/mcp.json` | Pi global | Native Pi personal MCP servers |
 
-Package-owned code may read user-owned paths, but updates must not replace them. Global configuration applies across projects; project subagent settings override global keys. Treat project agent definitions as executable-capability configuration and load only trusted repositories; see [Subagent team](subagents.md). Native project MCP uses `.pi/mcp.json` after project trust. See [MCP](mcp.md) for examples.
+Package-owned code may read user-owned paths, but updates must not replace them. Native project definitions/settings load only after explicit trust. Legacy `~/.pi/agent/agents/` and `subagents.json` are cleanup/import candidates, not native runtime configuration; preserve custom files unless separately approved. See [Subagent team](subagents.md). Native project MCP uses `.pi/mcp.json` after project trust. See [MCP](mcp.md) for examples.
 
 ## Todos storage
 

@@ -14,8 +14,8 @@ procedure. Do not point normal Pi package discovery at this directory or activat
 the upstream entrypoint directly: it does not yet enforce pi-setup role policy.
 
 Local adapters live one directory above. The package's public entrypoint stays
-default-inert. The adapter's four defaults live in `../agents/`, loaded by its
-registry; `pi/agents/` remains legacy companion compatibility, not native deployment.
+default-enabled. The adapter's four defaults live in `../agents/`, loaded by its
+registry; legacy deployment templates are retired; native defaults need no manual copying.
 Bundled upstream role definitions are retained as source
 evidence, not selected as this setup's defaults. Live installation/configuration,
 auth, companion removal and theme changes remain separately approval-gated.

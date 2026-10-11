@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { resolveTrustedRole, createTrustedRoleBackend, probeApprovedResources } from "./trusted.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { provider } from "./backend.test.ts";
-const templates = fileURLToPath(new URL("../../agents/", import.meta.url));
+const templates = fileURLToPath(new URL("./test-fixtures/", import.meta.url));
 async function fixture(fn: (agentDir: string, cwd: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "trusted-roles-"));
   const agentDir = join(root, "agent"), cwd = join(root, "project");
@@ -18,7 +18,7 @@ async function fixture(fn: (agentDir: string, cwd: string) => Promise<void>) {
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 async function install(agentDir: string, role: string) {
-  await writeFile(join(agentDir, "agents", `${role}.md`), await readFile(join(templates, `${role}.md`), "utf8"));
+  await writeFile(join(agentDir, "agents", `${role}.md`), await readFile(join(templates, `legacy-${role}.txt`), "utf8"));
 }
 const available = { tools: ["read", "grep", "find", "ls", "ext:fff/fffind", "ext:fff/ffgrep", "ext:fff/fff-multi-grep"], extensions: ["headroom", "fff"], skills: ["mermaid", "teach"], models: ["offline-fixture/offline"] };
 test("trusted global canonical role resolves exact loadout and prompt with explicit model", async () => fixture(async (agentDir) => {

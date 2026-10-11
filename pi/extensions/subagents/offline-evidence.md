@@ -1,10 +1,12 @@
 # Historical first-party subagent feasibility evidence
 
-This is a dated record of the earlier partial slices, not current feature/configuration guidance. See [the component README](README.md) and [manual testing](preview.md) for current behavior. Statements below about missing adapters/UI/persistence describe those historical runs.
-
-Normal package loading remains inert. `PI_SETUP_SUBAGENTS_ENABLED` does **not** activate it. A separate launcher enables an exclusive native preview in a private temporary profile; Tintinweb remains unchanged in `package.json`. Global configuration, credentials, roles and selected themes are not modified. See [preview commands and manual acceptance](preview.md). No `/reload` is needed for the separate process.
-
-The sections below retain historical offline-slice evidence. The old M0–M7 draft is superseded by the pinned upstream-manager baseline described in the component README. Statements about missing UI or adapters describe those original tests, not the current preview. Live migration and real-provider/manual acceptance remain separate gates.
+This is a dated record of earlier partial slices, not current feature/configuration
+guidance. See [the component README](README.md) and
+[validation guidance](../../../docs/setup/subagents.md#verification)
+for current behavior. The private-preview launcher and demo command have been
+removed. Historical references below describe earlier test machinery, not shipped
+activation paths. Package-owned native runtime now loads by default; existing
+user configuration and credentials remain user-owned.
 
 ## Frozen draft contract
 

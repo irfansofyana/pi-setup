@@ -1,32 +1,58 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, copyFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { registerPreview,registerNative } from "./preview-extension.ts";
+import { registerNative } from "./runtime.ts";
 import { publishChildRouting } from "../headroom/child-route.ts";
 import { CostLedger,COST_ENTRY } from "./upstream/src/orch/cost-ledger.ts";
 
-test("exclusive preview registers tools/UI, executes a native child, reads result and closes without provider network", async () => {
-  const root = await mkdtemp(join(tmpdir(), "preview-sdk-"));
-  const saved = {dir:process.env.PI_CODING_AGENT_DIR,profile:process.env.PI_SETUP_SUBAGENTS_PROFILE,preview:process.env.PI_SETUP_SUBAGENTS_PREVIEW};
-  process.argv.push("--no-extensions");
+test("normal package load registers /agents without activation flags or config", async () => {
+  const root = await mkdtemp(join(tmpdir(), "native-default-sdk-"));
+  const cwd = process.cwd();
+  const saved = { dir: process.env.PI_CODING_AGENT_DIR, native: process.env.PI_SETUP_SUBAGENTS_NATIVE };
+  try {
+    process.chdir(root);
+    process.env.PI_CODING_AGENT_DIR = root;
+    delete process.env.PI_SETUP_SUBAGENTS_NATIVE;
+
+    const loader = new DefaultResourceLoader({ cwd: root, agentDir: root, settingsManager: SettingsManager.inMemory({}), noExtensions: true, noSkills: true, noContextFiles: true, noThemes: true, noPromptTemplates: true, additionalExtensionPaths: [new URL("./index.ts", import.meta.url).pathname], disabledBuiltinExtensions: ["mcp", "codemode", "tool-search"] });
+    await loader.reload();
+    assert.deepEqual(loader.getExtensions().errors, []);
+    const extension = loader.getExtensions().extensions[0];
+    assert.ok(extension.commands.has("agents"));
+    assert.ok(extension.tools.has("agent_spawn"));
+    const { readdir } = await import("node:fs/promises");
+    assert.deepEqual(await readdir(root), []);
+  } finally {
+    process.chdir(cwd);
+    for (const [key, value] of [["PI_CODING_AGENT_DIR", saved.dir], ["PI_SETUP_SUBAGENTS_NATIVE", saved.native]]) {
+      if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native runtime registers tools/UI, executes child, reads result and closes without provider network", async () => {
+  const root = await mkdtemp(join(tmpdir(), "native-runtime-sdk-"));
+  const cwd = process.cwd();
+  const saved = {dir:process.env.PI_CODING_AGENT_DIR,native:process.env.PI_SETUP_SUBAGENTS_NATIVE};
   let releaseRoute: (() => void) | undefined;
   let shutdown: (()=>Promise<void>) | undefined;
   try {
-    process.env.PI_CODING_AGENT_DIR=root; process.env.PI_SETUP_SUBAGENTS_PROFILE=join(root,"subagents-preview.json");
-    await mkdir(join(root,"agents")); await copyFile(new URL("../../agents/researcher.md",import.meta.url),join(root,"agents/researcher.md"));
+    process.chdir(root);
+    process.env.PI_CODING_AGENT_DIR=root; delete process.env.PI_SETUP_SUBAGENTS_NATIVE;
+    // Native defaults come from the managed bundled registry; no legacy role copy.
     await mkdir(join(root,"subagent-manager","agents"),{recursive:true});
     await writeFile(join(root,"subagent-manager","agents","worker.md"),"---\nname: worker\ndescription: Custom general helper\ntools:\n  allow: [read]\n---\nAnswer only the assigned task.\n");
     await writeFile(join(root,"settings.json"),JSON.stringify({packages:[],extensions:[]}));
-    await writeFile(process.env.PI_SETUP_SUBAGENTS_PROFILE,JSON.stringify({version:1,agentDir:root,routing:"headroom-preferred",skillPaths:{},persist:true,workflows:true,schedules:true}));
-    await writeFile(join(root,"subagents-native.json"),JSON.stringify({version:1,enabled:true,routing:"native"}));
+    await writeFile(join(root,"subagents-native.json"),JSON.stringify({version:1,enabled:true,routing:"headroom-preferred",concurrency:3,threads:4,slots:8,pending:4,skillPaths:{},persist:true,workflows:true,schedules:true}));
     await writeFile(join(root,"settings.json"),JSON.stringify({packages:["npm:@tintinweb/pi-subagents@0.14.3"],extensions:[]}));
-    await assert.rejects(registerNative(new Proxy({},{get(){throw Error("registration touched before conflict gate");}})as any),/companion conflict/);
+    await registerNative(new Proxy({},{get(){throw Error("registration touched before conflict gate");}})as any);
     await writeFile(join(root,"settings.json"),JSON.stringify({packages:[],extensions:[]}));
-    process.env.PI_SETUP_SUBAGENTS_PREVIEW="1";
+
     const loader=new DefaultResourceLoader({cwd:root,agentDir:root,settingsManager:SettingsManager.inMemory({}),noExtensions:true,noSkills:true,noContextFiles:true,noThemes:true,noPromptTemplates:true,additionalExtensionPaths:[new URL("./index.ts",import.meta.url).pathname],disabledBuiltinExtensions:["mcp","codemode","tool-search"]});
     await loader.reload();
     assert.deepEqual(loader.getExtensions().errors,[]);
@@ -34,9 +60,10 @@ test("exclusive preview registers tools/UI, executes a native child, reads resul
     assert.deepEqual([...loader.getExtensions().extensions[0].tools.keys()].sort(),["Agent","get_subagent_result","steer_subagent","subagent_control","subagent_wait","subagent_start","subagent_job","subagent_workflow","agent_types","agent_spawn","agent_wait","agent_steer","agent_status","agent_stop","agent_output"].sort());
     const tools = new Map<string,any>(), commands = new Map<string,any>(), events = new Map<string,any>();
     const shortcuts = new Map<string,any>(), deliveries:any[]=[],entries:any[]=[]; let editorReplaced = 0;
-    await registerPreview({registerTool:t=>tools.set(t.name,t),registerCommand:(n,c)=>commands.set(n,c),registerShortcut:(n,c)=>shortcuts.set(n,c),on:(n,h)=>events.set(n,h),sendMessage:(message,options)=>deliveries.push({message,options}),appendEntry:(customType,data)=>entries.push({type:"custom",customType,data})} as any);
+    await registerNative({registerTool:t=>tools.set(t.name,t),registerCommand:(n,c)=>commands.set(n,c),registerShortcut:(n,c)=>shortcuts.set(n,c),on:(n,h)=>events.set(n,h),sendMessage:(message,options)=>deliveries.push({message,options}),appendEntry:(customType,data)=>entries.push({type:"custom",customType,data})} as any);
     shutdown=()=>events.get("session_shutdown")();
     assert.equal(commands.has("agents"),true);
+    assert.equal(commands.has("agents-demo"),false);
     const model:any={id:"chosen",provider:"fixture",name:"Fixture",api:"fixture",baseUrl:"offline://fixture",input:["text"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},reasoning:false,contextWindow:32768,maxTokens:1024};
     const changedModel = { ...model, id: "changed" };
     let requests=0;
@@ -50,8 +77,8 @@ test("exclusive preview registers tools/UI, executes a native child, reads resul
       const checkpoint=JSON.stringify(_context.messages.at(-1)).includes("Please checkpoint");
       const delegate=JSON.stringify(_context.messages.at(-1)).includes("Coordinate offline delegation");
       const spending=JSON.stringify(_context.messages.at(-1)).includes("Spend then hold");
-      const m:any={role:"assistant",api:model.api,provider:model.provider,model:model.id,content:checkpoint?[{type:"toolCall",id:"checkpoint-1",name:"agent_pause",arguments:{reason:"Need parent decision"}}]:delegate?[{type:"toolCall",id:"delegate-1",name:"agent_spawn",arguments:{path:"child",type:"worker",task:"Fresh nested child"}}]:spending?[{type:"toolCall",id:"spend-1",name:"agent_update",arguments:{message:"Record spend and wait"}}]:[{type:"text",text:"Preview works"}],usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0.005,output:0.005,cacheRead:0,cacheWrite:0,total:0.01}},stopReason:checkpoint||delegate||spending?"toolUse":"stop",timestamp:Date.now()};
-      s.push({type:"start",partial:m});if(!checkpoint&&!delegate&&!spending)s.push({type:"text_delta",contentIndex:0,delta:"Preview works",partial:m});s.push({type:"done",reason:m.stopReason,message:m}); });return s;};
+      const m:any={role:"assistant",api:model.api,provider:model.provider,model:model.id,content:checkpoint?[{type:"toolCall",id:"checkpoint-1",name:"agent_pause",arguments:{reason:"Need parent decision"}}]:delegate?[{type:"toolCall",id:"delegate-1",name:"agent_spawn",arguments:{path:"child",type:"worker",task:"Fresh nested child"}}]:spending?[{type:"toolCall",id:"spend-1",name:"agent_update",arguments:{message:"Record spend and wait"}}]:[{type:"text",text:"Native runtime works"}],usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0.005,output:0.005,cacheRead:0,cacheWrite:0,total:0.01}},stopReason:checkpoint||delegate||spending?"toolUse":"stop",timestamp:Date.now()};
+      s.push({type:"start",partial:m});if(!checkpoint&&!delegate&&!spending)s.push({type:"text_delta",contentIndex:0,delta:"Native runtime works",partial:m});s.push({type:"done",reason:m.stopReason,message:m}); });return s;};
     const original={id:"fixture",name:"Fixture",stream,streamSimple:stream};
     let status="";
     const ctx:any={cwd:root,model,hasUI:true,ui:{notify(message,level){if(level==="warning")warnings.push(message);},setStatus(_key,text){status=text??"";},setWidget(){},setEditorComponent(){editorReplaced++;},getEditorComponent:()=>()=>({})},modelRegistry:{getAvailable:()=>[model,changedModel],find:(_provider,id)=>[model,changedModel].find(m=>m.id===id),getProvider:()=>original,getApiKeyAndHeaders:async()=>({ok:true,apiKey:authKey,headers:{"x-auth-fixture":authKey}})}};
@@ -64,7 +91,7 @@ test("exclusive preview registers tools/UI, executes a native child, reads resul
     const answer=await tools.get("Agent").execute("call",{prompt:"Say hello without tools",description:"fixture",subagent_type:"researcher",run_in_background:true},undefined,undefined,ctx);
     assert.equal(answer.details.ok,true,JSON.stringify(answer.details));
     const result=await tools.get("get_subagent_result").execute("result",{agent_id:answer.details.agentId,wait:true},undefined,undefined,ctx);
-    assert.equal(result.details[0].outcome,"completed");assert.equal(result.details[0].text,"Preview works");assert.equal(requests,1);
+    assert.equal(result.details[0].outcome,"completed");assert.equal(result.details[0].text,"Native runtime works");assert.equal(requests,1);
     await new Promise(resolve=>setTimeout(resolve,5));
     assert.equal(deliveries.filter(item=>item.options.triggerTurn).length,1,"a detached completion wakes the parent");
     assert.ok(deliveries.every(item=>item.message.display===false));
@@ -103,7 +130,7 @@ test("exclusive preview registers tools/UI, executes a native child, reads resul
     const statusView=await tools.get("agent_status").execute("status",{},undefined,undefined,ctx);
     assert.equal(statusView.details.length,1);
     const output=await tools.get("agent_output").execute("out",{path:"named-task"},undefined,undefined,ctx);
-    assert.equal(output.details.text,"Preview works");
+    assert.equal(output.details.text,"Native runtime works");
     const beforeResume=requests;
     await tools.get("agent_steer").execute("resume-named",{path:"named-task",message:"Continue the named task"},undefined,undefined,ctx);
     const settled=await tools.get("agent_wait").execute("wait-named",{path:"named-task"},undefined,undefined,ctx);
@@ -162,7 +189,7 @@ test("exclusive preview registers tools/UI, executes a native child, reads resul
     const coordinated=await tools.get("agent_spawn").execute("coordinate",{path:"coordinator",type:"coordinator",task:"Coordinate offline delegation"},undefined,undefined,ctx);
     assert.equal(coordinated.details.state,"completed");
     const tree=await tools.get("agent_status").execute("nested-status",{},undefined,undefined,ctx);
-    assert.equal(tree.details.find(thread=>thread.path==="/root/coordinator/child")?.state,"completed","native SDK custom delegation cannot deadlock the sole preview permit");
+    assert.equal(tree.details.find(thread=>thread.path==="/root/coordinator/child")?.state,"completed","native SDK custom delegation settles through shared admission");
     await writeFile(join(root,"subagent-manager","agents","worker.md"),"---\nname: worker\ndescription: Custom general helper\nmodels: [fixture/chosen]\ntools:\n  allow: [read]\n---\nAnswer only the assigned task.\n");
     await commands.get("agents").handler("reload",ctx);
     const overridden=await tools.get("agent_spawn").execute("explicit-model",{path:"explicit-model",type:"worker",task:"Use invocation model",model:"fixture/changed"},undefined,undefined,ctx);
@@ -175,16 +202,11 @@ test("exclusive preview registers tools/UI, executes a native child, reads resul
   } finally {
     await shutdown?.();
     releaseRoute?.();
-    process.argv.splice(process.argv.lastIndexOf("--no-extensions"),1);
+    process.chdir(cwd);
     if(saved.dir===undefined)delete process.env.PI_CODING_AGENT_DIR;else process.env.PI_CODING_AGENT_DIR=saved.dir;
-    if(saved.profile===undefined)delete process.env.PI_SETUP_SUBAGENTS_PROFILE;else process.env.PI_SETUP_SUBAGENTS_PROFILE=saved.profile;
-    if(saved.preview===undefined)delete process.env.PI_SETUP_SUBAGENTS_PREVIEW;else process.env.PI_SETUP_SUBAGENTS_PREVIEW=saved.preview;
+
+    if(saved.native===undefined)delete process.env.PI_SETUP_SUBAGENTS_NATIVE;else process.env.PI_SETUP_SUBAGENTS_NATIVE=saved.native;
+
     await rm(root,{recursive:true,force:true});
   }
-});
-
-test("preview refuses registration without exclusive CLI discovery gate",async()=>{
-  const previous=process.env.PI_SETUP_SUBAGENTS_PROFILE;delete process.env.PI_SETUP_SUBAGENTS_PROFILE;
-  try { await assert.rejects(registerPreview(new Proxy({},{get(){throw Error("touched registration");}}) as any),/isolated/); }
-  finally {if(previous!==undefined)process.env.PI_SETUP_SUBAGENTS_PROFILE=previous;}
 });

@@ -15,6 +15,7 @@ import type { BackendResult } from "./backend.ts";
 import type {ContextSnapshot}from"./context.ts";
 import {limits,utf8Bytes}from"./contracts.ts";
 import { canonicalRole, delegationTools, resolveAgentDefinition, type AgentDefinition } from "./registry.ts";
+import { optionalSearchTools } from "./parent-resources.ts";
 
 export type TrustedResolution = { ok: true; loadout: Loadout; prompt: string; thinking: "medium" | "high"; fingerprint: string } |
   { ok: false; code: NonNullable<Resolution["error"]> | "invalid_definition" };
@@ -86,7 +87,7 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
   fffPath?: string; skillPaths?: Record<string, string>; fffMultigrepEnabled?: boolean;
   /** Immutable registry snapshot captured at admission; legacy callers omit it. */
   definition?: AgentDefinition;
-  childTools?: ToolDefinition[]; shouldPause?:()=>boolean;
+  childTools?: ToolDefinition[]; parentTools?: ToolDefinition[]; shouldPause?:()=>boolean;
   worktreeLease?: WorktreeLease;context?:ContextSnapshot }): Promise<BackendResult> {
   if(options.context&&(options.role==="researcher"||options.context.serializedBytes>limits.contextBytes||options.context.serializedBytes!==utf8Bytes(JSON.stringify({sourceSessionId:options.context.sourceSessionId,branchLeafId:options.context.branchLeafId,entryAnchorId:options.context.entryAnchorId,sourceEntryIds:options.context.sourceEntryIds,messages:options.context.messages,policy:options.context.policy}))))return {ok:false,code:"unsupported_resource"};
   if (options.reviewedHeadroom && typeof options.reviewedHeadroom.enabled !== "boolean") return { ok: false, code: "unsupported_routing" };
@@ -97,7 +98,7 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
     !options.headroom.apiKey.trim() || options.provider || options.role !== "researcher")) return { ok: false, code: "unsupported_routing" };
   let resolved: TrustedResolution | AgentDefinition;
   try {
-    resolved = options.definition ? resolveAgentDefinition(options.definition.type, { model: options.model, models: options.available.models, modelSelection: "use-current" }) :
+    resolved = options.definition ? resolveAgentDefinition(options.definition.type, { model: options.model, models: options.available.models, modelSelection: "use-current", maxTurns: options.definition.loadout.softTurns, availableTools: options.definition.toolNames, availableSkills: options.definition.loadout.skills }) :
       await resolveTrustedRole(options.role, options.agentDir, options.available, { model: options.model, routing });
   } catch { return { ok: false, code: "unsupported_resource" }; }
   if (!resolved.ok) return { ok: false, code: resolved.code === "model_unavailable" || resolved.code === "invalid_model" ? "unsupported_provider" : "unsupported_resource" };
@@ -113,12 +114,17 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
   if (routing === "headroom" && providerId !== "openai") return { ok: false, code: "unsupported_provider" };
   if (resolved.loadout.isolation === "worktree" && (!options.worktreeLease || options.cwd !== options.worktreeLease.path || !(await validateWorktree(options.worktreeLease)))) return { ok: false, code: "unsupported_resource" };
   const research = options.role === "researcher";
-  const extensionPaths = options.definition ? resolved.loadout.extensions.map(name => name === "web-research" ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath) :
+  const parentTools = options.parentTools ?? [];
+  if (parentTools.some(tool => !(optionalSearchTools as readonly string[]).includes(tool.name) || !options.definition?.toolNames.includes(tool.name)) || new Set(parentTools.map(tool => tool.name)).size !== parentTools.length) return { ok: false, code: "unsupported_resource" };
+  const bridgedSearch = parentTools.length > 0;
+  if (bridgedSearch && (resolved as AgentDefinition).toolNames.some(name => (optionalSearchTools as readonly string[]).includes(name) && !parentTools.some(tool => tool.name === name))) return { ok: false, code: "unsupported_resource" };
+  const localExtensions = options.definition ? resolved.loadout.extensions.filter(name => name !== "fff" || !bridgedSearch) : [];
+  const extensionPaths = options.definition ? localExtensions.map(name => name === "web-research" ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath) :
     [research ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath];
   if (extensionPaths.some(path => !path) || (!options.definition && !research && !["code-mapper", "reviewer", "builder"].includes(options.role))) return { ok: false, code: "unsupported_resource" };
   const skillPaths = research ? { "my-web-search": new URL("../../../skills/my-web-search/SKILL.md", import.meta.url).pathname } : options.skillPaths ?? {};
   if (Object.keys(skillPaths).sort().join() !== [...resolved.loadout.skills].sort().join()) return { ok: false, code: "unsupported_resource" };
-  const expectedExtensions = options.definition ? resolved.loadout.extensions.flatMap(name => name === "web-research" ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"]) : research ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"];
+  const expectedExtensions = options.definition ? localExtensions.flatMap(name => name === "web-research" ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", ...(process.env.PI_FFF_MULTIGREP === "1" ? ["fff-multi-grep"] : [])]) : research ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"];
   const expectedTools = options.definition ? (resolved as AgentDefinition).toolNames.filter(name=>!(delegationTools as readonly string[]).includes(name)) : research ? expectedExtensions : ["read", "grep", "find", "ls", ...expectedExtensions, ...(options.role === "builder" ? ["edit", "write"] : [])];
   expectedTools.push(...(options.childTools??[]).map(tool=>tool.name));
   let lease: HeadroomChildLease | undefined, session: AgentSession | undefined, transferred = false;
@@ -140,7 +146,7 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
     for (const extensionPath of extensionPaths) if (!(await lstat(extensionPath!)).isFile()) return { ok: false, code: "unsupported_resource" };
     // The actual FFF 0.10.5 reads this flag at factory load. We do not mutate
     // process.env; callers must opt in before invoking the loader.
-    if (expectedExtensions.includes("fff-multi-grep") && options.fffMultigrepEnabled && process.env.PI_FFF_MULTIGREP !== "1") return { ok: false, code: "unsupported_resource" };
+    if (!bridgedSearch && expectedTools.includes("fff-multi-grep") && options.fffMultigrepEnabled && process.env.PI_FFF_MULTIGREP !== "1") return { ok: false, code: "unsupported_resource" };
     // Parent retry preferences must not silently replay a child through another route.
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false, provider: { maxRetries: 0 } } });
     const loader = new DefaultResourceLoader({ cwd: options.cwd, agentDir: options.agentDir, settingsManager,
@@ -172,7 +178,7 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
     }
     const model = runtime.getModel(providerId, modelId);
     if (!model || !(await runtime.checkAuth(providerId)) || !(await runtime.getAuth(model))) return { ok: false, code: "unsupported_provider" };
-    const customTools = [...(options.childTools??[]),...(resolved.loadout.isolation === "worktree" ? [createWriteToolDefinition(options.cwd), createEditToolDefinition(options.cwd)].filter(tool => expectedTools.includes(tool.name)).map(tool => ({ ...tool,
+    const customTools = [...parentTools, ...(options.childTools??[]),...(resolved.loadout.isolation === "worktree" ? [createWriteToolDefinition(options.cwd), createEditToolDefinition(options.cwd)].filter(tool => expectedTools.includes(tool.name)).map(tool => ({ ...tool,
       execute: async (id: string, params: any, signal: AbortSignal | undefined, update: any, ctx: any) => {
         if (ctx && ctx.cwd !== options.worktreeLease!.path) throw Error("forbidden changed worktree cwd");
         const path = await assertWritable(options.worktreeLease!, params.path);

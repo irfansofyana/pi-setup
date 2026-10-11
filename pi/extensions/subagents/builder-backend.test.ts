@@ -19,7 +19,7 @@ test("builder binds scoped mutation tools to an owned worktree and keeps parent 
     await exec("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-C", repo, "commit", "--quiet", "-m", "fixture"]);
     const base = (await exec("git", ["-C", repo, "rev-parse", "HEAD"])).stdout.trim();
     const lease = await createWorktree({ repo, root: join(root, "artifacts"), base, files: ["file.txt"] });
-    await writeFile(join(agentDir, "agents", "builder.md"), await readFile(new URL("../../agents/builder.md", import.meta.url), "utf8"));
+    await writeFile(join(agentDir, "agents", "builder.md"), await readFile(new URL("./test-fixtures/legacy-builder.txt", import.meta.url), "utf8"));
     const fffPath = join(agentDir, "fff.mjs"), skill = join(agentDir, "code-review.md");
     await writeFile(fffPath, 'export default function(pi) { for (const name of ["fffind","ffgrep","fff-multi-grep"]) pi.registerTool({ name, label:name, description:name, parameters:{type:"object",properties:{}}, execute:async()=>({content:[{type:"text",text:"fixture"}]}) }); }');
     await writeFile(skill, "---\nname: code-review\ndescription: fixture\n---\nReview changes.\n");

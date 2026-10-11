@@ -2,6 +2,7 @@ import type { AgentDriver, DriverFactory, DriverOptions } from "./upstream/src/t
 import { TranscriptChannel } from "./upstream/src/orch/transcript.ts";
 import type { createSupervisor, StartRequest } from "./supervisor.ts";
 import { limits, utf8Bytes } from "./contracts.ts";
+import { failureSummary, runFailure } from "./failures.ts";
 
 type Supervisor = ReturnType<typeof createSupervisor>;
 type Handle = { agentId: string; threadId: string; runId: string };
@@ -86,7 +87,7 @@ export function createManagerDriverFactory(options: {
           if (options.consumeResults !== false) await control("consume");
           const next = queued.shift();
           if (!next) {
-            if (!result.complete&&!driver.shouldPause()) throw Error(`Subagent ${result.outcome}; output is incomplete`);
+            if (!result.complete&&!driver.shouldPause()) throw Error(`Subagent ${result.outcome}; ${result.outcome === "failed" ? failureSummary(result.error ?? runFailure(undefined)) : "output is incomplete"}`);
             break;
           }
           // An accepted continuation remains owned even if its predecessor failed.

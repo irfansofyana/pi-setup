@@ -68,7 +68,7 @@ test("an actual SDK child never auto-retries a failed proxy request directly ups
   let backend: any;
   try {
     await mkdir(join(root,"agents"));
-    await copyFile(new URL("../../agents/researcher.md",import.meta.url),join(root,"agents/researcher.md"));
+    await copyFile(new URL("./test-fixtures/legacy-researcher.txt",import.meta.url),join(root,"agents/researcher.md"));
     const result = await createTrustedRoleBackend({ role: "researcher", agentDir: root, cwd: root, model: "custom/chosen", routing: "native", provider: f.provider,
       available: { models: ["custom/chosen"], tools: ["ext:web-research/web_search","ext:web-research/web_fetch"], extensions: ["web-research"], skills: ["my-web-search"] } });
     assert.equal(result.ok,true); if (!result.ok) return; backend = result.backend;

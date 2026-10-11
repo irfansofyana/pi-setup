@@ -62,6 +62,13 @@ Use `/new` for a fresh session when history/persistence blocks artwork.
 Rounded frame requires at least 34 columns and 18 rows. Smaller terminals keep
 compact rails; autocomplete and pathological widths use stock fallbacks.
 Input remains delegated to `CustomEditor`; Pi's host `onChange` stays intact.
+The root editor factory registers its exact instance and app keybindings in a process-local weak registry.
+Package UI adapters use that identity to distinguish Main from dialog editors;
+reusing the editor class does not mark a dialog or alter its callbacks.
+Navigation can compare app and TUI bindings without inspecting editor internals.
+Disposable root input hooks run only after extension shortcuts decline an event.
+The theme dispatches native input once and restores the temporary shortcut wrapper
+afterward; dialog editors and host submission callbacks retain their own behavior.
 
 Pi has one editor slot. Conflicts warn and preserve last-loaded-wins behavior;
 the bundle never forcefully reclaims another editor. Terminal settings own base

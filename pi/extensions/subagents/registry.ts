@@ -4,6 +4,7 @@ import { ConfigStore, type ConfigStoreOptions } from "./upstream/src/prefs/confi
 import { selectPreferredModel } from "./upstream/src/prefs/models.ts";
 import type { AgentType, ThinkingLevel } from "./upstream/src/types.ts";
 import type { Loadout } from "./roles.ts";
+import { selectOptionalTools, selectOptionalSkills, usesBundledResources } from "./parent-resources.ts";
 
 export const canonicalRole = (name: string) => name === "code-mapper" ? "scout" : name;
 export const delegationTools = ["agent_types", "agent_spawn", "agent_wait", "agent_steer", "agent_status", "agent_stop", "agent_output"] as const;
@@ -44,9 +45,10 @@ export type AgentDefinition = {
 export function resolveAgentDefinition(type: AgentType, options: {
   model?: string; explicitModel?:string; models: string[]; scopedModels?: string[]; maxTurns?: number; thinking?: ThinkingLevel;
   modelSelection?: "pick-first-available" | "pick-first-scoped" | "use-current";
+  availableTools?: readonly string[]; availableSkills?: readonly string[];
 }): AgentDefinition {
   const role = canonicalRole(type.name), policy = policies[role];
-  const selected = validateTools(type);
+  const selected = selectOptionalTools(validateTools(type), usesBundledResources(type) ? "bundled" : type.source, options.availableTools);
   const modelSelection = options.modelSelection ?? "pick-first-available";
   const eligible = modelSelection === "pick-first-scoped" && options.scopedModels?.length ? options.models.filter(model => options.scopedModels!.includes(model)) : options.models;
   const preferred = options.explicitModel!==undefined ? options.explicitModel : modelSelection === "use-current" ? undefined : selectPreferredModel(type, eligible.map(identity => {
@@ -62,7 +64,7 @@ export function resolveAgentDefinition(type: AgentType, options: {
   const tools = selected.map(name => ["web_search", "web_fetch"].includes(name) ? `ext:web-research/${name}` : ["fffind", "ffgrep", "fff-multi-grep"].includes(name) ? `ext:fff/${name}` : name);
   const snapshot = structuredClone(type);
   const loadout: Loadout = Object.freeze({ role, provenance: type.source==="bundled"?"bundled":type.source==="project"?"trusted-project":"trusted-global", routing: "native", tools: Object.freeze(tools),
-    extensions: Object.freeze(extensions), skills: Object.freeze([...(policy?.skills ?? [])]), model,
+    extensions: Object.freeze(extensions), skills: Object.freeze(selectOptionalSkills(role, policy?.skills ?? [], options.availableSkills)), model,
     softTurns: turns, graceTurns: 5, hardTurns: turns + 5,
     isolation: policy?.isolation ?? (selected.some(name => ["edit", "write"].includes(name)) ? "worktree" : undefined),
     inheritContext: false, persistSession: false, outputTranscript: false });

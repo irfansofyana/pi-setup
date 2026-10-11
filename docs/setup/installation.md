@@ -124,7 +124,7 @@ The audit must cover:
 - duplicate `ask_user_question` registrations from separately loaded extensions; source removal and configuration cleanup need separate explicit approval; do not edit local settings during repository implementation;
 - separately installed `9router-web-researcher`, Tavily/Exa MCP definitions, and legacy 9router web routes as distinct migration targets;
 - trusted global agents and subagent defaults;
-- installed Ciung template tool restrictions for old versus native web tools;
+- native bundled-role boundaries, user overrides and exact legacy agent files/config as separate import/cleanup targets;
 - credential references by name only, with values redacted.
 
 A matching name is not enough to delete a path. The skill must distinguish a duplicate code loader from user-owned config/state. For example, `~/.pi/agent/hindsight/config.json` remains user-owned even after Hindsight code loads from the package.
@@ -182,11 +182,12 @@ Verify expected commands, tools, skills, themes, and prompt templates once each;
 
 ## Global subagent templates
 
-Pi package resources do not natively include agents. The package includes reviewed source templates, but they are not automatically activated.
+Native researcher, scout, builder and reviewer are bundled package resources; no
+global copying is required. Native custom definitions use
+`~/.pi/agent/subagent-manager/agents/`. Audit and privately back up exact approved
+legacy files before cleanup; preserve custom definitions and model pins.
 
-Use the bundled `pi-setup` skill to audit and propose deployment to `~/.pi/agent/agents/` and narrow merges into `~/.pi/agent/subagents.json`. Deployment requires explicit approval, private backup, template review, and preservation of machine-local model choices unless replacement is approved.
-
-See [Subagent team](subagents.md#install-the-trusted-templates) for the authoritative deployment and rollback procedure.
+See [Subagent team](subagents.md#native-runtime-cutover) for migration and rollback.
 
 ## Install Headroom CLI
 

@@ -1,11 +1,12 @@
 // In-memory M2 lifecycle core; deliberately unreachable from the inert entrypoint.
 import { limits, utf8Bytes, validateControl } from "./contracts.ts";
+import { runFailure, type RunFailure } from "./failures.ts";
 import type { Control, Receipt, RunResult, RunState, Rejection } from "./contracts.ts";
 import { resolveContext } from "./context.ts";
 import type { ContextRequest, ContextSnapshot } from "./context.ts";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
-export type Backend = { run(prompt: string, emit: (event: any) => void): Promise<{ outcome: "completed" | "failed" | "interrupted"; complete: boolean }>; artifacts?():Promise<RunResult["artifacts"]>;hasRetainedContext?(): boolean; abort(): Promise<void>; dispose(): Promise<void>; message?(text: string): Promise<{ status: "unknown_delivery" | "rejected" }>; steer?(text: string): Promise<{ status: "queued" | "handled" | "unknown_delivery" | "rejected" }> };
+export type Backend = { run(prompt: string, emit: (event: any) => void): Promise<{ outcome: "completed" | "failed" | "interrupted"; complete: boolean; error?: RunFailure }>; artifacts?():Promise<RunResult["artifacts"]>;hasRetainedContext?(): boolean; abort(): Promise<void>; dispose(): Promise<void>; message?(text: string): Promise<{ status: "unknown_delivery" | "rejected" }>; steer?(text: string): Promise<{ status: "queued" | "handled" | "unknown_delivery" | "rejected" }> };
 export type Budget = { softTurns: number; hardTurns: number; maxTokens?: number; maxCost?: number; elapsedMs?: number };
 export type StartRequest = { prompt: string; maxTurns?: number; evaluator?: boolean; role?: string; context?: ContextRequest; model?: string; thinking?: string; files?: string[];artifactId?:string;managerPath?:string;budgetExtendable?:false };
 export type PreparedRun = { budget: Budget;model?:string;thinking?:string;contextTools?:readonly string[]; createBackend(context?: ContextSnapshot): Promise<Backend> };
@@ -56,7 +57,7 @@ export function createSupervisor(options: Options) {
   }
   function emit(event: FleetEvent) { for (const listener of [...listeners]) { try { listener(event); } catch { /* observers cannot break workers */ } } }
   function state(entry: Entry, value: RunState) { entry.state = value; emit({ type: "state", state: value, runId: entry.runId, threadId: entry.threadId }); }
-  function finish(entry: Entry, outcome: RunResult["outcome"], complete: boolean) {
+  function finish(entry: Entry, outcome: RunResult["outcome"], complete: boolean, error?: RunFailure) {
     if (entry.result) return;
     if (entry.timer) clearTimeout(entry.timer);
     const metadataBytes=utf8Bytes(JSON.stringify({artifacts:entry.artifacts,usage:entry.usage}))+2048;
@@ -64,7 +65,7 @@ export function createSupervisor(options: Options) {
     if(available<0){entry.artifacts=undefined;entry.truncated=true;complete=false;outcome="failed";}
     else if(utf8Bytes(entry.text)>available){let used=0,kept="";for(const point of entry.text){used+=utf8Bytes(point);if(used>available)break;kept+=point;}entry.text=kept;entry.truncated=true;}
     const result: RunResult = Object.freeze({ version: 1, agentId: entry.agentId, threadId: entry.threadId, runId: entry.runId,
-      outcome, complete, truncated: entry.truncated, text: entry.text,turns:entry.turns,toolUses:entry.toolUses,...(entry.usageKnown?{usage:Object.freeze({...entry.usage})}:{}),...(entry.artifacts?.length?{artifacts:entry.artifacts}:{}) });
+      outcome, complete, truncated: entry.truncated, text: entry.text,turns:entry.turns,toolUses:entry.toolUses,...(entry.usageKnown?{usage:Object.freeze({...entry.usage})}:{}),...(outcome === "failed" ? { error: error ?? runFailure(undefined) } : {}),...(entry.artifacts?.length?{artifacts:entry.artifacts}:{}) });
     entry.result = result; state(entry, "terminal"); entry.resolve(result);
     emit({ type: "result", runId: entry.runId, threadId: entry.threadId, result });
   }
@@ -182,10 +183,10 @@ export function createSupervisor(options: Options) {
           });
           if (result.outcome === "completed" && (entry.budget?.maxTokens !== undefined || entry.budget?.maxCost !== undefined) && entry.seen.size === 0 && entry.turns === 0) entry.exhausted = true;
           entry.artifacts=Object.freeze((await backend.artifacts?.()??[]).map(artifact=>Object.freeze({...artifact,files:Object.freeze([...artifact.files])})));
-          finish(entry, entry.exhausted ? "budget_exhausted" : entry.stop || disposed ? "interrupted" : result.outcome, !entry.exhausted && !entry.stop && !disposed && result.complete && result.outcome === "completed");
+          finish(entry, entry.exhausted ? "budget_exhausted" : entry.stop || disposed ? "interrupted" : result.outcome, !entry.exhausted && !entry.stop && !disposed && result.complete && result.outcome === "completed", result.error);
         }
       }
-    } catch { finish(entry, entry.exhausted ? "budget_exhausted" : entry.stop || disposed ? "interrupted" : "failed", false); }
+    } catch (error) { finish(entry, entry.exhausted ? "budget_exhausted" : entry.stop || disposed ? "interrupted" : "failed", false, runFailure(error)); }
     finally {
       if (thread.state === "closing" || (entry.stop && !entry.retainContext) || entry.exhausted || disposed) {
         try { if (thread.backend) await cleanup(thread); thread.backend = undefined; }

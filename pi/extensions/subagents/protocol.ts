@@ -1,4 +1,5 @@
 import type { createSupervisor, StartRequest } from "./supervisor.ts";
+import { failureSummary } from "./failures.ts";
 type Supervisor=ReturnType<typeof createSupervisor>;
 type Events={on(name:string,handler:(value:any)=>any):()=>void;emit(name:string,value:any):any};
 type Record={id:string;threadId:string;runId:string;type:string;description:string;isBackground:boolean;started:number;requestId?:string};
@@ -10,7 +11,7 @@ export function createProtocol(options:{events:Events;supervisor:Supervisor;star
   function terminal(record:Record,result:any){
     if(outbox.has(result.runId))return;
     const envelope={id:record.id,runId:result.runId,threadId:record.threadId,generation:options.generation,type:record.type,description:record.description,isBackground:record.isBackground,
-      result:result.text??"",error:result.complete?null:result.outcome,status:result.outcome,complete:result.complete,truncated:result.truncated,
+      result:result.text??"",error:result.complete?null:result.error?failureSummary(result.error):result.outcome,status:result.outcome,complete:result.complete,truncated:result.truncated,
       toolUses:result.toolUses??0,durationMs:Math.max(0,now()-record.started),tokens:result.usage?.totalTokens??null,usage:result.usage??null};
     outbox.set(result.runId,envelope);
     if(record.isBackground)emit(result.complete?"subagents:completed":"subagents:failed",envelope);

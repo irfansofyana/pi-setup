@@ -352,3 +352,14 @@ test("backend initialization failure is a terminal failed result and drains queu
   assert.equal((await fleet.wait([a.runId]))[0].outcome, "failed");
   assert.equal((await fleet.wait([b.runId]))[0].outcome, "completed"); await fleet.dispose();
 });
+
+test("startup failure preserves known code without retaining raw exception details", async () => {
+  let serial = 0;
+  const fleet = createSupervisor({ nextId: () => `${++serial}`, createBackend: async () => { throw Error("unsupported_resource"); } });
+  try {
+    const started = await fleet.start({ prompt: "Explain repository" });
+    const [result] = await fleet.wait([started.runId]);
+    assert.equal(result.outcome, "failed");
+    assert.deepEqual(result.error, { code: "unsupported_resource" });
+  } finally { await fleet.dispose(); }
+});

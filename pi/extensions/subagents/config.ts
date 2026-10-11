@@ -1,4 +1,6 @@
 import{isAbsolute}from"node:path";
+// No-config production defaults; explicit user-owned caps remain authoritative.
+export const DEFAULT_NATIVE_CAPS = Object.freeze({ concurrency: 3, threads: 4, slots: 8, pending: 4 });
 export function companionConfigured(settings:any){
  const sources=[...(settings?.packages??[]).map((entry:any)=>typeof entry==="string"?entry:entry?.source),...(settings?.extensions??[]).map((entry:any)=>typeof entry==="string"?entry:entry?.path)].filter((entry:any)=>typeof entry==="string");
  return sources.some((source:string)=>/@tintinweb\/pi-subagents|tintinweb[^\s]*pi-subagents/i.test(source));

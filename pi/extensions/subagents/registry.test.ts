@@ -99,3 +99,19 @@ test("explicit invocation model wins over preferences and cannot hide an unavail
   assert.throws(()=>f.resolveAgentDefinition(type,{...options,explicitModel:"fixture/missing"}),/available/);
   assert.throws(()=>f.resolveAgentDefinition(type,{...options,explicitModel:"fixture/override",scopedModels:["fixture/preferred"]}),/scope/);
 });
+
+test("bundled local roles have no required FFF or external skills", async t => {
+  const f = await registry(t);
+  for (const role of ["scout", "reviewer", "builder"]) {
+    const resolved = f.resolveAgentDefinition(f.store.get(role), { model: "fixture/model", models: ["fixture/model"], availableTools: [] });
+    assert.deepEqual(resolved.loadout.extensions, []);
+    assert.deepEqual(resolved.loadout.skills, []);
+    assert.ok(resolved.toolNames.includes("read"));
+    assert.ok(resolved.toolNames.includes("grep"));
+  }
+  const partial = f.resolveAgentDefinition(f.store.get("scout"), { model: "fixture/model", models: ["fixture/model"], availableTools: ["ffgrep"] });
+  assert.ok(partial.toolNames.includes("ffgrep"));
+  assert.ok(!partial.toolNames.includes("fffind"));
+  assert.ok(!partial.toolNames.includes("fff-multi-grep"));
+  assert.deepEqual(partial.loadout.extensions, ["fff"]);
+});

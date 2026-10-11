@@ -1,10 +1,10 @@
 # Subagent Manager (pi-setup fork)
 
-Package-owned, default-inert adaptation of [pi-subagent-manager](https://github.com/championswimmer/pi-subagent-manager), pinned at `1f037b1` (0.20.0, MIT). [Provenance and local patches](upstream/UPSTREAM.md).
+Package-owned, default-enabled adaptation of [pi-subagent-manager](https://github.com/championswimmer/pi-subagent-manager), pinned at `1f037b1` (0.20.0, MIT). [Provenance and local patches](upstream/UPSTREAM.md).
 Native Pi child sessions; no child Pi subprocesses,
 shell/test authority, ambient extension discovery or automatic live migration.
-Use the [isolated manual-test launcher](preview.md); it leaves installed Pi
-packages, global configuration, credentials and selected theme untouched.
+Production runtime loads through `index.ts` and `runtime.ts`. No private-preview
+launcher or synthetic demo command is shipped.
 
 ## Behavior
 
@@ -18,8 +18,13 @@ packages, global configuration, credentials and selected theme untouched.
   `.pi/agent/subagent-manager/agents/`; untrusted project definitions never load.
   Retained threads keep their admitted definition snapshots across reload.
   Ordered exact model preferences and the configured picker policy apply; missing
-  models/resources fail, never fall back silently. Parent public provider/auth
-  APIs feed a separate in-memory child runtime; credentials are not copied.
+  required custom resources fail, never widen authority silently. Bundled local
+  roles need no companion package or external skill: built-in read/grep/find/ls
+  remain available. Compatible parent FFF tools are optional, reviewed bridges;
+  third-party packages and skills are not loaded into bundled child runtimes.
+  Worktree children use their own built-ins rather than the parent's search index.
+  Parent public provider/auth APIs feed a separate in-memory child runtime;
+  credentials are not copied.
 - Builder writes only explicit scopes in a privately recorded worktree from
   committed HEAD. Artifacts survive failed/interrupted runs. Human-only recovery
   validates the retained lease; fresh artifact tasks do not restore conversations.
@@ -41,14 +46,13 @@ packages, global configuration, credentials and selected theme untouched.
   live viewer. `/agents fleet` retains exact-run controls and consume/close.
   Import asks the current root model to migrate only selected sources; originals
   remain unchanged. It is not an automatic or model-free conversion.
-  Ctrl+Shift+A opens the browser; Ctrl+Shift+C collapses/expands the widget.
-  Full/minimal widgets, icon/loader preferences, costs and mode guidance are wired.
-  Theme/editor input ownership is preserved; upstream editor-owned arrows are
-  replaced by cooperative shortcuts. No automatic context inheritance or
-  persisted child sessions activate.
+  The task panel replaces the upstream count widget and browser chords;
+  the advanced tree remains explicitly available. Icon/loader preferences still
+  apply to the tree; costs and mode guidance remain wired. No automatic context
+  inheritance or persisted child sessions activate.
   Tool details and receipts are bounded; terminal controls are stripped. RPC uses
   text widgets/native dialogs, not terminal components; use `/agents fleet` in RPC
-  (the default upstream tree requires a terminal). `/agents-demo` is synthetic.
+  (the default upstream tree requires a terminal).
 - Children receive progress and pause controls. Pause ends at the tool boundary
   without another model request, hands back no final answer and retains the
   in-memory context for `agent_steer`. Lifetime turns/deadlines/usage do not reset.
@@ -74,16 +78,89 @@ packages, global configuration, credentials and selected theme untouched.
   Root navigation drains before changing branches/sessions, then attaches a fresh
   generation. Settled cost records survive branch navigation and reaping.
 
+## Inline navigation
+
+```text
+Tasks · 1 running · 1 queued
+● research · running · researcher · 2 turns · 3 tools · 2.4k tokens · 12.0s
+  └ Tool: web_fetch · Research official docs
+○ review · queued · reviewer · 0 turns · 0 tools · 1.0s
+  └ Waiting for an execution slot · Review the change
+←/↓ tasks · click to view
+```
+
+- Main shows a bounded task list with role colors, state, observed usage, elapsed
+  time and a separate activity line. Rows stay in creation order as tasks settle.
+  Full/Minimal controls the idle dock's height; selection can reach every task.
+- In the integrated theme, an empty focused prompt's **←** or **↓** focuses the
+  list at Main. **↑/↓** select without wrapping; **Enter** opens a task. **Esc**,
+  **→**, or **↑** above Main returns prompt focus. Typing/paste returns to Main
+  input. Autocomplete, dialogs, registered shortcuts and remapped keys take priority.
+- **Left-click a task** in fullscreen mode, or use **`/agents tasks`** from any
+  theme. `/agents tasks /root/name` opens a specific task. The panel uses Pi's
+  public TUI overlay handle; cleanup removes only this panel. The theme retains
+  its root editor and footer.
+- Details show task, actual model/thinking level, metrics and hard turn cap when
+  known, wrapped user/assistant messages and tool names/states. Thinking content,
+  raw tool payloads and provider error bodies are excluded. Tokens are cumulative
+  usage; tool count covers the current run, not context fullness.
+- In the panel, **↑/↓**, **PgUp/PgDn** scroll; **End** follows live output.
+  Reading older messages suspends tail following. **←/→** switches tasks in
+  stable order while browsing or with an empty steering draft.
+- **Enter** or **Tab** starts composing in the panel's dedicated multiline editor.
+  **Enter** sends; the configured newline binding inserts a newline. **Tab** or
+  **Esc** leaves the composer with its draft kept; **Esc** from browsing closes
+  the panel. Main's prompt always remains Main. Commands and `!bash` typed into
+  the steering editor are literal agent text.
+- Steering uses the existing exact-run root service, including retained-worker
+  continuation. Lifetime budgets still apply. Rejection retains the message;
+  acceptance does not prove model consumption. Drafts are private to each task
+  lifetime and are cleared on session replacement/reload.
+- Key releases never navigate or submit; held movement keys repeat, but held
+  Enter does not open/send twice. Stale clicks and replaced identities reject.
+  Small docks keep the selected recipient visible.
+- Active elapsed time refreshes once per second; messages arrive through the
+  live observer. Off, shutdown and session changes dispose overlays, observers,
+  clocks and input hooks. Navigation never stops workers; `/agents fleet` owns
+  additional stop/close/budget controls and `/agents reap` confirms cleanup.
+
+Interaction reference: [Tintinweb's fleet and conversation UI](https://github.com/tintinweb/pi-subagents/tree/bb7d2082235a61169c30d6e05de370cba95da62d/src/ui).
+This package implements a Claude-style task panel with its existing native manager
+and stricter display projection. It does not install the Tintinweb runtime.
+After updating the package, run `/reload` or restart Pi.
+
+The task-panel projection omits thinking, tool payloads and provider error fields.
+This is not whole-transcript sanitization: SDK/live-manager snapshots may retain
+raw messages/error fields in memory; advanced viewers and retained result text
+can contain private data. Child transcripts are not persisted by this adapter.
+
+## Optional-resource failures
+
+Broken or missing optional parent search tools do not block bundled local roles.
+Invalid optional metadata is skipped; optional-tool initialization failure narrows
+fresh bundled sessions to built-ins before any model request. A failed optional
+search call returns a tool error with a built-in fallback hint, not a fleet failure.
+Explicit custom resource requirements still fail closed. Structured startup
+outcomes retain known, bounded error codes; live snapshots are a separate surface.
+
+Children do not discover ambient third-party extensions or inherit their session
+hooks. This is same-process isolation, not an OS/process sandbox: an extension that
+crashes, hangs or corrupts the Pi process can still affect every session.
+
 ## Ownership and activation
 
-`PI_SETUP_SUBAGENTS_PREVIEW=1` is set by the exclusive private-profile launcher.
-Normal package auto-loading does nothing. The old `PI_SETUP_SUBAGENTS_ENABLED`
-flag remains inert. Reviewed normal activation requires **both**
-`PI_SETUP_SUBAGENTS_NATIVE=1` and global user-owned `subagents-native.json`, after
-known companion sources are excluded before tool registration. Configuration and
-cutover proposal/rollback belong to [Subagents](../../../docs/setup/subagents.md#native-runtime-cutover).
-Repository implementation does not authorize that migration. Tintinweb remains a
-required companion until an explicit repository-policy decision.
+Normal package loading registers `/agents` and native tools without environment
+flags or a config file. Missing global `subagents-native.json` uses in-memory
+caps of 3 executing, 4 threads, 8 result slots and 4 pending; nothing is written.
+Existing validated configuration is preserved. `PI_SETUP_SUBAGENTS_NATIVE=0` or
+`{"version":1,"enabled":false}` in the global config disables registration.
+Known configured Tintinweb sources suppress default registration; explicit
+`PI_SETUP_SUBAGENTS_NATIVE=1` instead rejects the conflict. No companion is removed.
+Malformed configuration fails closed. Project configuration cannot enable native
+features. Configuration and reviewed legacy cutover belong to
+[Subagents](../../../docs/setup/subagents.md#native-runtime-cutover).
+Removed preview flags have no effect. The old `PI_SETUP_SUBAGENTS_ENABLED` flag
+also has no effect. Tintinweb is no longer required.
 
 `headroom-preferred` is the default routing policy: before each request, prefer the
 parent's healthy compatible Headroom route; otherwise use the exact upstream
@@ -97,18 +174,25 @@ remains separate and pinned; its fail-closed semantics do not govern this adapte
 
 ## Validation and limits
 
-Development SDKs are exact Pi 1.1.0; advertised Pi floor is 1.0.0. Targeted checks
-use fresh serial, hard-capped processes and offline providers. Broad regressions
-and Node/Pi version matrix belong to CI. Do not run repeated broad suites on a
+Development SDKs are exact Pi 1.1.0; advertised Pi floor is 1.0.0. SDK session checks
+require fresh serial, hard-capped processes and offline providers. Inline controller
+and mocked-editor fixtures do not instantiate SDK sessions or call providers;
+real SDK/TUI acceptance remains separate. Broad regressions and the Node/Pi matrix
+belong to CI. Do not run repeated broad suites on a
 shared VM; see [Operations](../../../docs/setup/operations.md#repository-validation-on-shared-hosts).
 The inherited UI uses pinned `fuzzysort`, `shell-quote`, and `yaml` libraries.
 Dialogs validate deployment ceilings before saving. Only explicitly reviewed
 child tools are selectable; broader upstream tool-filtering modes reject with a
 diagnostic rather than silently widening canonical roles.
 
-Default reviewed native caps: 3 executing, 16 threads, 32 pending/reserved results,
+Config-file defaults: 3 executing, 16 threads, 32 pending/reserved results; without a
+config file, conservative caps above apply. Common limits:
 1 MiB queued input, 128 KiB snapshot, 256 KiB result detail, 64 KiB inspector per
-thread. Launcher lowers execution to 1, threads to 4 and live result slots to 8.
+thread. Concurrency counts executing children, not retained threads or nesting.
+`/agents` settings can lower execution limits, but cannot exceed the deployment
+ceiling. A global `subagents-native.json` can explicitly set a higher ceiling
+(for example `concurrency: 6`, `threads: 8`, `slots: 16`, `pending: 8`); preserve
+existing user caps and review host/provider capacity before raising them.
 Unconsumed outcomes are never evicted for admission. Consumed history is bounded
 and may be pruned. One optional state document is capped at 32 MiB, accounting for
 separate outcome/outbox/workflow shelves. Persistence failure blocks new work and
@@ -116,9 +200,9 @@ preserves in-memory outcomes plus original file evidence.
 
 Allowlisted tools/worktrees are not an OS sandbox, billing cap or secret detector.
 Parent history, tool/provider logs and explicitly retained result text may still
-contain private data. Real model/auth, installed FFF, web requests and terminal
-acceptance remain the user's manual gates. `/reload` or restart follows only an
-approved normal activation; separate launcher sessions need no global reload.
+contain private data. Real model/auth, optional parent FFF, web requests and terminal
+acceptance remain the user's manual gates. Run `/reload` after package/config
+changes; restart after environment changes. Separate launcher sessions need no global reload.
 
 ## Upstream feature audit
 

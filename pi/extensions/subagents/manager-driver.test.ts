@@ -77,3 +77,16 @@ test("upstream stopped threads resume their retained session instead of losing c
   } finally { await manager.shutdown(); await factory.shutdown(); }
   assert.equal(disposals, 1);
 });
+
+test("public manager failures expose startup rejection rather than incomplete-output placeholder", async () => {
+  let serial = 0;
+  const supervisor = createSupervisor({ nextId: () => `${++serial}`, createBackend: async () => { throw Error("unsupported_provider"); } });
+  const factory = createManagerDriverFactory({ supervisor, requestFor: () => ({ role: "scout" }) });
+  const manager = new ThreadManager({ createDriver: factory, rootSnapshot: () => [], getType: name => ({ name, description: name, systemPrompt: "role" }), toolsFor: () => [] });
+  try {
+    const view = await manager.spawn("/root", { path: "startup-failure", type: "scout", task: "Explain repository", wait: true });
+    assert.equal(view.state, "failed");
+    assert.match(view.error ?? "", /unsupported_provider/);
+    assert.doesNotMatch(view.error ?? "", /output is incomplete/);
+  } finally { await manager.shutdown(); await factory.shutdown(); }
+});

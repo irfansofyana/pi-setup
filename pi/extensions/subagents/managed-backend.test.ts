@@ -80,3 +80,71 @@ test("child pause stops at the tool boundary without another model request and r
     paused=false;assert.equal((await opened.backend.run("Continue",()=>{})).complete,true);assert.equal(calls,2);
   }finally{await opened.backend.dispose();}
 });
+
+test("bundled local roles initialize with built-ins and no companion or external skills", async t => {
+  const root = await mkdtemp(`${tmpdir()}/native-core-resources-`);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createAgentRegistry({ agentDir: root, cwd: root });
+  for (const role of ["scout", "reviewer"]) {
+    const definition = resolveAgentDefinition(store.get(role), { model: "managed-fixture/model", models: ["managed-fixture/model"], availableTools: [] });
+    assert.deepEqual(definition.loadout.extensions, []);
+    assert.deepEqual(definition.loadout.skills, []);
+    const opened = await createTrustedRoleBackend({ role, agentDir: root, cwd: root, model: "managed-fixture/model", routing: "native", provider: provider(() => {}), definition,
+      available: { tools: ["read", "grep", "find", "ls"], extensions: [], skills: [], models: ["managed-fixture/model"] } });
+    assert.equal(opened.ok, true, opened.ok ? undefined : opened.code);
+    if (!opened.ok) continue;
+    try {
+      assert.deepEqual(opened.backend.activeTools.sort(), ["find", "grep", "ls", "read"]);
+      assert.equal((await opened.backend.run("Explain this repository", () => {})).complete, true);
+    } finally { await opened.backend.dispose(); }
+  }
+});
+
+test("parent FFF tools need no child package entrypoint or multi-grep environment flag", async t => {
+  const root = await mkdtemp(`${tmpdir()}/native-parent-resources-`);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createAgentRegistry({ agentDir: root, cwd: root });
+  const definition = resolveAgentDefinition(store.get("scout"), { model: "managed-fixture/model", models: ["managed-fixture/model"], availableTools: ["ffgrep"] });
+  const tool: any = { name: "ffgrep", label: "Search", description: "Parent search", parameters: { type: "object" }, async execute() { return { content: [{ type: "text", text: "match" }], details: {} }; } };
+  const options = { role: "scout", agentDir: root, cwd: root, model: "managed-fixture/model", routing: "native" as const, provider: provider(() => {}), definition,
+    available: { tools: ["read", "grep", "find", "ls", "ext:fff/ffgrep"], extensions: ["fff"], skills: [], models: ["managed-fixture/model"] } };
+  const opened = await createTrustedRoleBackend({ ...options, parentTools: [tool] });
+  assert.equal(opened.ok, true, opened.ok ? undefined : opened.code);
+  if (!opened.ok) return;
+  try { assert.deepEqual(opened.backend.activeTools.sort(), ["ffgrep", "find", "grep", "ls", "read"]); }
+  finally { await opened.backend.dispose(); }
+  assert.equal((await createTrustedRoleBackend({ ...options, parentTools: [{ ...tool, name: "bash" }] })).ok, false);
+});
+
+test("optional third-party tool failure is a tool result, not a child run failure", async t => {
+  const root = await mkdtemp(`${tmpdir()}/native-optional-failure-`);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { parentSearchTools } = await import("./parent-resources.ts");
+  const store = createAgentRegistry({ agentDir: root, cwd: root });
+  const definition = resolveAgentDefinition(store.get("scout"), { model: "managed-fixture/model", models: ["managed-fixture/model"], availableTools: ["ffgrep"] });
+  const parentTools = parentSearchTools({ cwd: root, tools: [{ name: "ffgrep", description: "Optional search", parameters: { type: "object" } }],
+    async executeTool() { throw Error("third-party extension failure"); } });
+  let calls = 0, sawToolError = false;
+  const base = provider(() => {});
+  const stream = (_model: any, context: any) => {
+    calls++;
+    if (calls > 1) sawToolError = context.messages.some((entry: any) => entry.role === "toolResult" && entry.isError === true);
+    const output = createAssistantMessageEventStream();
+    const response: any = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
+      content: calls === 1 ? [{ type: "toolCall", id: "optional-search", name: "ffgrep", arguments: {} }] : [{ type: "text", text: "Continue using built-in search" }],
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: calls === 1 ? "toolUse" : "stop", timestamp: Date.now() };
+    queueMicrotask(() => { output.push({ type: "start", partial: response }); output.push({ type: "done", reason: response.stopReason, message: response }); });
+    return output;
+  };
+  const opened = await createTrustedRoleBackend({ role: "scout", agentDir: root, cwd: root, model: "managed-fixture/model", routing: "native", provider: { ...base, stream, streamSimple: stream }, definition, parentTools,
+    available: { tools: ["read", "grep", "find", "ls", "ext:fff/ffgrep"], extensions: ["fff"], skills: [], models: ["managed-fixture/model"] } });
+  assert.equal(opened.ok, true, opened.ok ? undefined : opened.code);
+  if (!opened.ok) return;
+  try {
+    assert.equal((await opened.backend.run("Map repository", () => {})).complete, true);
+    assert.equal(sawToolError, true);
+    assert.equal(calls, 2);
+    assert.ok(opened.backend.activeTools.includes("grep"));
+  } finally { await opened.backend.dispose(); }
+});

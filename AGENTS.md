@@ -24,7 +24,7 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 ## Pi package conventions
 
 - Normal installation is one reviewed release tag, for example `pi install git:github.com/irfansofyana/pi-setup@v0.1.0`.
-- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the three exact companions remain separate Pi package sources.
+- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the two exact companions remain separate Pi package sources.
 - Keep companion names and documented minimum versions aligned with `piSetup.requiredPackages`; newer installed versions satisfy minimums and remain separate Pi package sources after approval.
 - Package installation must not overwrite user settings, config, state, logs, generated skills, memory, or secrets. Keep the package free of postinstall mutation.
 - `pi-irfan-devs` is the recommended fresh-install default; the setup skill reads `piSetup.defaultTheme` from the manifest. Repository implementation approval does not authorize local activation. Changing an existing device's selected theme requires separate explicit approval.
@@ -40,9 +40,13 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 ## Subagent templates
 
-- Pi packages do not natively declare agent resources. The first-party subagent extension loads its own four bundled definitions from `pi/extensions/subagents/agents/`: researcher, scout, builder, reviewer. `code-mapper` aliases scout. Native custom Markdown/YAML definitions use `<agent-dir>/subagent-manager/agents/`, with project discovery only after explicit project trust. Retain `pi/agents/` as legacy companion compatibility; do not manually deploy those templates for the native runtime or remove installed copies without separate approval.
-- Legacy companion roles deploy globally under `~/.pi/agent/agents/` only after approval. Native overrides use the extension-owned directory above. Do not recommend invoking project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
+- Native subagents load by default with conservative in-memory caps; no config is created. Global `enabled: false` or `PI_SETUP_SUBAGENTS_NATIVE=0` opts out. Existing Tintinweb sources suppress default native registration; explicit native opt-in rejects conflicts. Tintinweb is legacy-only, not a required companion; removal or migration still needs separate approval.
+
+- Pi packages do not natively declare agent resources. The first-party subagent extension loads its own four bundled definitions from `pi/extensions/subagents/agents/`: researcher, scout, builder, reviewer. `code-mapper` aliases scout. Native custom Markdown/YAML definitions use `<agent-dir>/subagent-manager/agents/`, with project discovery only after explicit project trust. Retired `pi/agents/` templates are no longer shipped. Clean up exact installed legacy copies only after audit, private backup and explicit approval; preserve custom definitions and model pins.
+- Bundled native roles need no global deployment. User overrides use the extension-owned directory above. Preserve unreviewed legacy files under `~/.pi/agent/agents/`; never invoke project `.pi/agents/` or `.agents/agents/` definitions from an untrusted repository.
+- For subagent resources, follow `docs/setup/subagents.md`: bundled local roles work with Pi built-ins, reuse only compatible role-approved parent tools, and isolate recoverable optional-extension failures. Keep explicit custom requirements strict and shared-process failure limits visible.
 - Keep researcher mechanically scoped to `web-research`'s `web_search`/`web_fetch` plus bundled `my-web-search`; keep scout and reviewer read-only and network-free. All bundled roles stay fresh-context, bounded-turn and no-output-transcript by resolver policy (legacy templates additionally set `inherit_context: false`). Child progress/pause metadata controls do not grant additional filesystem/network authority.
+- Subagent task navigation uses the theme's explicit root-editor identity and disposable input hooks; detail overlays own their steering composer and use `root-service.ts`. For controls, drafts, focus and cleanup changes, read `docs/setup/subagents.md#inline-navigation`.
 - Keep canonical templates model-neutral. Per-invocation or installed-copy model choices use exact `provider/model-id`; treat `scopeModels` as a guardrail, not a security boundary.
 - Builder must use Git worktree isolation and may not push, merge, deploy, publish, or handle secrets.
 - `docs/setup/subagents.md` owns team roles, deployment/rollback, orchestration prompts, and trust guidance.

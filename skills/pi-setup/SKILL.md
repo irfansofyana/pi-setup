@@ -66,8 +66,8 @@ Audit relevant surfaces:
 - Manually copied package themes under `~/.pi/agent/themes/`.
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
 - Component config/state for Web Research artifacts, Headroom, Hindsight, managed skills, Goal Loop, Prompt Loop, BTW, Caveman, and MCP. This repository does not manage a permission-system companion or generate a replacement policy.
-- Trusted global subagent templates and `subagents.json`; compare installed Ciung against the native `web-research`/`my-web-search` source template and remember package resources do not natively activate agents.
-- Native subagent opt-in/configuration and known companion conflicts only when relevant; follow `docs/setup/subagents.md#native-runtime-cutover`. An isolated manual test is not live cutover approval, and manifest companions remain authoritative.
+- Native bundled roles, user overrides under `~/.pi/agent/subagent-manager/agents/`, and legacy `~/.pi/agent/agents/` files plus `subagents.json` as separately approved cleanup/import targets. Compare legacy files by identity; preserve custom definitions and model pins.
+- Native default activation, explicit opt-out, optional global runtime configuration and known companion conflicts; follow `docs/setup/subagents.md#native-runtime-cutover`. Isolated manual testing is not local cleanup approval. Read companion requirements from the manifest.
 - Separately installed `9router-web-researcher`, legacy 9router web routes, and Tavily/Exa MCP entries as distinct coexistence/removal targets; do not infer removal approval from native resource health.
 - Requested optional skills/tools and external service prerequisites.
 - Credential variable names/references without reading or printing values.
@@ -113,9 +113,9 @@ Separate proposal groups:
 - missing or below-minimum companion package installation/update;
 - duplicate legacy manual loader cleanup;
 - optional settings/config changes, including theme;
-- global subagent template deployment;
-- native runtime activation/companion cutover, separate from repository implementation and isolated manual acceptance;
-- later legacy web-skill/route/MCP removal, separate from native Ciung template deployment;
+- selected custom-agent import or approved exact legacy-template/config cleanup;
+- native runtime configuration/companion cutover, separate from repository implementation and isolated manual acceptance;
+- later legacy web-skill/route/MCP removal, separate from native role configuration or legacy-agent cleanup;
 - external service setup requiring manual auth/credentials.
 
 Ask the user to approve specific proposal numbers. General setup intent, package installation, or audit approval is not mutation approval.
@@ -132,7 +132,7 @@ For each approved proposal, one at a time:
 6. Preserve settings, unknown config keys, state, archives, logs, memory, generated skills, and unrelated entries.
 7. Remove legacy manual code/theme loaders only when they are proven duplicates. Never remove a component config/state directory merely because code is now package-owned.
 8. Keep companion packages as separate Pi-managed sources. Install or update only an explicitly approved source; for new installs, strip the `@version` floor from the required npm source so Pi resolves a current release, and accept any installed version at or above the encoded floor. Never remove one as a first-party-package duplicate.
-9. For global agents, follow `docs/setup/subagents.md`: review templates, back up existing files, preserve machine-local model choices unless approved, and merge `subagents.json` narrowly. Deploying native Ciung does not authorize deleting its legacy skill/routes/MCP configuration.
+9. For agents, follow `docs/setup/subagents.md`: bundled roles need no global copying. Audit and back up exact legacy files before approved cleanup; preserve custom definitions/model pins or propose selected `/agents import`. Do not automatically translate old `subagents.json` into native configuration. Agent cleanup does not authorize deleting web skills/routes/MCP configuration.
 10. Never expose, generate, copy, or write credentials. Ask the user to complete `/login`, environment, or provider-profile steps.
 11. Reload/restart and verify this mutation before continuing. On failure, restore only its approved legacy loader when rollback is safe and deterministic; never overwrite newer user data with stale config.
 12. Stop on command failure, validation failure, permission denial, or undocumented state.
@@ -161,6 +161,6 @@ Do not claim success when verification is incomplete. Keep backups until the use
 - Duplicate detection precedes duplicate removal.
 - Backup precedes every approved destructive action.
 - Existing theme selection never changes implicitly.
-- Agent templates never become active merely because the package is installed.
+- Native bundled roles load through the package extension by default; user-owned legacy definitions never migrate or activate implicitly.
 - Unknown commands or ambiguous ownership fail closed.
 - Credential values never appear in audit, proposal, backup output, or report.
