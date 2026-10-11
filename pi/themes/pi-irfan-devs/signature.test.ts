@@ -55,9 +55,35 @@ test("watermark adapter preserves input, uses public layout, and fails closed", 
 	assert.doesNotMatch(ui, /\.onChange\s*=|previousLines|previousScreen|currentLayout|tui\.render\(|requestRender\(true\)/);
 });
 
-test("footer keeps themed panel backgrounds and bounded line widths", () => {
+test("footer routes stats and statuses through local presentation colors", () => {
+	const stats = functionSource("footerStatsLine");
+	assert.match(stats, /ink\.cost\(/);
+	assert.match(stats, /ink\.model\(/);
+	assert.match(stats, /ink\.context\(label, percent\)/);
+	assert.match(stats, /theme\.fg\("dim", `\(\$\{ctx\.model\.provider\}\)`\)/);
+	const chip = functionSource("compactStatusChip");
+	assert.match(chip, /theme\.name === IRFAN_DEVS_THEME \? cavemanLevel\(plain\)/);
+	assert.match(chip, /ink\.healthy\(/);
+	assert.match(chip, /state === "offline" \? theme\.fg\("error", state\)/);
+});
+
+test("footer reads current thinking level each render and favors it over provider prefix", () => {
+	const stats = functionSource("footerStatsLine");
+	assert.match(stats, /if \(ctx\.model\?\.reasoning\)/);
+	assert.match(stats, /`thinking \$\{thinkingLevel\}`/);
+	assert.match(stats, /visibleWidth\(withProvider\) <= width/);
+	assert.match(functionSource("compactFooter"), /footerStatsLine\(ctx, theme, footerData, width, getThinkingLevel\(\)\)/);
+	assert.match(source, /compactFooter\(ctx, presentation, \(\) => pi\.getThinkingLevel\(\)\)/);
+});
+
+test("footer uses persisted cost rollup and hides only duplicate cost status", () => {
+	assert.match(functionSource("footerStatsLine"), /footerUsage\(ctx\.sessionManager\.getEntries\(\)\)/);
+	assert.match(functionSource("footerStatusLine"), /\.filter\(\(\[key\]\) => separateFooterStatus\(key\)\)/);
+});
+
+test("footer uses terminal background with bounded line widths", () => {
 	const footer = functionSource("compactFooter");
-	assert.match(footer, /theme\.bg\("toolPendingBg"/);
+	assert.doesNotMatch(footer, /theme\.bg\(/);
 	assert.match(footer, /width - visibleWidth\(clipped\)/);
 	assert.match(footer, /presentation\.footer\(component, rendered\.length\)/);
 });

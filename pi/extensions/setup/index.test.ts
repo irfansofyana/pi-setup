@@ -46,7 +46,8 @@ test("setup prompts audit native web delivery and legacy coexistence without rem
   for (const prompt of [INIT_PROMPT, DOCTOR_PROMPT]) {
     assert.match(prompt, /web-research/);
     assert.match(prompt, /my-web-search/);
-    assert.match(prompt, /Ciung/);
+    assert.match(prompt, /native bundled subagents/);
+    assert.match(prompt, /legacy agent files\/config/);
     assert.match(prompt, /9router/);
     assert.match(prompt, /Tavily\/Exa MCP/);
   }

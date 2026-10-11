@@ -42,6 +42,9 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
+import { PlanController } from "./plan-controller.ts";
+import { stepLabel } from "./plan-view.ts";
+import type { SessionPlan } from "./session-plan.ts";
 import {
 	Container,
 	type Focusable,
@@ -100,6 +103,7 @@ type KeybindingMatcher = {
 };
 
 const TodoParams = Type.Object({
+	scope: Type.Optional(StringEnum(["project", "session"] as const, { description: "project (default): durable files; session: this conversation's working plan" })),
 	action: StringEnum([
 		"list",
 		"list-all",
@@ -110,9 +114,10 @@ const TodoParams = Type.Object({
 		"delete",
 		"claim",
 		"release",
+		"reorder",
 	] as const),
 	id: Type.Optional(
-		Type.String({ description: "Todo id (TODO-<hex> or raw hex filename)" }),
+		Type.String({ description: "Project: TODO-<hex> or raw hex filename. Session: PLAN-<number>." }),
 	),
 	title: Type.Optional(Type.String({ description: "Short summary shown in lists" })),
 	status: Type.Optional(Type.String({ description: "Todo status" })),
@@ -121,6 +126,9 @@ const TodoParams = Type.Object({
 		Type.String({ description: "Long-form details (markdown). Update replaces; append adds." }),
 	),
 	force: Type.Optional(Type.Boolean({ description: "Override another session's assignment" })),
+	note: Type.Optional(Type.String({ description: "Session only: progress update or required blocker reason" })),
+	order: Type.Optional(Type.Array(Type.String(), { description: "Session reorder: every PLAN-<number> id in desired order" })),
+	expectedRevision: Type.Optional(Type.Integer({ minimum: 0, description: "Session only: reject edit if plan revision has changed" })),
 });
 
 type TodoAction =
@@ -1443,7 +1451,9 @@ async function deleteTodo(
 }
 
 export default function todosExtension(pi: ExtensionAPI) {
+	const plans = new PlanController(pi);
 	pi.on("session_start", async (_event, ctx) => {
+		plans.start(ctx);
 		const todosDir = getTodosDir(ctx.cwd);
 		const settings = await readTodoSettings(todosDir);
 		await garbageCollectTodos(todosDir, settings, ctx);
@@ -1456,13 +1466,33 @@ export default function todosExtension(pi: ExtensionAPI) {
 		label: "Todo",
 		executionMode: "sequential",
 		description:
-			`Manage file-based todos in ${todosDirLabel} (list, list-all, get, create, update, append, delete, claim, release). ` +
+			`Manage project todos in ${todosDirLabel} or a session working plan. scope defaults to project for existing file-based todos. ` +
+			'Use scope:"session" for a visible plan: create, list, list-all, get, update, append, delete, reorder. Session IDs are PLAN-<number>; status is pending, in_progress, blocked, completed; blocked requires a note. ' +
+			"Project actions: list, list-all, get, create, update, append, delete, claim, release. " +
 			"Title is the short summary; body is long-form markdown notes (update replaces, append adds). " +
 			"Todo ids are shown as TODO-<hex>; id parameters accept TODO-<hex> or the raw hex filename. " +
-			"Claim tasks before working on them to avoid conflicts, and close them when complete.",
+			"Claim project tasks before working on them to avoid conflicts, and close them when complete.",
+		promptSnippet: 'Use todo with scope:"session" to keep a visible plan for multi-step work.',
+		promptGuidelines: [
+			'For substantial multi-step work, first list the current session plan with todo({scope:"session",action:"list"}); create concise steps for the agreed work. Skip plans for trivial requests.',
+			'Keep the human-editable plan current: mark a step in_progress before work, report meaningful progress in note, and mark completed only when its completion criteria are met. Use blocked with a note when waiting for input or another dependency.',
+			'Use the revision returned by list/get as expectedRevision when editing existing session steps; reread on conflict and preserve human edits. Use get for full descriptions after resuming.',
+			'Session steps are plans, not commands to start agents. Never claim work is running merely because a step is in_progress. Project todos remain separate durable work; do not copy every session step into project files.',
+		],
 		parameters: TodoParams,
 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (params.scope === "session") {
+				if (params.tags !== undefined || params.force !== undefined) {
+					const error = 'tags and force apply to scope:"project" only';
+					return { isError: true, content: [{ type: "text" as const, text: error }], details: { scope: "session", error } };
+				}
+				return plans.execute(params, ctx);
+			}
+			if (params.action === "reorder" || params.note !== undefined || params.order !== undefined || params.expectedRevision !== undefined) {
+				const error = 'reorder, note, order and expectedRevision require scope:"session"';
+				return { isError: true, content: [{ type: "text" as const, text: error }], details: { action: params.action, error } };
+			}
 			const todosDir = getTodosDir(ctx.cwd);
 			const action: TodoAction = params.action;
 
@@ -1744,6 +1774,9 @@ export default function todosExtension(pi: ExtensionAPI) {
 			const normalizedId = id ? normalizeTodoId(id) : "";
 			const title = typeof args.title === "string" ? args.title : "";
 			let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", action);
+			if (args.scope === "session") {
+				return new Text(`${text} ${theme.fg("accent", "session")}${id ? ` ${id}` : ""}${title ? ` ${title}` : ""}`, 0, 0);
+			}
 			if (normalizedId) {
 				text += " " + theme.fg("accent", formatTodoId(normalizedId));
 			}
@@ -1754,6 +1787,14 @@ export default function todosExtension(pi: ExtensionAPI) {
 		},
 
 		renderResult(result, { expanded, isPartial }, theme) {
+			const session = result.details as { scope?: string; plan?: SessionPlan; error?: string } | undefined;
+			if (session?.scope === "session") {
+				if (session.error) return new Text(theme.fg("error", session.error), 0, 0);
+				const steps = session.plan?.steps ?? [];
+				const rows = expanded ? steps.map(stepLabel) : steps.slice(0, 3).map(stepLabel);
+				if (!expanded && steps.length > rows.length) rows.push(`+${steps.length - rows.length} more · /todos plan`);
+				return new Text(rows.join("\n") || "No session steps yet.", 0, 0);
+			}
 			const details = result.details as TodoToolDetails | undefined;
 			if (isPartial) {
 				return new Text(theme.fg("warning", "Processing..."), 0, 0);
@@ -1811,12 +1852,33 @@ export default function todosExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("todos", {
-		description: "List todos from .pi/todos",
+		description: "Manage session plan or project todos; plan | project [search] | collapse",
 		handler: async (args, ctx) => {
+			let query = (args ?? "").trim();
+			if (ctx.mode === "tui" && !query) {
+				const view = await ctx.ui.select("Todos", ["This session", "Project todos"]);
+				if (!view) return;
+				query = view === "This session" ? "plan" : "project";
+			}
+			if (query === "collapse") {
+				if (ctx.mode === "tui") plans.toggle(ctx);
+				return;
+			}
+			if (query === "plan") {
+				if (ctx.mode === "tui") await plans.manage(ctx);
+				else {
+					const text = plans.read(ctx).steps.map(stepLabel).join("\n") || "No session steps yet.";
+					if (ctx.mode === "rpc") ctx.ui.notify(text, "info");
+					else console.log(text);
+				}
+				return;
+			}
+			if (query === "project") query = "";
+			else if (query.startsWith("project ")) query = query.slice(8).trim();
 			const todosDir = getTodosDir(ctx.cwd);
 			const todos = await listTodos(todosDir);
 			const currentSessionId = ctx.sessionManager.getSessionId();
-			const searchTerm = (args ?? "").trim();
+			const searchTerm = query;
 
 			if (ctx.mode !== "tui") {
 				const text = formatTodoList(filterTodos(todos, searchTerm));

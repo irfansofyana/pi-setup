@@ -26,6 +26,10 @@ Inside Pi:
 /reload
 ```
 
+This branch prepares **0.7.0**; its tag is not published yet. After publication and review,
+install it with `pi install git:github.com/irfansofyana/pi-setup@v0.7.0`.
+The inventory below describes 0.7.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
+
 Init audits and proposes numbered changes; approval comes before mutation.
 Doctor is read-only. Neither command changes settings directly.
 Existing devices use the same install, then [review migration proposals](docs/setup/installation.md#existing-device-migration).
@@ -34,13 +38,14 @@ Existing devices use the same install, then [review migration proposals](docs/se
 
 - **UI:** `pi-irfan-devs` green palette, integrated editor, Signature UI, and π welcome panel; blue/Gruvbox alternatives remain available.
 - **Research:** native `web_search`/`web_fetch`, Tavily-first routing, optional Exa, and bundled `my-web-search`.
-- **Todos:** local `todo` tool and searchable `/todos` manager; project files, session claims, cleanup off by default.
+- **Todos:** live session plans with manual editing, plus searchable project todos; shared `todo` tool, persistent project files, cleanup off by default.
 - **Questions:** included `ask_user_question` with custom answers, multi-select, previews, and final review; disposable `/ask-demo` smoke UI.
 - **Memory:** local Hindsight adapter and generated Managed Skills.
 - **Context:** Headroom proxy integration and read-only `/context` diagnostics.
 - **Workflow:** persisted `/goal`, paced `/loop`, side-channel `/btw`, and `/caveman` response style.
 - **Prompts:** seven packaged research, planning, debugging, review, and push workflows.
-- **Delegation:** reviewed Ciung, Laya, Sangkur, and Prabu templates; global deployment needs separate approval.
+- **Delegation:** bundled researcher, scout, builder and reviewer; `code-mapper` aliases scout. No manual role deployment.
+- **Native subagents:** enabled by default; compact Subagents dock, `/agents tasks` live messages, steering/follow-up, unread indicators and scoped builder worktrees. Outcome persistence, schedules and workflows remain opt-in; configured Tintinweb sources suppress native registration.
 - **Setup:** bundled audit/proposal/migration skill; native Pi MCP guidance.
 
 Pi loads declared extensions, themes, skills, and prompts from the package.
@@ -51,19 +56,19 @@ Headroom's Python CLI and Hindsight's daemon remain separate tools.
 
 ## Required companion packages
 
-Three companions remain **separate Pi package sources**, installed only after approval.
+Two companions remain **separate Pi package sources**, installed only after approval.
 Root `piSetup.requiredPackages` owns their sources and minimum versions; newer installed versions satisfy minimums.
 
 | Package | Minimum version | Purpose |
 | --- | --- | --- |
 | `@ff-labs/pi-fff` | `>=0.10.5` | Specialist search |
-| `@tintinweb/pi-subagents` | `>=0.14.3` | Delegated agents |
 | `pi-stats-ext` | `>=0.2.0` | Usage statistics |
 
 Todos is package-owned, replacing `npm:@juicesharp/rpiv-todo`.
 If that old source remains installed, remove it only through a separately approved proposal to avoid duplicate tools.
 No automatic todo-data migration or settings activation. See [Todos](docs/setup/local-extensions.md#todos).
 Structured questions are also package-owned. See [Structured questions](docs/setup/local-extensions.md#structured-questions).
+Subagents are package-owned; legacy Tintinweb removal requires separate approval. See [Subagents](docs/setup/subagents.md#native-runtime-cutover).
 
 ## Configuration and safety
 
@@ -84,8 +89,8 @@ Structured questions are also package-owned. See [Structured questions](docs/set
 | [Configuration](docs/setup/configuration.md) | Ownership, paths, auth, themes, Signature UI |
 | [MCP](docs/setup/mcp.md) | Native servers, search, OAuth, bearer auth |
 | [Permissions](docs/setup/permissions.md) | Trust boundaries and manual approvals |
-| [Subagent team](docs/setup/subagents.md) | Roles, reviewed deployment, trust |
-| [Agent packaging research](docs/setup/agent-packaging-research.md) | Why upgrades do not auto-deploy global agents |
+| [Subagent team](docs/setup/subagents.md) | Native roles, task panel, migration, trust |
+| [Agent packaging research](docs/setup/agent-packaging-research.md) | Bundled roles and user-owned legacy files |
 | [Local extensions](docs/setup/local-extensions.md) | Todos, structured questions, component behavior/config/state |
 | [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Memory scopes, tools, hygiene |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |

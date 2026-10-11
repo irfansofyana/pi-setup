@@ -22,7 +22,8 @@ Both tools accept `provider: "auto" | "tavily" | "exa"`. Explicit overrides win.
 
 - Extension code owns routing, validation, cancellation, retries, cache/artifacts, redaction, evidence metadata, and telemetry.
 - `skills/my-web-search/` owns provider-neutral research method and source hierarchy.
-- `pi/agents/researcher.md` keeps Ciung isolated and preloads the bundled skill.
+- `pi/extensions/subagents/agents/researcher.md` owns the native research prompt;
+  the managed runtime restricts it to web tools and preloads the bundled skill.
 - Existing 9router and MCP paths coexist until benchmark, dogfood, migration approval, and rollback gates pass.
 
 ## Tracker

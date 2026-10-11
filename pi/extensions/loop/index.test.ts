@@ -235,6 +235,16 @@ test("background subagent completion can arrive before wake intent commits", asy
   assert.doesNotMatch((guidance as { systemPrompt: string }).systemPrompt, /: ready/);
 });
 
+test("resumed native agent IDs cannot reuse an old terminal event or accept a stale run",async()=>{
+ const{pi,ctx,controller}=fixture();await pi.emitLifecycle("session_start",{},ctx);await pi.commands.get("loop").handler("wait for review",ctx);await startRun(pi,ctx);
+ pi.events.emit("subagents:created",{id:"agent-1",runId:"run-old",isBackground:true});pi.events.emit("subagents:completed",{id:"agent-1",runId:"run-old",result:"old"});
+ pi.events.emit("subagents:created",{id:"agent-1",runId:"run-new",isBackground:true});
+ const result=await pi.tools.get("schedule_loop_wakeup").execute("wake",{subagentId:"agent-1"});assert.equal(result.details.accepted,true);
+ pi.events.emit("subagents:completed",{id:"agent-1",runId:"run-old",result:"stale"});await settleRun(pi,ctx);
+ assert.equal(controller.snapshot()?.status,"waiting_event");assert.equal(pi.sent.length,1);
+ pi.events.emit("subagents:completed",{id:"agent-1",runId:"run-new",result:"current"});assert.equal(pi.sent.length,2);
+});
+
 test("queued user follow-up revokes Loop tool authority and stops safely", async () => {
   const { pi, ctx, controller, notifications } = fixture();
   await pi.emitLifecycle("session_start", {}, ctx);

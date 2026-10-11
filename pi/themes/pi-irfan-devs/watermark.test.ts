@@ -49,7 +49,7 @@ test("welcome panel budgets transcript/dock rows without inspecting screen conte
 			assert(stage.col + stage.width <= columns - 4);
 			assert.equal(stage.row, 1);
 			assert(stage.height + 3 + 10 + 8 <= rows);
-			assert(stage.width <= 60 && stage.height <= 16 && stage.height >= 12);
+			assert(stage.width <= 60 && stage.height <= 24 && stage.height >= 12);
 		}
 	}
 	for (const value of [NaN, Infinity, -Infinity]) {
@@ -60,7 +60,19 @@ test("welcome panel budgets transcript/dock rows without inspecting screen conte
 	assert.equal(welcomeStage(42, 14, 8), undefined);
 	assert.equal(welcomeStage(80, 40, -1), undefined);
 	assert.equal(welcomeStage(80, 28, 20), undefined);
-	assert.deepEqual(welcomeStage(80, 40, 8), { row: 1, col: 10, width: 60, height: 16 });
+	assert.deepEqual(welcomeStage(80, 40, 8), { row: 1, col: 10, width: 60, height: 21 });
+});
+
+test("larger bottom-anchored stage raises artwork center while yielding to dock pressure", () => {
+	const roomy = welcomeStage(80, 60, 8)!;
+	assert.equal(roomy.height, 24);
+	// The panel's bottom stays fixed; eight extra rows lift its center four rows.
+	const previousHeight = 16;
+	assert.equal((roomy.height - previousHeight) / 2, 4);
+	assert.equal(welcomeStage(80, 40, 8)?.height, 21);
+	assert.equal(welcomeStage(80, 30, 8), undefined);
+	assert.equal(welcomeStage(80, 40, 17)?.height, 12);
+	assert.equal(welcomeStage(80, 40, 18), undefined);
 });
 
 test("idle renders faint cached glyph with no timer or render requests", () => {

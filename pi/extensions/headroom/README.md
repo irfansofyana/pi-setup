@@ -14,6 +14,23 @@ Pi extension that integrates [Headroom Labs Headroom](https://github.com/headroo
 - `headroom_stats` — show session savings and whether the proxy's durable `/stats-history` is reachable. Native mode reports proxy requests separately from local compression counts. Its savings are proxy-history deltas; concurrent clients sharing the same proxy may be included.
 - Shows compact Pi-session savings in the footer: `hr off` or `hr m 55k ↓10%` (`m` = managed proxy, `x` = external proxy).
 
+## First-party child routing
+
+The adapted subagent manager uses a registry-identity capability, not private SDK
+fields: it obtains the original model upstream and rechecks the parent's active
+route/readiness before each request. Unavailable/incompatible Headroom falls back
+to that exact upstream with a warning, preserving current parent API-key/OAuth
+headers. Already-submitted requests are never replayed. Children do not own/start
+a proxy or receive Headroom tools. Paths honor Pi's selected agent directory, so
+private preview config/logs/PID state stay in that profile.
+
+## Historical inactive child lease experiment
+
+`acquireHeadroomChildRoute` remains a separate non-default experiment for an active
+route on the same runtime, pinned to audited Pi 1.1.0 private fields, built-in
+default upstreams and a healthy local proxy. Its lease semantics fail closed and
+do not govern the new public child adapter. See [subagents](../subagents/README.md).
+
 ## Install Headroom CLI
 
 Headroom CLI ships from the Python package, not the npm SDK.

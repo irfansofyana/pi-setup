@@ -11,8 +11,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { ModelRegistry, ModelRuntime, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { publishChildRouting } from "./child-route.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export type StartupMode = "manual" | "auto" | "off";
@@ -92,6 +95,99 @@ function sharedRoutingStates(): WeakMap<object, SharedHeadroomRoutingState> {
   return states;
 }
 
+/** Private SDK compatibility boundary: only the audited, installed Pi release. */
+export function headroomChildBridgeSupported(version: string): boolean {
+  return version === "1.1.0";
+}
+
+function installedPiVersion(): string | undefined {
+  try {
+    const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    return JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8")).version;
+  } catch { return undefined; }
+}
+
+export type HeadroomChildLease = {
+  /** Recheck immediately before each child turn; false means abort, never bypass. */
+  ready(): Promise<boolean>;
+  /** Idempotent; a failed managed-process stop quarantines the route. */
+  release(): Promise<void>;
+};
+
+/** Borrow an existing route; never register providers or start a proxy on behalf of a child. */
+export async function acquireHeadroomChildRoute(options: {
+  registry: ModelRegistry; model: string; proxyUrl: string;
+}): Promise<{ ok: true; lease: HeadroomChildLease } | { ok: false; code: "unsupported_routing" }> {
+  const { registry, model, proxyUrl } = options;
+  if (!headroomChildBridgeSupported(installedPiVersion() ?? "") || !(registry instanceof ModelRegistry) ||
+    !(registry.runtime instanceof ModelRuntime) || !isLocalProxyUrl(proxyUrl) || !hasSupportedProxyProtocol(proxyUrl)) {
+    return { ok: false, code: "unsupported_routing" };
+  }
+  const runtime = registry.runtime;
+  const shared = sharedRoutingStates().get(runtime);
+  const slash = model.indexOf("/");
+  const provider = model.slice(0, slash), id = model.slice(slash + 1);
+  // Custom providers require the extension's request-header hook in the child;
+  // a baseUrl alone cannot attest forwarding to the configured upstream.
+  if (slash < 1 || !id || !["openai", "anthropic", "openai-codex"].includes(provider) || !shared ||
+    shared.proxyUrl !== proxyUrl || shared.references < 1 || shared.stopping ||
+    typeof shared.unregisterProvider !== "function" ||
+    shared.excludedProviderIds.has(provider) || !shared.registration.registeredProviders.includes(provider)) {
+    return { ok: false, code: "unsupported_routing" };
+  }
+  const generation = shared.generation;
+  const matches = (): boolean => {
+    try {
+      return sharedRoutingStates().get(runtime) === shared && shared.generation === generation &&
+        !shared.stopping && shared.references > 0 && shared.proxyUrl === proxyUrl &&
+        typeof shared.unregisterProvider === "function" &&
+        shared.registration.providers.get(provider) === proxyBaseUrlForApi(proxyUrl, registry.find(provider, id)?.api ?? "") &&
+        registry.find(provider, id)?.baseUrl === shared.registration.providers.get(provider) &&
+        runtime.getRegisteredProviderConfig(provider)?.baseUrl === shared.registration.providers.get(provider) &&
+        shared.canonicalModels.some(entry => entry.provider === provider && entry.id === id &&
+          isDefaultBuiltInUpstream(provider, entry.baseUrl) &&
+          !shared.registration.upstreamByModel.has(routeKey(provider, id)));
+    } catch { return false; }
+  };
+  if (!matches()) return { ok: false, code: "unsupported_routing" };
+  if (!(await health({ ...DEFAULT_CONFIG, proxyUrl, localToolResultCompression: false })) || !matches()) {
+    return { ok: false, code: "unsupported_routing" };
+  }
+  shared.references++;
+  let released = false;
+  return { ok: true, lease: {
+    ready: async () => !released && matches() &&
+      await health({ ...DEFAULT_CONFIG, proxyUrl, localToolResultCompression: false }) && !released && matches(),
+    release: async () => {
+      if (released) return;
+      released = true;
+      if (shared.generation !== generation) {
+        shared.invalidatedReferences = Math.max(0, shared.invalidatedReferences - 1);
+        // Invalidated routes stay quarantined; Headroom owns their cleanup.
+        return;
+      }
+      shared.references--;
+      if (shared.references !== 0) return;
+      try {
+        for (const name of shared.registration.registeredProviders) {
+          if (!shared.unregisterProvider) throw new Error("Headroom route release unavailable");
+          shared.unregisterProvider(name);
+        }
+      } catch {
+        shared.stopping = true;
+        return;
+      }
+      if (shared.managedProcess && shared.releaseManagedProcess) {
+        shared.stopping = true;
+        try {
+          if (!(await shared.releaseManagedProcess())) return;
+        } catch { return; }
+      }
+      if (sharedRoutingStates().get(runtime) === shared) sharedRoutingStates().delete(runtime);
+    },
+  } };
+}
+
 export interface ProxyHistorySummary {
   lifetime?: Record<string, unknown>;
   displaySession?: Record<string, unknown>;
@@ -136,9 +232,9 @@ interface CompressResult {
   proxyCcrHashes: string[];
 }
 
-const ROOT_DIR = join(homedir(), ".pi", "agent", "headroom");
+const ROOT_DIR = join(getAgentDir(), "headroom");
 const CONFIG_PATH = join(ROOT_DIR, "config.json");
-const MODELS_CONFIG_PATH = join(homedir(), ".pi", "agent", "models.json");
+const MODELS_CONFIG_PATH = join(getAgentDir(), "models.json");
 const STORE_DIR = join(ROOT_DIR, "store");
 const LOG_PATH = join(ROOT_DIR, "headroom-proxy.log");
 const PID_PATH = join(ROOT_DIR, "headroom-proxy.pid");
@@ -1214,6 +1310,36 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   };
   let resetConfigForSave: HeadroomConfig | undefined;
   let proxyRegistration: ActiveHeadroomProxyRegistration | undefined;
+  const childRoutingReleases = new Set<() => void>();
+  const publishPublicChildRouting = (ctx: ExtensionContext) => {
+    const captured = ctx.modelRegistry.getAvailable().map(model => ({ ...model }));
+    const canonical = (provider: string, id: string) => {
+      const runtime = runtimeForRouting(ctx);
+      const shared = runtime && sharedRoutingStates().get(runtime);
+      const source = shared?.canonicalModels.find(model => model.provider === provider && model.id === id)
+        ?? captured.find(model => model.provider === provider && model.id === id);
+      const current = ctx.modelRegistry.find(provider, id);
+      const proxyBase = proxyBaseUrlForApi(config.proxyUrl, source?.api ?? "");
+      if (!source || !current || current.api !== source.api || ![source.baseUrl, proxyBase].includes(current.baseUrl)) return undefined;
+      return { provider, id, api: source.api, baseUrl: source.baseUrl };
+    };
+    childRoutingReleases.add(publishChildRouting(ctx.modelRegistry, { canonical,
+      async route(provider, id, signal) {
+        signal?.throwIfAborted();
+        const source = canonical(provider, id);
+        const active = proxyRegistration;
+        if (!source || !runtimeEnabled || !config.enabled || config.localToolResultCompression || isRemoteBlocked(config) || !active) return undefined;
+        if (active.sharedState && (active.leaseGeneration !== active.sharedState.generation || active.sharedState.references < 1)) return undefined;
+        const baseUrl = active.providers.get(provider);
+        if (!baseUrl || baseUrl !== proxyBaseUrlForApi(config.proxyUrl, source.api)) return undefined;
+        if (!(await dependencies.health(config, signal))) return undefined;
+        signal?.throwIfAborted();
+        // Parent stop/reconfiguration during readiness must not authorize a retired route.
+        if (proxyRegistration !== active || !runtimeEnabled) return undefined;
+        return { baseUrl, upstream: active.upstreamByModel.get(routeKey(provider, id)) };
+      },
+    }));
+  };
   let proxyRoutingError: string | undefined;
   let sharedReleaseInFlight: Promise<boolean> | undefined;
   const requestSharedManagedRelease = (shared: SharedHeadroomRoutingState): void => {
@@ -1976,6 +2102,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   ].join("\n");
 
   pi.on("session_start", async (_event, ctx) => {
+    publishPublicChildRouting(ctx);
     if (isSpecialistSession()) {
       disableLocalCompressionForSpecialist();
       synchronizeSharedRouting(ctx);
@@ -1992,7 +2119,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    await stopManagedProxy(ctx, false);
+    try { await stopManagedProxy(ctx, false); }
+    finally { for (const release of childRoutingReleases) release(); childRoutingReleases.clear(); }
   });
 
   pi.on("before_provider_headers", (event, ctx) => {

@@ -9,14 +9,88 @@ permissions:
   contents: read
 
 jobs:
+  task-panel-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        pi: [1.0.0, 1.0.4, 1.1.0]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Public Pi imports and real component rendering under hard limits
+        run: |
+          container="pi-task-panel-${{ strategy.job-index }}"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          timeout --kill-after=15s 9m docker run --name "$container" --rm --init \
+            --memory=2g --memory-swap=2g --cpus=2 --pids-limit=128 \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/source,readonly" \
+            --tmpfs /work:rw,exec,size=1g --workdir /work \
+            -e PI_VERSION=${{ matrix.pi }} -e NODE_OPTIONS=--max-old-space-size=512 \
+            node:22.19.0-bookworm-slim timeout --kill-after=10s 8m sh -eu -c '
+              cp -a /source/. /work/
+              npm ci --no-audit --no-fund
+              npm install --no-save --ignore-scripts --no-audit --no-fund \
+                @earendil-works/pi-coding-agent@$PI_VERSION \
+                @earendil-works/pi-ai@$PI_VERSION @earendil-works/pi-tui@$PI_VERSION
+              node --experimental-transform-types --test --test-concurrency=1 \
+                pi/extensions/subagents/contracts.test.ts \
+                pi/extensions/subagents/root-service.test.ts \
+                pi/extensions/subagents/manager-service.test.ts \
+                pi/extensions/subagents/fleet-view.test.ts \
+                pi/extensions/subagents/inline-navigation.test.ts \
+                pi/extensions/subagents/manager-presentation.test.ts \
+                pi/extensions/subagents/task-panel.test.ts \
+                pi/extensions/subagents/task-transcript.test.ts \
+                pi/extensions/subagents/task-view-state.test.ts \
+                pi/extensions/subagents/task-reminder.test.ts
+            '
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.19.0, 24.18.0]
+        pi: [1.1.0]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24.12.0
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Validate the advertised Pi floor and current development SDK
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@${{ matrix.pi }} @earendil-works/pi-ai@${{ matrix.pi }} @earendil-works/pi-tui@${{ matrix.pi }} typebox@1.3.7
+      - name: Broad regression belongs on the CI runner
+        env:
+          NODE_OPTIONS: --max-old-space-size=512
+        run: npm test
+  native-floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.19.0, 24.18.0]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Install advertised native SDK floor on the separate CI runner
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.0.0 @earendil-works/pi-ai@1.0.0 @earendil-works/pi-tui@1.0.0 typebox@1.3.7
+      - name: Native floor (experimental routed lease deliberately requires 1.1.0)
+        env:
+          NODE_OPTIONS: --max-old-space-size=512
+        run: |
+          for test_file in pi/extensions/subagents/*.test.ts; do
+            case "$test_file" in
+              */headroom-backend.test.ts|*/route-transport.test.ts) continue ;;
+            esac
+            node --experimental-transform-types --test --test-concurrency=1 "$test_file" || exit 1
+          done
+          node --test --test-concurrency=1 pi/extensions/goal-loop/*.test.ts pi/extensions/loop/*.test.ts

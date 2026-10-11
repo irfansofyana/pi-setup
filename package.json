@@ -1,6 +1,6 @@
 {
   "name": "@irfansofyana/pi-setup",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Irfan's installable Pi coding-agent setup",
   "type": "module",
@@ -11,7 +11,6 @@
   "files": [
     "pi/extensions",
     "pi/themes",
-    "pi/agents",
     "pi/prompts",
     "skills",
     "docs/setup",
@@ -23,12 +22,12 @@
     "pi": ">=1.0.0"
   },
   "scripts": {
-    "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:signature && npm run test:agents",
+    "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:subagent-manager && npm run test:signature",
     "test:package": "node --test tests/package-contract.test.mjs",
     "test:prompts": "node --test tests/prompt-templates.test.mjs",
-    "test:extensions": "node --test pi/extensions/*/*.test.ts",
-    "test:signature": "node --test pi/themes/pi-irfan-devs/*.test.ts",
-    "test:agents": "node --test pi/agents/agent-templates.test.ts",
+    "test:extensions": "node --experimental-transform-types --test --test-concurrency=1 pi/extensions/*/*.test.ts",
+    "test:subagent-manager": "node --experimental-transform-types --test --test-concurrency=1 pi/extensions/subagents/upstream/tests/paths.test.ts pi/extensions/subagents/upstream/tests/manager.test.ts pi/extensions/subagents/upstream/tests/transcript.test.ts pi/extensions/subagents/upstream/tests/startup.test.ts pi/extensions/subagents/upstream/tests/spawn-timeout.test.ts pi/extensions/subagents/upstream/tests/cost-ledger.test.ts pi/extensions/subagents/upstream/tests/status-ui.test.ts pi/extensions/subagents/upstream/tests/live-agent-view.test.ts",
+    "test:signature": "node --test --test-concurrency=1 pi/themes/pi-irfan-devs/*.test.ts",
     "test:themes": "node pi/themes/pi-irfan-devs/smoke-test.mjs"
   },
   "pi": {
@@ -50,7 +49,6 @@
   "piSetup": {
     "defaultTheme": "pi-irfan-devs",
     "requiredPackages": [
-      "npm:@tintinweb/pi-subagents@0.14.3",
       "npm:pi-stats-ext@0.2.0",
       "npm:@ff-labs/pi-fff@0.10.5"
     ]
@@ -60,5 +58,16 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "dependencies": {
+    "fuzzysort": "4.0.2",
+    "shell-quote": "1.8.3",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
+    "typebox": "1.3.7"
   }
 }

@@ -57,7 +57,8 @@ test("package manifest ships every declared resource path", async () => {
 
   assert.ok(manifest.files.includes("pi/extensions"));
   assert.ok(manifest.files.includes("pi/themes"));
-  assert.ok(manifest.files.includes("pi/agents"));
+  assert.ok(!manifest.files.includes("pi/agents"), "retired legacy templates must not ship");
+  await assert.rejects(readFile(path.join(root, "pi/agents/package.json")), { code: "ENOENT" });
   assert.ok(manifest.files.includes("pi/prompts"));
   assert.ok(manifest.files.includes("skills"));
 });
@@ -140,19 +141,21 @@ test("Irfan Devs palette keeps readable dim text", async () => {
 test("setup metadata keeps third-party Pi packages separately managed", async () => {
   const manifest = await readJson("package.json");
   const expected = [
-    "npm:@tintinweb/pi-subagents@0.14.3",
     "npm:pi-stats-ext@0.2.0",
     "npm:@ff-labs/pi-fff@0.10.5",
   ];
-  for (const field of ["dependencies", "optionalDependencies", "bundledDependencies"]) {
+  assert.deepEqual(manifest.dependencies, { fuzzysort: "4.0.2", "shell-quote": "1.8.3", yaml: "2.8.1" }, "only reviewed upstream viewer libraries are runtime dependencies");
+  for (const field of ["optionalDependencies", "bundledDependencies"]) {
     assert.equal(manifest[field], undefined, `companions must not appear in ${field}`);
   }
   for (const spec of expected) {
     const name = spec.replace(/^npm:/, "").replace(/@[^@]+$/, "");
+    assert.equal(manifest.dependencies?.[name], undefined, `${name} must remain a separate Pi source`);
     assert.equal(manifest.peerDependencies?.[name], undefined, `${name} must remain a separate Pi source`);
   }
   assert.deepEqual(manifest.piSetup.requiredPackages, expected);
-  assert.equal(expected.length, 3);
+  assert.equal(expected.length, 2);
+  assert.ok(!manifest.piSetup.requiredPackages.some(source => source.includes("pi-subagents")), "native subagents replace the legacy companion requirement");
   assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("rpiv-todo")), "todos must be package-owned");
   assert.equal(manifest.peerDependencies.typebox, "*", "use Pi's host schema library");
   assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("pi-permission-system")), "removed permission-system must not return as a requirement");

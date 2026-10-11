@@ -1,0 +1,74 @@
+{
+  "name": "pi-subagent-manager",
+  "version": "0.20.0",
+  "description": "Hierarchical, steerable subagent threads for pi",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "subagents"
+  ],
+  "license": "MIT",
+  "author": "Arnav Gupta",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/championswimmer/pi-subagent-manager.git"
+  },
+  "homepage": "https://github.com/championswimmer/pi-subagent-manager#readme",
+  "bugs": {
+    "url": "https://github.com/championswimmer/pi-subagent-manager/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "agents",
+    "docs",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "changelog": "tsx .github/scripts/changelog.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "test:coverage": "mkdir -p coverage && tsx --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info tests/*.test.ts",
+    "prepublishOnly": "npm run check && npm test",
+    "format": "prettier --write --print-width 100 src tests agents .github docs/default-agents.md README.md",
+    "format:check": "prettier --check --print-width 100 src tests agents .github docs/default-agents.md README.md"
+  },
+  "dependencies": {
+    "fuzzysort": "^4.0.2",
+    "shell-quote": "^1.8.3",
+    "yaml": "^2.8.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": ">=0.99.2",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "^0.99.2",
+    "@earendil-works/pi-ai": "^0.99.2",
+    "@earendil-works/pi-coding-agent": "0.99.2",
+    "@earendil-works/pi-tui": "^0.99.2",
+    "@types/node": "^22.0.0",
+    "@types/semver": "^7.8.0",
+    "@types/shell-quote": "^1.7.5",
+    "prettier": "^3.9.9",
+    "semver": "^7.8.5",
+    "tsx": "^4.20.0",
+    "typebox": "1.3.27",
+    "typescript": "^5.9.0"
+  }
+}
+

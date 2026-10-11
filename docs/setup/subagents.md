@@ -1,127 +1,205 @@
 # Subagent Team
 
-This setup turns `@tintinweb/pi-subagents` into a small agent team instead of a generic delegation button. The templates live under [`pi/agents`](../../pi/agents) and are copied to the trusted global directory, not activated from a project checkout.
+Package-owned native subagents load by default. `/agents` opens settings; no global
+template deployment, enable flag or config file is required. Bundled definitions
+live in [`pi/extensions/subagents/agents/`](../../pi/extensions/subagents/agents/).
+The retired `pi/agents/` directory is no longer shipped.
 
 ## Team
 
-| Identity | Role ID | Job | Authority | Preloaded skills |
-| --- | --- | --- | --- | --- |
-| **Ciung** | `researcher` | Current public-web research with primary-source evidence | Native `web_search`/`web_fetch` only; no local file tools; Headroom routing only | bundled `my-web-search` |
-| **Laya** | `code-mapper` | Trace architecture, execution flow, change surface, and tests | Read-only; no shell; FFF search; Headroom routing | `mermaid`, `teach` |
-| **Sangkur** | `builder` | Prepares behavior tests and implementation in a Git worktree; parent executes tests | Local read/edit/write only; no shell, test execution, network; FFF search; Headroom routing | `code-review` |
-| **Prabu** | `reviewer` | Independent diff, risk, and test review | Read-only; no shell; FFF search; Headroom routing | `code-review` |
+| Role | Job | Authority |
+| --- | --- | --- |
+| `researcher` | Public-web research and primary-source verification | `web_search`/`web_fetch` plus bundled `my-web-search`; no local file tools |
+| `scout` | Repository discovery, execution traces and change surface | Read/search only; no shell or network |
+| `builder` | Scoped implementation and test authoring | Local read/edit/write in an owned Git worktree; no shell or network |
+| `reviewer` | Independent correctness, security and lifecycle review | Read/search only; no mutation, shell or network |
 
-The main Pi session remains coordinator. Specialists return evidence and branches; they do not become a second autonomous hierarchy.
+`code-mapper` aliases `scout`. Legacy Ciung/Laya/Sangkur/Prabu display names are not
+native definitions. Main agent coordinates, runs verification and owns integration.
+Built-ins use fresh context, bounded turns and no output transcripts. Tool
+allowlists and worktrees are not an OS sandbox or secret detector.
 
-## Why these boundaries
+## Commands and definitions
 
-- Research and code understanding can run in parallel without sharing a checkout or modifying state.
-- Builder uses `isolation: worktree` so its file edits do not collide with the parent checkout. Worktree isolation is only checkout separation, not a security boundary and not protection against external side effects. The builder separately has only local read/edit tools plus FFF search; it has no shell, network, or nested-agent tools. Headroom is loaded only to preserve provider routing; `headroom_stats` remains disallowed. A changed worktree is preserved on a local `pi-agent-*` branch for explicit review/integration.
-- Reviewer is separate from builder and has only local read/search tools plus FFF search; it cannot execute shell commands or use mutation tools. Headroom loads only for provider routing. The parent supplies the actual diff and verification evidence so review authority remains genuinely read-only.
-- Ciung loads package-owned `web-research` plus Headroom routing. It cannot read repository files or use Headroom tools. Give it sanitized public questions and URLs; Laya handles local repository evidence with FFF search, and the parent reconciles both streams.
-- Every role sets `inherit_context: false`; the coordinator must supply a self-contained task packet instead of leaking unrelated conversation context.
-- Subagent transcripts are disabled by default. This reduces one source of local copies; it does not disable normal Pi logs, builder worktree commits, or Tavily/Exa API-side logs and retention. Pi log locations and lifetime follow the local Pi configuration. Provider-side storage follows the account settings and published policies of each provider and is not controlled by this extension. Extension-owned cache/artifact locations and retention are documented in [Local Extensions](local-extensions.md#native-web-research).
+- `/agents` — settings.
+- `/agents tasks [path]` — live messages and dedicated steer/follow-up composer.
+- `/agents types` — inspect/edit bundled roles, user overrides and custom types.
+- `/agents tree` — optional advanced terminal live viewer.
+- `/agents fleet` — exact-run controls, including RPC-compatible dialogs.
+- `/agents import` — select legacy definitions for model-assisted conversion;
+  originals remain unchanged. Import is not automatic or model-free.
+- `/agents reload` — reload definitions; `/reload` reloads package extensions.
+- `/agents reap` — confirmed cleanup of completed threads.
 
-## Prerequisites
+User-owned Markdown definitions and sparse YAML overrides belong to
+`~/.pi/agent/subagent-manager/agents/`. Trusted project overrides belong to
+`.pi/agent/subagent-manager/agents/`. Never grant project trust just to load agents.
+Custom types cannot widen canonical tool boundaries. Writable types require
+worktree isolation; only custom types can request scoped delegation tools.
 
-`@tintinweb/pi-subagents` is a separately managed [required companion package](../../README.md#required-npm-package-manifest). `@ff-labs/pi-fff` is also required because local specialists explicitly receive its read-only `fffind`, `ffgrep`, and `fff-multi-grep` tools. Pi package resources do not natively include agents, so continue to review and deploy the global templates in this guide. The native web extension and `my-web-search` skill are already package resources; do not install either separately. Install only the remaining role skills from [Skills and optional tools](skills-and-tools.md):
+Use exact `provider/model-id` values. Explicit invocation model wins over type
+preferences, then parent model. Example global override `scout.yml`:
 
-```bash
-npx skills add irfansofyana/ai-marketplace --global --skill mermaid
-npx skills add irfansofyana/ai-marketplace --global --skill code-review
-npx skills@latest add mattpocock/skills --global --skill teach
+```yaml
+models: [provider/model-id]
+thinkingLevel: high
 ```
 
-The Pi process running `researcher` needs `TAVILY_API_KEY`; `EXA_API_KEY` is optional unless Exa is explicitly requested or selected for semantic/code intent. Keep credentials in the process environment, never in the agent template. Existing `pi-9router-ext` and Tavily/Exa MCP configuration may remain during side-by-side dogfood, but Ciung cannot call those legacy tools after this template is deployed.
+Use `/agents types` for validated editing. Model scopes are guardrails, not a
+security boundary. Unavailable models, invalid definitions and missing explicit custom requirements
+fail closed. Bundled local roles fall back to built-in read/search tools when
+optional parent search tools are absent. See [feature audit](../../pi/extensions/subagents/parity.md) for differences
+from upstream behavior.
 
-## Install the trusted templates
+## Inline navigation
 
-Review every agent file first. Agent definitions and preloaded skills are executable-capability configuration, not harmless prose.
+Main displays a compact summary and one current-activity row per visible active
+subagent. Completed/stopped rows immediately fold into the summary, preserving
+unread counts: **Subagents · 2 completed · 2 unread**. Failed and paused agents
+get display priority. Details retain usage and session-retention information.
+Entering selection expands the retained list with roles, state and elapsed time;
+rows keep their order as workers finish. Open details stay open.
 
-From the repository root:
+When Todos is active, both sections share one presentation area with Todos first:
+at most six resting rows total, up to ten during subagent selection, and fewer on
+short terminals. Either extension works alone. Navigation hints appear only while
+selecting; `/agents tasks` and `/todos plan` remain available. The shared renderer
+allocates rows and routes clicks; each extension owns its state and controls.
 
-```bash
-set -eu
-umask 077
+In the integrated theme, **←** or **↓** from an empty focused prompt enters task
+selection. **↑/↓** chooses; **Enter** opens the live detail panel. Fullscreen
+mouse users can click a task. **`/agents tasks`** opens the panel with any theme.
 
-agent_dir="$HOME/.pi/agent/agents"
-mkdir -p "$agent_dir" "$HOME/.pi/agent/backups"
-if [ -L "$agent_dir" ]; then
-  printf 'Refusing symlinked agent directory: %s\n' "$agent_dir" >&2
-  exit 1
-fi
-backup_root=$(mktemp -d "$HOME/.pi/agent/backups/agent-team-XXXXXXXX")
-tmp=""
-trap '[ -z "$tmp" ] || rm -f "$tmp"' EXIT INT TERM
+The panel shows the full target path, wrapped messages, tool activity, model and
+metrics. While browsing, **S** chooses **Steer current work**; **F** chooses
+**Follow up after completion**, which queues a distinct run behind active work
+or continues a retained session. **Enter** or **Tab** opens the current mode's
+composer; the configured submit binding sends through the exact-run root service.
+**Esc** leaves the composer, then closes the panel. Main keeps its
+own prompt. **←/→** switches tasks while browsing or with an empty draft;
+**↑/↓**, **PgUp/PgDn** scroll history, and **End** follows live output.
 
-for name in researcher code-mapper builder reviewer; do
-  if [ -e "$agent_dir/$name.md" ]; then
-    cp "$agent_dir/$name.md" "$backup_root/$name.md"
-  fi
-  tmp=$(mktemp "$agent_dir/.$name.md.XXXXXXXX")
-  install -m 600 "pi/agents/$name.md" "$tmp"
-  mv -f "$tmp" "$agent_dir/$name.md"
-  tmp=""
-done
+Reading position, live-follow mode, delivery mode and drafts survive closing and
+switching within the session. New agent text adds an unread indicator without
+moving a scrolled view; following the latest messages clears it. Unread tracking
+uses bounded in-memory text fingerprints, with no transcript persistence.
 
-trap - EXIT INT TERM
-printf 'Agent backups: %s\n' "$backup_root"
-```
+The composer captures the selected lifetime and run. A stale target rejects and
+keeps the draft; reopen the composer to review the new target. Queued, accepted
+and delivered receipts do not prove model consumption. Uncertain delivery keeps
+the draft and blocks resending until you inspect the task and press **R** while
+browsing to allow retry. Retained sessions still use remaining lifetime budgets.
+Commands typed in the steering composer are agent text.
+Normal editing, autocomplete, dialogs and registered shortcuts keep their keys;
+release events never navigate twice. Navigation does not stop or forget workers.
+Use `/agents fleet` for additional controls and confirmed `/agents reap` for cleanup.
+Collapsing the dock does not free thread capacity, consume results or discard
+follow-up context. Clicking the completed summary expands the list. Rendering,
+input and observer failures are contained in the task UI, with a bounded diagnostic
+and `/agents tasks` recovery. Drafts retain their last successfully saved content.
+See [inline controls and limits](../../pi/extensions/subagents/README.md#inline-navigation).
 
-Do not blindly replace an existing global `~/.pi/agent/subagents.json`. Review [`pi/agents/subagents.json`](../../pi/agents/subagents.json), back up the current file, then merge only the desired keys. The supplied defaults are:
+Spawn reporting deadlines produce informational progress reminders: elapsed time,
+queue state or latest observed status and its age. They do not establish inactivity
+or stop execution. Progress does not reset the reporting timer; hard execution
+deadlines and turn/usage budgets remain separate.
+
+After updating the extension, run `/reload` or restart Pi. UI compatibility and
+manual terminal acceptance limits are tracked in the component's
+[verification boundary](../../pi/extensions/subagents/parity.md#verification-boundary).
+
+<a id="install-the-trusted-templates"></a>
+
+## Native runtime cutover
+
+Native runtime adapts `championswimmer/pi-subagent-manager` 0.20.0, pinned commit
+`1f037b1` (MIT). Without configuration, in-memory defaults are 3 executing
+tasks, 4 threads, 8 result slots and 4 pending. Persistence, schedules and workflows
+stay off. No config is generated during package loading.
+
+Optional global `~/.pi/agent/subagents-native.json` overrides runtime defaults.
+Existing valid config is honored; malformed config fails closed. Concurrency counts
+executing children; thread capacity and nesting are separate. `/agents` can lower
+admission limits but cannot exceed the deployment ceiling. To review a higher
+ceiling, use global caps such as `concurrency: 6`, `threads: 8`, `slots: 16`,
+`pending: 8`; check host/provider capacity first. No local config is rewritten.
+Example:
 
 ```json
 {
-  "maxConcurrent": 3,
-  "defaultMaxTurns": 40,
-  "graceTurns": 5,
-  "defaultJoinMode": "smart",
-  "scopeModels": true,
-  "toolDescriptionMode": "compact",
-  "fleetView": true,
-  "widgetMode": "background",
-  "outputTranscript": false
+  "version": 1,
+  "enabled": true,
+  "routing": "headroom-preferred",
+  "concurrency": 3,
+  "threads": 4,
+  "slots": 8,
+  "pending": 4,
+  "persist": false,
+  "schedules": false,
+  "workflows": false,
+  "fffPath": "/absolute/approved/pi-fff/src/index.ts",
+  "skillPaths": {
+    "mermaid": "/absolute/approved/mermaid/SKILL.md",
+    "teach": "/absolute/approved/teach/SKILL.md",
+    "code-review": "/absolute/approved/code-review/SKILL.md"
+  }
 }
 ```
 
-`scopeModels` checks caller-selected models against Pi's exact `enabledModels` entries. If that list is absent or empty, the package treats the check as a no-op. Frontmatter-pinned models are authoritative, which is why these templates deliberately do not pin one.
+Bundled local roles require no FFF package or external skills. They use built-in
+`read`/`grep`/`find`/`ls`, plus compatible role-approved parent FFF tools when
+available. Worktree children use their own built-ins, not the parent's search index.
+The example's `fffPath`/`skillPaths` are explicit custom-resource options; omit them
+for bundled roles. Missing explicit custom requirements block only affected launches.
 
-## Model selection
+Bundled child sessions do not load third-party packages, external skills or ambient
+extension hooks. Optional tool metadata/initialization failures fall back to built-ins
+before any model request; failed optional tool calls return a tool error with a
+fallback hint. Known startup error codes are preserved without raw provider errors.
+This does not protect against an extension crashing, hanging or corrupting the shared
+Pi process. Command registration alone is not provider or terminal acceptance. Provider credentials remain in `/login`, environment
+or provider profiles. Research needs configured Web Research credentials.
 
-Keep the reviewed repository templates model-neutral. They inherit the parent's current `/model` by default, while the coordinator can select a model for one invocation:
+`headroom-preferred` borrows the parent's healthy compatible route, otherwise warns
+and uses the exact upstream provider. Submitted failures are never replayed.
+Explicit `native` routing bypasses Headroom. Child retries are disabled.
 
-```javascript
-Agent({
-  subagent_type: "builder",
-  model: "<provider>/<model-id>",
-  thinking: "high",
-  prompt: "<self-contained task packet>",
-  description: "Implement the assigned vertical slice"
-})
+Opt out with `PI_SETUP_SUBAGENTS_NATIVE=0` or global config:
+
+```json
+{"version": 1, "enabled": false}
 ```
 
-Use an exact `provider/model-id` when reproducibility matters. Avoid persistent fuzzy aliases such as `fast`, `smart`, or `sonnet`.
+Project files cannot enable native features. Known configured Tintinweb sources
+suppress default native registration; explicit `PI_SETUP_SUBAGENTS_NATIVE=1`
+rejects conflicts instead. Tintinweb is no longer a required companion. Arbitrary
+renamed loaders are not detectable by this gate; inspect effective resource identity.
 
-For a stable machine-local preference, edit the installed copy under `~/.pi/agent/agents/`, add `model: <provider>/<model-id>` to its frontmatter, then run `/reload`. Do not add personal model pins to the canonical `pi/agents/` templates. Inspect effective assignments and availability warnings with `/agents`.
+For existing devices, present separately numbered proposals:
 
-Model precedence is: frontmatter model > invocation model > parent model. A frontmatter pin therefore prevents a caller from overriding that role for one invocation. In v0.14.3, an unavailable frontmatter model falls back to the parent model; `/agents` reports the unavailable assignment and inherited fallback.
+1. Verify package resources, `/agents`, native roles and approved dependencies.
+   Test native roles with focused, resource-capped checks; no preview launcher is shipped.
+2. Audit legacy package sources, manual loaders, `~/.pi/agent/agents/*.md` and
+   `~/.pi/agent/subagents.json`. Identify custom files/model pins before cleanup.
+3. Privately back up exact approved targets outside the repository, with directory
+   mode `0700` and file mode `0600`. Re-read and stop on drift.
+4. Remove only approved legacy sources/files. Preserve custom definitions, unknown
+   config, logs, archives, memory, credentials, unrelated MCP and selected theme.
+   Use `/agents import` only when selected custom definitions need conversion.
+5. Run `/reload` or restart; verify `/agents`, one tool owner and native role behavior.
+   Retain backups until migration is accepted.
 
-Use `/scoped-models` to maintain Pi's exact `enabledModels` entries. With `scopeModels: true`:
+No automatic cleanup, template copying or legacy-settings translation occurs.
+Legacy `Explore.md` is user-owned; the native hard-two `Explore` evaluator is
+separate and does not activate that file. Keep custom legacy files until separately
+reviewed for import or deletion.
 
-- a runtime-selected out-of-scope model produces a hard error;
-- a frontmatter-pinned out-of-scope model emits a warning and then runs;
-- an inherited out-of-scope parent model emits a warning and then runs;
-- if `enabledModels` is absent or empty, scope checking is a no-op.
+Rollback: drain native work, opt out if restoring a legacy runtime, and restore
+only approved backed-up files/sources when targets have not drifted. Never overwrite
+newer state. Restart and verify restored runtime. Theme changes and unrelated
+web-skill/MCP/route cleanup require separate approval.
 
-Direct RPC and scheduled paths do not make this a strict policy boundary; enforce compliance outside the agent runtime when that is required. The v0.14.3 scope resolver accepts exact entries only: globs, bare model IDs, and `:thinking` suffixes are silently dropped. If every configured entry is dropped, the resulting empty exact allowlist makes scope checking a no-op. Prefer `/scoped-models`, which writes exact `provider/model-id` entries.
-
-Treat model scoping as an operator guardrail, not a compliance boundary. Confirm the actual model in `/agents`, especially after provider or profile changes.
-
-Run `/reload` or restart Pi. Open `/agents` and confirm all four roles appear as global agents.
-
-## Task packets and completion gates
-
-Because every role starts with fresh context, give it a self-contained packet instead of relying on conversation inheritance:
+## Self-contained task packets
 
 ```text
 Goal:
@@ -136,115 +214,76 @@ Required deliverable:
 Effort/turn budget:
 ```
 
-Narrow the packet to the role. Give Ciung sanitized public questions and URLs, Laya repository paths and the execution path to trace, Sangkur an explicit file allowlist and one vertical slice, and Prabu the review evidence packet below.
+Use sanitized public questions/URLs for researcher. Give scout focused entry points
+and questions, not a whole-repository scan. Give builder explicit worktree file
+scopes and acceptance criteria. Give reviewer actual diff, affected-file context,
+acceptance criteria and exact command output; reviewer cannot execute verification.
 
-A result marked `steered`, `aborted`, or `stopped` is incomplete. It may contain useful evidence, but it cannot authorize implementation, approval, integration, or publication. The parent must reframe or resume the task and obtain a complete result.
+Example builder request through `agent_spawn` (the compatibility `Agent` tool
+does not accept the required `files` scope):
 
-For Prabu, supply:
-
-```text
-Base/head revision:
-Actual diff:
-Affected-file context:
-Acceptance criteria and invariants:
-Verification commands:
-Exact command output:
-Known gaps and unverified assumptions:
+```javascript
+agent_spawn({
+  path: "implement-feature",
+  type: "builder",
+  task: "Implement only the supplied acceptance criteria; report tests not run.",
+  files: ["src/feature.ts", "tests/feature.test.ts"],
+  wait: false
+});
 ```
 
-The parent owns every gate: acceptance criteria, test execution, interpretation of partial results, branch integration, commit, push, deployment, and publication.
+Exact thread/run identifiers prevent stale controls. Message delivery is context,
+not proof of model consumption. Waiter cancellation does not stop workers.
+Follow-up/resume admits a distinct run; native fork and persisted conversation
+resume are unsupported. Steered, aborted, stopped or incomplete work is not complete.
 
-## Daily orchestration
+## Parent-owned completion gates
 
-### Fast understanding
+1. Inspect outputs against acceptance criteria and evidence, not agent confidence.
+2. Review builder's owned worktree/branch and actual diff before integration.
+3. Parent runs focused behavior tests and relevant regression, retaining exact
+   command output. Builder/reviewer cannot claim command execution.
+4. Send at most two focused repair rounds with exact failures and unchanged scope.
+5. Keep unverified work incomplete; do not push, merge, deploy or publish implicitly.
 
-```text
-Run Ciung (`researcher`) and Laya (`code-mapper`) in parallel for this task. Wait for both, reconcile disagreements, then give me one implementation recommendation. Do not edit yet.
-```
-
-### Amp-like build loop
-
-```text
-Use the agent team for this change:
-1. Ciung (`researcher`) checks current external constraints only if needed;
-2. Laya (`code-mapper`) traces the relevant code and tests;
-3. synthesize acceptance criteria and send a self-contained task packet;
-4. Sangkur (`builder`) prepares the smallest behavior test and expected implementation in its worktree, marking execution as pending;
-5. the parent executes focused tests and feeds exact failure output back for a narrowly scoped repair when needed;
-6. the parent supplies the actual diff, affected-file context, and exact verification results to Prabu (`reviewer`) for independent, read-only assessment.
-Do not merge or push. Return the branch and a go/no-go verdict.
-```
-
-### Parallel reconnaissance
-
-```text
-Spawn Ciung (`researcher`) for upstream behavior and Laya (`code-mapper`) for our current implementation in the background. Keep working on the task framing while they run, then join their results before deciding.
-```
-
-Use foreground mode when the next decision depends immediately on one result. Use background mode for independent work; the default smart join consolidates agents spawned in the same turn.
-
-## Integrating builder output
-
-Builder's worktree isolation creates a local `pi-agent-*` branch only when changes exist. Builder cannot execute tests, so this is a test-first preparation loop—not autonomous RED/GREEN TDD. The parent should:
-
-1. Inspect the returned branch and commit.
-2. Capture `git diff <base>...<branch>` and the affected-file context.
-3. Run the focused behavior test and relevant regression suite in a clean integration checkout; retain exact command output.
-4. If verification fails, send Sangkur the exact failure, current acceptance criteria, and same file allowlist for one focused repair.
-5. Run verification again. Use at most two focused repair rounds; after that, reframe the task or escalate instead of widening authority.
-6. Supply Prabu the review evidence packet and obtain a complete verdict.
-7. Cherry-pick or merge only after the review verdict and tests pass.
-8. Push or open a PR from the parent session, never from the subagent by default.
-
-## Trust boundary
-
-`@tintinweb/pi-subagents` discovers project definitions from `.pi/agents/*.md` and `.agents/agents/*.md`. A globally loaded package can discover those files even when Pi is launched with `--no-approve`. Extension selection or exclusion is not a sandbox: discovered extension factory code may execute before child binding or filtering decides which extensions and tools the role receives.
-
-Therefore:
-
-- Reusable trusted roles belong in `~/.pi/agent/agents/`.
-- The repository keeps inert templates under `pi/agents/`, which is not an auto-discovery path.
-- Do not run any team role directly in an untrusted repository, including a trusted global role. Use a container, VM, or dedicated user first.
-- Before using any project agent, inspect `extensions`, `tools`, `model`, `skills`, `memory`, `prompt_mode`, and isolation fields.
-- `isolated: true`, worktrees, extension exclusions, tool filters, and permission prompts may reduce authority or separate files, but none is an operating-system sandbox or a guarantee against external side effects.
-
-## Lightweight evaluation
-
-[`pi/agents/evaluation-scorecard.json`](../../pi/agents/evaluation-scorecard.json) freezes eight synthetic/public cases—two per role—and five 0–2 outcome criteria. It is data only, not another agent or routing runtime.
-
-Use it when comparing prompts or model assignments:
-
-1. Change one variable at a time.
-2. Run the same frozen cases with self-contained packets.
-3. Score correctness, evidence, scope discipline, tool efficiency, and actionability.
-4. Record concrete reasons for deductions; compare outcomes, not identical trajectories.
-5. Keep private repositories and transcripts out of the fixture. If more cases are needed, add them only after a repeated failure mode is observed.
+Reload/session replacement drains workers. Unconfirmed cleanup quarantines runtime;
+retained worktree evidence is preserved. Use exact-run controls before artifact
+cleanup. See [component limits](../../pi/extensions/subagents/README.md) and
+[shared-host validation](operations.md#repository-validation-on-shared-hosts).
 
 ## Verification
 
-From the repository root:
+After `/reload`, check `/agents types` lists the four native roles. Verify one subagent tool
+owner, then run a scoped scout task using built-ins; optional FFF is not a launch
+requirement. Separately test available parent search tools and their failure fallback.
+Command registration alone does not prove provider or terminal acceptance.
+
+## Role evaluation
+
+[`evaluation-scorecard.json`](../../pi/extensions/subagents/evaluation-scorecard.json)
+freezes eight synthetic/public cases, two per native role. Score correctness,
+evidence, scope discipline, tool efficiency and actionability from 0–2; retain
+specific deductions and change one prompt/model variable per run. No new runtime
+or private transcript collection is required.
+
+Focused portable contract check:
 
 ```bash
-node --test pi/agents/agent-templates.test.ts
-node --test pi/extensions/*/*.test.ts
-npm run test:signature
+node --test --test-concurrency=1 pi/extensions/subagents/agents.test.ts
 ```
 
-Inside Pi:
+SDK/provider/UI acceptance remains separate from static role contracts. Use hard
+process limits for SDK checks; defer under host pressure and report gaps.
 
-```text
-/reload
-/agents
-```
+## Trust boundaries
 
-Smoke test with a harmless read-only request:
+Extensions run with Pi's OS permissions. Never invoke untrusted project roles,
+extensions or skills. Native project discovery requires explicit project trust;
+legacy clients may discover `.pi/agents/` or `.agents/agents/` differently.
 
-```text
-Ask Laya (`code-mapper`) to explain this repository's setup-document ownership. Do not edit anything.
-```
+Built-ins remain fresh-context. Explicit bounded snapshots are loadout-filtered;
+researcher and `Explore` reject local inheritance. Parent/provider/tool logs and
+retained results may still contain private data even when child transcripts are
+disabled. Do not send secrets or proprietary identifiers to web tools.
 
-Expected: the role appears as global, uses only read/grep/find/ls, cites repository files, and returns an explicit deliverable. Then run a researcher query and confirm only `web_search`/`web_fetch` are exposed from the `web-research` extension, `my-web-search` is preloaded, and no local/MCP/9router tools are available.
-
-## Rollback
-
-Restore each prior `*.md` from the printed private backup directory, or remove a newly added role if no prior file existed. Restore the separately backed-up `~/.pi/agent/subagents.json`; if the package itself must be rolled back, reinstall the previously reviewed package tag before running `/reload` or restarting Pi. Do not delete legacy skills, MCP configuration, credentials, caches, or logs as part of rollback unless they were separately audited and explicitly approved for removal.
+Run `/reload` after package/config changes; restart after environment changes.

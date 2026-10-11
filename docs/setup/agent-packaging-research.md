@@ -1,16 +1,23 @@
 # Pi Agent Template Packaging Research
 
-**Checked:** 2026-10-05
+**Original research:** 2026-10-05. **Local architecture updated:** 2026-10-12.
 
 ## Conclusion
 
-Pi packages can ship agent template files as package contents, but Pi's native package manifest does **not** declare or deploy agent definitions. Package upgrades therefore do not automatically create or refresh trusted global agents under `~/.pi/agent/agents/`.
+Pi's native package manifest does **not** declare agent definitions. This package
+ships its own extension loader, which reads the four bundled roles directly from
+[`pi/extensions/subagents/agents/`](../../pi/extensions/subagents/agents/).
+Package installation therefore makes native roles available without copying
+definitions into a user-owned global directory.
 
-This repository's current split is correct:
+Current ownership:
 
-- Ship reviewed templates under `pi/agents/`.
-- Deploy approved copies to `~/.pi/agent/agents/` through `pi-setup`.
-- Back up existing global files, preserve local edits/model choices, then run `/reload`.
+- Bundled researcher, scout, builder and reviewer are package-owned.
+- Custom definitions and sparse overrides belong to
+  `~/.pi/agent/subagent-manager/agents/`; trusted project definitions use
+  `.pi/agent/subagent-manager/agents/`.
+- Legacy `~/.pi/agent/agents/` files remain user-owned. Audit, private backup and
+  explicit approval precede import or cleanup; preserve custom definitions/model pins.
 
 ## Evidence
 
@@ -18,19 +25,26 @@ This repository's current split is correct:
 |---|---|
 | Native Pi package resource types are extensions, skills, prompts, and themes | Official Pi package docs: <https://pi.dev/docs/latest/packages>; installed Pi source `dist/core/pi-manifest.d.ts` exposes only `extensions`, `skills`, `prompts`, and `themes`. |
 | Pi package manager resolves package resources; it does not copy agents into the global agent directory | Installed Pi source `dist/core/package-manager.d.ts` exposes `ResolvedPaths` only for extensions, skills, prompts, and themes. |
-| This repository includes templates in the published artifact but not the Pi resource manifest | Root `package.json` includes `"pi/agents"` under `files`, while `pi` declares only `extensions`, `skills`, and `themes`. |
-| Existing global agent files are user-owned and separate | `docs/setup/subagents.md` and `skills/pi-setup/SKILL.md` define deployment to `~/.pi/agent/agents/` with backup and approval gates. |
+| This repository loads bundled roles through an extension | [Root manifest](../../package.json) ships `pi/extensions`; [registry](../../pi/extensions/subagents/registry.ts) loads extension-owned definitions. The retired `pi/agents/` directory is absent. |
+| Existing global agent files are user-owned and separate | [Subagent cutover](subagents.md#native-runtime-cutover) defines reviewed import/cleanup; package updates do not overwrite legacy files or native custom definitions. |
 
 ## Upgrade behavior
 
 1. Pi updates the installed package source and its declared native resources.
-2. New `pi/agents/*.md` files may exist inside the updated package installation.
-3. Existing files in `~/.pi/agent/agents/` remain unchanged.
-4. Updated templates require an explicit deployment/migration step.
-5. `/reload` reloads resources after deployment; it does not perform the deployment itself.
+2. Updated bundled role definitions arrive with the extension code.
+3. Existing legacy files and native user overrides remain unchanged.
+4. `/reload` or restart loads updated package code and bundled definitions; it
+   drains active native workers. `/agents reload` reloads definitions only, while
+   already admitted threads retain their definition snapshots.
+5. Legacy source removal or selected custom-agent import remains a separate,
+   explicitly approved migration.
 
-A package extension could write files as custom code, but that would be bespoke post-install mutation, not native agent packaging. It would also violate this repository's non-destructive installation policy.
+Native registration is default-on unless explicitly disabled or suppressed by a
+configured Tintinweb source. No runtime config or global role copies are generated.
 
 ## Recommendation
 
-Keep current architecture. Improve update UX through an explicit read-only audit that reports template drift, followed by an approval-gated deployment proposal. Do not silently overwrite global agent files during package install or update.
+Use the [current setup guide](subagents.md) for bundled roles, native overrides
+and legacy cutover. The original manual template-deployment recommendation is
+superseded by the extension-owned loader. Continue read-only audits and separately
+approved migration for existing devices.

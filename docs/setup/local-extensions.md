@@ -6,8 +6,11 @@ The first-party Pi package loads repository-owned extensions directly. Required 
 
 Package-owned `pi/extensions/todos/index.ts` replaces the former `npm:@juicesharp/rpiv-todo` companion. Inspired by Armin Ronacher's (`mitsuhiko`) Todos extension in [agent-stuff](https://github.com/mitsuhiko/agent-stuff), licensed Apache-2.0. The [component README](../../pi/extensions/todos/README.md) owns the exact upstream commit reference.
 
-- `todo` actions: `list`, `list-all`, `get`, `create`, `update`, `append`, `delete`, `claim`, `release`.
-- `/todos` opens an interactive, searchable manager for project tasks.
+- `todo` defaults to `scope: "project"`, preserving `list`, `list-all`, `get`, `create`, `update`, `append`, `delete`, `claim`, `release` and the existing file format.
+- `/todos` chooses between **This session** and **Project todos**. `/todos project [search]` opens the existing searchable project manager; `/todos [search]` remains a project search except reserved `plan`, `project` and `collapse` arguments.
+- `/todos plan` lets humans add/edit/reorder session steps, set progress/blocker notes, complete/reopen, or confirm deletion. Agents use `todo` with `scope: "session"` and `PLAN-<number>` IDs. Session actions omit claims and add `reorder`; statuses are `pending`, `in_progress`, `blocked`, `completed`. Blocked steps require a reason in `note`.
+- A compact panel above the editor shows blockers/current work in at most four rows, with completed steps folded into its count. When Subagents is active, both share a six-row resting budget with Todos first; agent navigation may expand it to ten rows. Short terminals reduce those limits. Either extension works alone. `/todos collapse` still toggles the panel, but command hints are not permanently displayed. Unfinished steps show **agent idle** when the run ends. Notes are reported progress, not observed tool activity. No new global arrow-key interception or automatic agent dispatch.
+- Session plans journal successful agent and manual mutations in Pi conversation history, including calls nested inside codemode, separately from project files. Reload/resume/compaction/tree navigation replay the active branch; child sessions cannot repaint the foreground plan or write through a parent's journal. Child plan mutations require their own loaded Todos extension. Manual edits reject stale revisions and are included in the next agent run's plan context. Tool callers should supply `expectedRevision` from the last response when changing an existing plan. See [session plan details](../../pi/extensions/todos/README.md#session-plan).
 - Default store: `.pi/todos` under Pi's current working directory. `PI_TODO_PATH` can select another store; relative values resolve against cwd, absolute values are used directly.
 - Todo IDs use `TODO-` followed by eight hexadecimal characters (`TODO-8hex`). Files contain JSON frontmatter plus a Markdown body.
 - Transient `.lock` files serialize individual edits; persistent session claims record task ownership across edits. A completed write does not release a session claim. Use `claim`/`release` for ownership rather than treating an edit lock as a claim.
@@ -48,7 +51,7 @@ Persistence has separate owners. The extension controls only its in-memory cache
 
 Fallback is allowed only after an empty/all-failed response or an exhausted retryable operational failure. Authentication, payment/quota, permission, validation, cancellation, and safety failures fail closed without switching providers. Search snippets are discovery aids; load `my-web-search` and fetch important sources before treating a material claim as confirmed.
 
-Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and rollback purposes, but the native tools do not call them. Do not remove legacy packages, skills, MCP configuration, credentials, caches, or logs until the migration gate is separately approved. Run `/reload` after package updates, then verify both tools and Ciung as described in [Subagent Team](subagents.md#verification).
+Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and rollback purposes, but the native tools do not call them. Do not remove legacy packages, skills, MCP configuration, credentials, caches, or logs until the migration gate is separately approved. Run `/reload` after package updates, then verify both tools and the bundled researcher as described in [Subagent Team](subagents.md#verification).
 
 ## Irfan Devs theme bundle
 
@@ -96,6 +99,13 @@ uv tool install "headroom-ai[proxy]"
 ```
 
 The Headroom adapter loads from the first-party package. Its CLI and `~/.pi/agent/headroom/config.json` remain external/user-owned and must survive package updates and duplicate cleanup.
+
+The default-enabled first-party subagent-manager fork can borrow parent route
+metadata through public registry identity. Before each child request it prefers
+healthy Headroom, otherwise warns and uses the exact upstream with current parent
+auth/OAuth headers. It never replays an already-submitted request or starts a
+child-owned proxy. Private Pi profiles keep Headroom config/log/PID state under
+their own agent directory; real provider/proxy behavior remains a manual gate.
 
 npm `headroom-ai` is SDK-only.
 
@@ -365,7 +375,7 @@ If old upstream config exists at `~/.pi/agent/caveman.json`, local extension rea
 
 Purpose: Pi-working-root-scoped `/goal` command with persisted state, completion receipts, usage limits, verification evidence, and auto-continue loops.
 
-Requires Pi `>=0.80.4` and the separately managed `@tintinweb/pi-subagents` companion. Extension records run output at `agent_end`, calls separate evaluator, and makes one continuation decision at `agent_settled`.
+Packaged setup requires Pi `>=1.0.0` and a reviewed protocol-v2 subagent backend. Normal setup uses package-owned native subagents; legacy Tintinweb sources suppress native registration until separately approved removal. Native runtime supplies the dedicated fresh read-only hard-two `Explore` evaluator. Spawn/terminal timeout cleanup targets the exact request/run. Extension records run output at `agent_end`, calls separate evaluator, and makes one continuation decision at `agent_settled`.
 
 Goal Loop loads from the first-party package. Preserve `~/.pi/agent/goal-loop/` config, state, archive, and logs when removing a legacy manual loader.
 
@@ -429,7 +439,7 @@ Extension does not bypass Pi permissions. It does not schedule work after Pi exi
 
 Purpose: repo-owned Cursor-style `/loop` for repeated local prompts. It runs once immediately, then continues on fixed intervals or agent-selected time/safe-event wakes until agent declares completion, user stops it, or Pi exits.
 
-Requires Pi `>=0.80.4`, package-owned Goal Loop, and the separately managed `@tintinweb/pi-subagents` companion using RPC protocol version 2.
+Packaged setup requires Pi `>=1.0.0`, package-owned Goal Loop, and a reviewed protocol-v2 subagent backend. Normal setup uses package-owned native subagents; legacy Tintinweb sources suppress native registration until separately approved removal. Native runtime supplies the dedicated fresh read-only hard-two `Explore` evaluator. Native wakes correlate run IDs as well as legacy agent IDs so an old completion cannot wake a resumed run.
 
 Prompt Loop and Goal Loop load together from the first-party package. Existing devices should use the approval-gated migration audit to remove only verified legacy loaders, then run `/reload` or restart Pi.
 

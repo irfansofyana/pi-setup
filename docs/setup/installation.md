@@ -32,14 +32,22 @@ Install a reviewed release tag:
 pi install git:github.com/irfansofyana/pi-setup@v0.6.0
 ```
 
-Replace `v0.6.0` with a newer release only after reviewing it. One install provides:
+Replace `v0.6.0` with a newer release only after reviewing it.
+
+This branch prepares `0.7.0`; `v0.7.0` is not published yet. Once that tag is
+published and reviewed, use `pi install git:github.com/irfansofyana/pi-setup@v0.7.0`.
+The resource inventory below describes the upcoming branch; `v0.6.0` retains its
+legacy subagent setup. See [release preparation](operations.md#release-preparation).
+
+The upcoming package provides:
 
 - all declared repository extensions under `pi/extensions/`;
 - themes under `pi/themes/`, including recommended `pi-irfan-devs` and unrelated blue/Gruvbox alternatives;
 - integrated editor and Signature from `pi/themes/pi-irfan-devs/index.ts` only, with no compatibility or standalone Signature adapter;
 - seven prompt templates under `pi/prompts/`, loaded as slash commands;
 - the bundled `pi-setup` skill;
-- metadata listing the three companion package sources and their minimum version floors for the setup skill;
+- native subagent roles and their extension-owned loader, with no global template copying;
+- metadata listing the two companion package sources and their minimum version floors for the setup skill;
 
 Do not clone the repository, install the setup skill separately, or copy package resources into `~/.pi/agent/` for a normal fresh setup. Companion packages are installed separately because they retain independent ownership, updates, and lifecycle scripts.
 
@@ -124,7 +132,7 @@ The audit must cover:
 - duplicate `ask_user_question` registrations from separately loaded extensions; source removal and configuration cleanup need separate explicit approval; do not edit local settings during repository implementation;
 - separately installed `9router-web-researcher`, Tavily/Exa MCP definitions, and legacy 9router web routes as distinct migration targets;
 - trusted global agents and subagent defaults;
-- installed Ciung template tool restrictions for old versus native web tools;
+- native bundled-role boundaries, user overrides and exact legacy agent files/config as separate import/cleanup targets;
 - credential references by name only, with values redacted.
 
 A matching name is not enough to delete a path. The skill must distinguish a duplicate code loader from user-owned config/state. For example, `~/.pi/agent/hindsight/config.json` remains user-owned even after Hindsight code loads from the package.
@@ -155,7 +163,7 @@ The cleanup order is:
 4. reload/restart Pi;
 5. verify the component before continuing.
 
-The three current companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates. The retired `npm:@juicesharp/rpiv-todo` source is different: verify bundled Todos first, then remove the old source only after separate explicit approval to avoid duplicate tools. Preserve its data and settings; no rpiv-todo migration or local settings activation is part of package installation. See [Todos](local-extensions.md#todos).
+The two current companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates. Tintinweb is now a legacy subagent source; its removal requires a separate [native cutover proposal](subagents.md#native-runtime-cutover). The retired `npm:@juicesharp/rpiv-todo` source is also separate: verify bundled Todos first, then remove the old source only after explicit approval to avoid duplicate tools. Preserve its data and settings; no rpiv-todo migration or local settings activation is part of package installation. See [Todos](local-extensions.md#todos).
 
 Structured questions are package-owned. Verify `ask_user_question` is registered once before proposing duplicate-source removal. Preserve user-owned configuration unless its cleanup is separately approved; package installation changes no local settings. See [Structured questions](local-extensions.md#structured-questions) for interactive checks and session-result privacy.
 
@@ -178,15 +186,16 @@ Inside Pi:
 /settings
 ```
 
-Verify expected commands, tools, skills, themes, and prompt templates once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context Ciung run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
+Verify expected commands, tools, skills, themes, and prompt templates once each; confirm component config/state still works. For web migration, verify direct `web_search` and `web_fetch`, then a fresh-context bundled `researcher` run with only those tools and `my-web-search`, before approving any old-route removal. Keep backups until the user accepts the migration. Restore only the failed component's approved legacy loader—never stale settings over newer user data.
 
 ## Global subagent templates
 
-Pi package resources do not natively include agents. The package includes reviewed source templates, but they are not automatically activated.
+Native researcher, scout, builder and reviewer are bundled package resources; no
+global copying is required. Native custom definitions use
+`~/.pi/agent/subagent-manager/agents/`. Audit and privately back up exact approved
+legacy files before cleanup; preserve custom definitions and model pins.
 
-Use the bundled `pi-setup` skill to audit and propose deployment to `~/.pi/agent/agents/` and narrow merges into `~/.pi/agent/subagents.json`. Deployment requires explicit approval, private backup, template review, and preservation of machine-local model choices unless replacement is approved.
-
-See [Subagent team](subagents.md#install-the-trusted-templates) for the authoritative deployment and rollback procedure.
+See [Subagent team](subagents.md#native-runtime-cutover) for migration and rollback.
 
 ## Install Headroom CLI
 

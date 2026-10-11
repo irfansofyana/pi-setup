@@ -13,18 +13,18 @@ Read-only review. Do not edit files, implement fixes, commit, or push.
 2. The parent collects the actual diff, affected-file context, and verification
    evidence. Run appropriate safe checks when feasible; mark other checks not
    run. Reviewers cannot execute shell commands or tests.
-3. Use two trusted global reviewer (Prabu) instances in one parallel batch:
+3. Use two package-owned native reviewer instances in one parallel batch:
    - Standards lane: documented repository rules, ownership, compatibility,
      security, and maintainability.
    - Spec lane: requirements, correctness, acceptance criteria, failure paths,
      and test coverage.
-4. Use inherit_context: false, run_in_background: true, and max_turns: 20.
-   Require output_transcript: false in the deployed global role configuration,
-   not as an Agent argument. Supply each lane a self-contained task packet with
+4. Use agent_spawn with wait: false and maxTurns: 20. Bundled role policy
+   enforces fresh context and no persisted child transcripts.
+   Supply each lane a self-contained task packet with
    actual diff, affected-file context, criteria, exact redacted test outcomes,
    gaps, exclusions, and required deliverable. Keep reviewers read-only and
    network-free; they may not spawn nested agents.
-   If the global role is unavailable, report the blocker; do not substitute
+   If the native role is unavailable, report the blocker; do not substitute
    project agents or broader built-in roles. Use isolated execution outside
    untrusted repositories, following the agent team's trust guidance.
 5. Join complete results without polling. Treat stopped, aborted, cancelled,

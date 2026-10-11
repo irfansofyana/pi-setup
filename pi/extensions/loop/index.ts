@@ -75,6 +75,7 @@ export interface LoopExtensionOptions {
 
 interface TerminalSubagentEvent {
   id: string;
+  runId?: string;
   failed: boolean;
 }
 
@@ -191,7 +192,8 @@ function terminalSubagentEvent(value: unknown, failed: boolean): TerminalSubagen
   if (!value || typeof value !== "object") return undefined;
   const raw = value as Record<string, unknown>;
   if (typeof raw.id !== "string" || !raw.id) return undefined;
-  return { id: raw.id, failed };
+  if(raw.runId!==undefined&&(typeof raw.runId!=="string"||!raw.runId))return undefined;
+  return { id: raw.id, failed,...(typeof raw.runId==="string"?{runId:raw.runId}:{}) };
 }
 
 function eventCorrelationId(value: unknown): string | undefined {
@@ -247,6 +249,7 @@ export class LoopController {
   private runFailureReason?: "aborted" | "error" | "length" | "toolUse";
   private wakeContext = "";
   private createdSubagents = new Set<string>();
+  private createdSubagentRuns = new Map<string,string>();
   private terminalSubagents = new Map<string, TerminalSubagentEvent>();
   private sharedWakeEvents = new Map<string, SharedWakeEvent>();
   private bufferedFileWake?: BufferedFileWake;
@@ -403,6 +406,7 @@ export class LoopController {
     this.state.startedAt = this.now();
     this.state.iteration += 1;
     this.createdSubagents.clear();
+    this.createdSubagentRuns.clear();
     this.terminalSubagents.clear();
     this.sharedWakeEvents.clear();
     this.bufferedFileWake = undefined;
@@ -801,7 +805,9 @@ export class LoopController {
     if (!this.runActive || !value || typeof value !== "object") return;
     const raw = value as Record<string, unknown>;
     if (raw.isBackground !== true || typeof raw.id !== "string" || !raw.id) return;
+    if(this.createdSubagents.size>=100&&!this.createdSubagents.has(raw.id))return;
     this.createdSubagents.add(raw.id);
+    if(typeof raw.runId==="string"&&raw.runId){this.createdSubagentRuns.set(raw.id,raw.runId);this.terminalSubagents.delete(raw.id);}
   }
 
   private onSubagentTerminal(value: unknown, failed: boolean): void {
@@ -809,6 +815,7 @@ export class LoopController {
     const state = this.state;
     if (!event || !state) return;
     if (!this.createdSubagents.has(event.id) && state.waitingSubagentId !== event.id) return;
+    const expected=this.createdSubagentRuns.get(event.id);if(expected&&event.runId!==expected)return;
     this.terminalSubagents.set(event.id, event);
     while (this.terminalSubagents.size > 100) {
       const oldest = this.terminalSubagents.keys().next().value as string | undefined;
@@ -853,6 +860,7 @@ export class LoopController {
     this.runAwaitingSettlement = false;
     this.evaluationToken = undefined;
     this.createdSubagents.clear();
+    this.createdSubagentRuns.clear();
     this.terminalSubagents.clear();
     this.sharedWakeEvents.clear();
     this.updateStatus();

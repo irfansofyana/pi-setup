@@ -9,15 +9,15 @@ If the requested change is missing or materially ambiguous, ask first.
 
 1. Read repository instructions and the relevant requirements. State the user
    outcome, scope, explicit non-goals, and observable acceptance criteria.
-2. Use the trusted global code-mapper (Laya) to trace the existing behavior,
+2. Use the package-owned native scout to trace the existing behavior,
    owning files, invariants, failure paths, and test seams.
-   Use inherit_context: false, run_in_background: true, and max_turns: 20
-   with a self-contained task packet. Require output_transcript: false in the
-   deployed global role configuration, not as an Agent argument.
-   If the global role is unavailable, report the blocker; do not substitute
+   Use agent_spawn with wait: false and maxTurns: 20 and a self-contained
+   task packet. Bundled role policy enforces fresh context and no persisted
+   child transcripts.
+   If the native role is unavailable, report the blocker; do not substitute
    project agents or a broader built-in role. Use isolated execution outside
    untrusted repositories, following the agent team's trust guidance.
-3. Add one trusted global Ciung research lane only when external factual
+3. Add one package-owned native researcher lane only when external factual
    uncertainty affects the decision. Use bundled my-web-search and sanitized
    public questions; never send local file contents or private identifiers.
 4. Join complete results without polling. Compare the smallest viable approach

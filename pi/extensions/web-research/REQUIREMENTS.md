@@ -5,6 +5,10 @@ Date: 2026-08-30
 Updated: 2026-08-31 — implementation approved; live-device removal remains separately gated
 Scope: Extension, bundled skill, Ciung template source, tests, trackers, and setup documentation
 
+Current integration uses the bundled native `researcher` role. Ciung and legacy
+frontmatter/deployment descriptions below record the original research design;
+legacy global templates are retired. See [current subagent setup](../../../docs/setup/subagents.md).
+
 ## 1. Purpose
 
 Replace the `9router-web-researcher` skill and, after measured parity, Pi's Tavily/Exa MCP integrations with a native Pi web extension that Irfan controls.
@@ -213,7 +217,7 @@ pi-setup
 ├── skills/my-web-search/
 │   ├── SKILL.md
 │   └── references/
-└── pi/agents/researcher.md
+└── pi/extensions/subagents/agents/researcher.md
 ```
 
 ### S-2 — Responsibility

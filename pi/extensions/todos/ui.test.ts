@@ -38,6 +38,6 @@ test("interactive manager renders narrow Unicode tasks, preserves focus, and clo
 			component.handleInput("tui.select.cancel");
 		},
 	};
-	await command.handler("", ctx);
+	await command.handler("project", ctx);
 	assert.equal(closed, true);
 });

@@ -61,17 +61,16 @@ test("native Pi loader discovers commands and expands quoted or empty arguments"
   }
 });
 
-test("delegating prompts retain trusted global role and bounded context boundaries", async () => {
+test("delegating prompts use native bundled roles and bounded context boundaries", async () => {
   for (const name of names.filter((name) => name !== "push-changes")) {
     const { body } = parse(await read(name));
-    assert.match(body, /trusted global/);
+    assert.match(body, /package-owned native/);
     assert.match(body, /do not substitute[\s\S]*project agents/i);
     assert.match(body, /untrusted repositories/);
-    assert.match(body, /inherit_context: false/);
-    assert.match(body, /max_turns: (?:15|20)/);
-    assert.match(body, /output_transcript: false[\s\S]*global role/);
-    assert.match(body, /not as an Agent argument|do not pass it as an Agent argument/);
-    assert.doesNotMatch(body, /max_turns: \d+,\s*(?:and\s+)?output_transcript:/);
+    assert.match(body, /agent_spawn with wait: false/);
+    assert.match(body, /maxTurns: (?:15|20)/);
+    assert.match(body, /fresh context and no persisted\s+child\s+transcripts/);
+    assert.doesNotMatch(body, /Ciung|Laya|Prabu|trusted global|inherit_context:|output_transcript:|max_turns:/);
     assert.doesNotMatch(body, /^model:/m);
   }
 });
@@ -80,7 +79,7 @@ test("research commands use focused parallel lanes and source evidence without e
   for (const name of ["research", "research-fit", "research-gap"]) {
     const { body } = parse(await read(name));
     assert.match(body, /parallel batch/);
-    assert.match(body, /run_in_background: true/);
+    assert.match(body, /wait: false/);
     assert.match(body, /self-contained/);
     assert.match(body, /sanitized\s+public/);
     assert.match(body, /private URLs[\s\S]*local file\s+contents[\s\S]*credentials/);
@@ -90,7 +89,7 @@ test("research commands use focused parallel lanes and source evidence without e
     assert.match(body, /stopped[\s\S]*incomplete/i);
   }
   assert.match(await read("research"), /2–3 non-overlapping lanes/);
-  assert.match(await read("research-fit"), /repository evidence with Laya/);
+  assert.match(await read("research-fit"), /repository evidence with scout/);
   assert.match(await read("research-gap"), /at most three concurrent agents/);
   assert.match(await read("research-gap"), /Missing documentation is not proof/);
 });
@@ -111,7 +110,7 @@ test("planning stops at approval and debugging stays diagnosis-first", async () 
 
 test("review separates standards/spec lanes without giving reviewers shell authority", async () => {
   const review = await read("review-change");
-  assert.match(review, /two trusted global reviewer \(Prabu\) instances/);
+  assert.match(review, /two package-owned native reviewer instances/);
   assert.match(review, /Standards lane/);
   assert.match(review, /Spec lane/);
   assert.match(review, /Reviewers cannot execute shell commands or tests/);
