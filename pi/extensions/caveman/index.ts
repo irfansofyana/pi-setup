@@ -226,8 +226,8 @@ export function buildCavemanPrompt(level: Level): string {
   return `${BASE_PROMPT}\n\n${INTENSITY[level]}\n\n${SAFETY_PROMPT}`;
 }
 
-export function promptTriggerDecision(prompt: string, config: CavemanConfig): Level | undefined {
-  if (!config.autoTrigger) return undefined;
+export function promptTriggerDecision(prompt: unknown, config: CavemanConfig): Level | undefined {
+  if (!config.autoTrigger || typeof prompt !== "string") return undefined;
   const normalized = prompt.toLowerCase();
   if (/\b(stop caveman|disable caveman|caveman off|normal mode|talk normally|be normal|stop terse|less terse)\b/.test(normalized)) {
     return "off";
@@ -393,7 +393,12 @@ export default function caveman(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     await ensureConfigLoaded();
 
-    const triggerLevel = promptTriggerDecision(event.prompt, config);
+    // Pi 1.2 custom-message turns have no prompt. Only user text may toggle
+    // modes; legacy Pi events without messageType still carry a user prompt.
+    const userPrompt = "messageType" in event && event.messageType !== "user"
+      ? undefined
+      : "prompt" in event ? event.prompt : undefined;
+    const triggerLevel = promptTriggerDecision(userPrompt, config);
     if (triggerLevel) {
       level = triggerLevel;
       persistSessionLevel(pi, level);

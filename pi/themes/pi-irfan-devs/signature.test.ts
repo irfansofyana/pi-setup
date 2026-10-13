@@ -36,6 +36,8 @@ test("Pi theme owns minimal static header, not prominent pulsing banner", () => 
 	const lines = functionSource("devSignatureLines");
 	assert.match(lines, /formatCwdForFooter/);
 	assert.match(lines, /truncateToWidth/);
+	assert.match(lines, /"π"/);
+	assert.doesNotMatch(lines, /IRFAN_DEVS_THEME|pi-irfan-devs/);
 	assert.doesNotMatch(lines, /PI_LINES|center\(|AUTHOR_CREDIT|frame|orbitLogoLines|gradientText/);
 	assert.doesNotMatch(source, /DEVS_PULSE|devPulseColor/);
 	assert.match(functionSource("signatureHeader"), /disposed \|\| theme\.name === IRFAN_DEVS_THEME/);
@@ -73,7 +75,7 @@ test("footer reads current thinking level each render and favors it over provide
 	assert.match(stats, /`thinking \$\{thinkingLevel\}`/);
 	assert.match(stats, /visibleWidth\(withProvider\) <= width/);
 	assert.match(functionSource("compactFooter"), /footerStatsLine\(ctx, theme, footerData, width, getThinkingLevel\(\)\)/);
-	assert.match(source, /compactFooter\(ctx, presentation, \(\) => pi\.getThinkingLevel\(\)\)/);
+	assert.match(source, /compactFooter\(ctx, presentation, \(\) => pi\.getThinkingLevel\(\),/);
 });
 
 test("footer uses persisted cost rollup and hides only duplicate cost status", () => {

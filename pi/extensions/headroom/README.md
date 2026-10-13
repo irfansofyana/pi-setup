@@ -137,7 +137,7 @@ Defaults:
 
 ### Native proxy mode (default)
 
-- Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy.
+- Default startup is automatic. Every Pi session starts a managed local proxy or adopts an already healthy proxy. Successful session startup is silent; the footer and `/headroom status` expose state. Manual start/restart and recovery retain their success notices; startup failures remain visible.
 - Native routing requires the Headroom proxy to report routing readiness before built-in and compatible `models.json` provider overrides are installed. After changing model providers during a session, use `/headroom disable` then `/headroom enable`, or `/reload`, to rebuild routing safely. Stop active child sessions before changing `proxyUrl` or `models.json`; shared runtime routes stay fixed until last lease releases.
 - Readiness is checked again at `turn_start`. If an adopted external proxy disappears, the extension first restores Pi's native providers; the triggering model request stays on native routing, and one managed replacement is attempted after that turn ends when `startup` is `auto`.
 - Manual and off startup modes never recover automatically, and recovery uses no background polling.

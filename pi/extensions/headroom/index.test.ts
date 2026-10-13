@@ -394,6 +394,33 @@ test("session startup registers native provider endpoints with Headroom", async 
     { name: "anthropic", options: { baseUrl: "http://127.0.0.1:8787" } },
     { name: "openai-codex", options: { baseUrl: "http://127.0.0.1:8787/v1" } },
   ]);
+  assert.deepEqual(harness.notices, [], "automatic adoption is silent on success");
+  await harness.commands.headroom.handler("start", harness.ctx);
+  assert.ok(harness.notices.some(notice => notice.message === "Headroom proxy already running (external)." && notice.level === "info"), "manual start still confirms success");
+});
+
+test("quiet automatic startup still reports lifecycle failures", async () => {
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG, notifyFailures: "never" }),
+    health: async () => false,
+    commandAvailable: () => false,
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.ok(harness.notices.some(notice => notice.level === "error" && notice.message.includes("Headroom CLI missing")));
+});
+
+test("successful managed session startup is quiet", async () => {
+  const child = Object.assign(new EventEmitter(), { pid: 9891, exitCode: null, signalCode: null, killed: false });
+  const harness = createHeadroomHarness({
+    readConfig: () => ({ ...DEFAULT_CONFIG }),
+    health: async () => false, commandAvailable: () => true,
+    openLog: () => 12, closeLog: () => {}, spawnProxy: () => child,
+    writePid: () => {}, waitForHealth: async () => true,
+    terminateChild: async () => true,
+  });
+  await harness.handlers.session_start({}, harness.ctx);
+  assert.deepEqual(harness.notices, []);
+  assert.ok(harness.providers.length > 0, "quiet startup still activates routing");
 });
 
 test("session startup routes compatible custom providers and preserves their upstream per model", async () => {
