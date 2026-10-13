@@ -98,7 +98,7 @@ const footerData = {
   onBranchChange: () => () => {},
 };
 const context = {
-  mode: "tui", cwd: process.cwd(),
+  mode: "tui", hasUI: true, cwd: process.cwd(),
   sessionManager: {
     getSessionFile: () => undefined,
     getHeader: () => ({ type: "session", parentSession }),
@@ -178,6 +178,9 @@ try {
   await InteractiveMode.prototype.handleClearCommand.call(driver);
   render();
   assert(hasDots(), "native /new status notice should leave unused area for watermark");
+  assert(!driver.extensionWidgetsAbove.has("pi-irfan-devs-session-status"), "session metadata stays in footer, not above input");
+  await extension.commands.get("pi-ui").handler("", context);
+  assert.match(notifications.at(-1).message, /Main tokens:.*Recorded cost:/s);
   chat.clear(); render();
   const unfocused = { focused: false, handleInput() {}, invalidate() {}, render: () => [] };
   tui.setFocus(unfocused); render();

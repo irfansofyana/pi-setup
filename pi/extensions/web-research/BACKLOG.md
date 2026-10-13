@@ -17,7 +17,7 @@ Legend: `[ ]` pending, `[x]` complete, `[-]` deferred.
 - [x] Bounded in-memory search/fetch cache.
 - [x] Owner-only TTL artifact storage for oversized fetched content.
 - [x] Compact output with explicit truncation and artifact handles.
-- [x] Bundle `skills/my-web-search` with source hierarchy and evidence rules.
+- [x] Bundle `pi/skills/my-web-search` with source hierarchy and evidence rules.
 - [x] Update Ciung template, agent tests, setup docs, permissions, and migration procedure.
 - [x] Preserve coexistence and explicit rollback for 9router/MCP paths.
 - [x] Package contract and npm dry-run prove extension + skill ship together.

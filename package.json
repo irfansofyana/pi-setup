@@ -1,6 +1,6 @@
 {
   "name": "@irfansofyana/pi-setup",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Irfan's installable Pi coding-agent setup",
   "type": "module",
@@ -12,7 +12,7 @@
     "pi/extensions",
     "pi/themes",
     "pi/prompts",
-    "skills",
+    "pi/skills",
     "docs/setup",
     "README.md",
     "AGENTS.md"
@@ -23,7 +23,7 @@
   },
   "scripts": {
     "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:subagent-manager && npm run test:signature",
-    "test:package": "node --test tests/package-contract.test.mjs",
+    "test:package": "node --test --test-concurrency=1 tests/package-contract.test.mjs tests/skill-layout.test.mjs",
     "test:prompts": "node --test tests/prompt-templates.test.mjs",
     "test:extensions": "node --experimental-transform-types --test --test-concurrency=1 pi/extensions/*/*.test.ts",
     "test:subagent-manager": "node --experimental-transform-types --test --test-concurrency=1 pi/extensions/subagents/upstream/tests/paths.test.ts pi/extensions/subagents/upstream/tests/manager.test.ts pi/extensions/subagents/upstream/tests/transcript.test.ts pi/extensions/subagents/upstream/tests/startup.test.ts pi/extensions/subagents/upstream/tests/spawn-timeout.test.ts pi/extensions/subagents/upstream/tests/cost-ledger.test.ts pi/extensions/subagents/upstream/tests/status-ui.test.ts pi/extensions/subagents/upstream/tests/live-agent-view.test.ts",
@@ -36,7 +36,7 @@
       "./pi/extensions/*/index.ts"
     ],
     "skills": [
-      "./skills"
+      "./pi/skills"
     ],
     "prompts": [
       "./pi/prompts/*.md"

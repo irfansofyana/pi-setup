@@ -4,7 +4,10 @@ Package-owned `pi-irfan-devs` bundle using phosphor design tokens:
 
 - `theme.json`: green palette, amber/gold/cyan accents, near-black panels.
 - `index.ts`: sole UI entrypoint; registers integrated editor and Signature.
-- `signature.ts`: minimal header, working indicator, footer statistics/statuses, terminal title and replay/status command.
+- `signature.ts`: minimal header, native activity, footer session status and services, terminal title and inspection commands.
+- `session-status.ts`: two-row footer layout, responsive metadata and counted status overflow.
+- `footer-progress.ts`: session-local progress handoff between editor and footer; no extra timer.
+- `codemode-ui.ts`: compact tool rows with original expanded rendering.
 - `watermark-ui.ts`: layout-owned welcome widget, visibility, dock priority and cleanup.
 - `watermark.ts`: bounded sizing, static idle and finite replay controller.
 - `watermark-renderer.ts`: original π/badge geometry, 3D projection and Braille rasterization.
@@ -16,7 +19,7 @@ Pi loads palette and executable UI through separate manifest fields. Only
 
 ## Welcome panel
 
-Header is one line: `π pi-irfan-devs · ~/project`. A fresh, idle fullscreen
+Header is one line: `π · ~/project`. A fresh, idle fullscreen
 session with an empty draft displays a faint dotted π in reserved rows above
 the editor. This is a layout-owned widget, not an overlay or background layer.
 
@@ -59,23 +62,59 @@ unknown dock content or missing widget registration. Startup/reload eligibility
 also requires an unpersisted metadata-only session. Resumes/forks are excluded.
 Use `/new` for a fresh session when history/persistence blocks artwork.
 
-## Footer presentation
+## Working interface
 
-For `pi-irfan-devs`, the footer uses the terminal's default background rather
-than a filled panel. Cost uses primary text; model and normal context use
-secondary text. Tokens, paths, providers and service labels stay muted. Healthy
-service values use footer-local soft green (`#8fbd9c`); separators use subdued
-`#59665f`. Active work retains accent color; failures and context pressure retain
-warning/error colors (context warning above 70%, error above 90%). Caveman status
-shows its mode once, without the rock icon or duplicated label.
+Original green-led identity, with softer phosphor, amber/gold/cyan accents and
+near-neutral green-tinted tool surfaces. Headings use primary text; code strings
+use soft green rather than a bright yellow wall. Search, selection and message
+backgrounds are distinct. Terminal background and font remain user-owned.
 
-Reasoning-capable models show the current configured thinking level beside their
-name (for example, `gpt-6-astra · thinking high`, including `thinking off`). The
-level is read on each render; models without reasoning omit it. The provider
-prefix is omitted when space is needed for the model/thinking label.
+The custom footer has two rows below the composer:
 
-These are footer-only styles: global palette, editor thinking border, agent badge
-colors and other palettes remain unchanged. Layout and accounting are unchanged.
+1. Project/branch, model, thinking level, context and cost; progress at the far right.
+2. Service chips (blank when no services publish status).
+
+Todos and subagents keep the above-input space. Long project/branch names shorten;
+project, thinking and cost yield before model/context in narrow panes. Quips shrink
+to a spinner when space is tight; factual tool/recovery text gets priority and can
+replace metadata in tiny panes. Unknown context displays `ctx ?`, never a made-up
+zero. Both footer rows are measured in the welcome artwork budget. Costs
+use primary text; model/context use secondary text. Healthy service values use
+soft green (`#8fbd9c`); separators use subdued `#59665f`. Failures and context
+pressure retain warning/error colors (above 70% and above 90%). Whole-chip
+overflow shows `+N`; inspect all statuses and main-session token/cache counters
+with read-only `/pi-ui`. Caveman mode appears once without a duplicate icon/label.
+
+The native Pi loader owns working, retry and compaction lifecycle. Its single
+indicator appears at the right of the first footer row, with no extra progress
+row above or below the composer. Generic working text becomes
+24 original short quips, rotating every 6.6 seconds on native animation updates;
+active tool counts/names, retry and compaction messages remain factual. Narrow
+panes drop the whole quip before the spinner. Idle shows no `ready` label.
+The large dotted π artwork and its replay animation are unchanged. Tool failures
+stay in their result cards: they do not recolor the composer or leave a sticky
+`tool error` label. Native retry messages replace quips only during actual retries.
+
+### Compact codemode
+
+Collapsed `codemode` rows show preparation/running/completion, duration when
+known, call counts, failures/cancellations and an expansion hint. Raw script and
+successful output stay behind Pi's existing tool expansion action; nested errors
+and script failure previews remain visible. Collapsed failures show the primary
+cause without the stack dump, plus a warning when prior calls were not undone.
+Counts and expansion hints stay muted; failure causes remain red. Expanded views
+delegate to the original renderer, preserving full output, stacks and call details. Once expanded during a run, native
+lifecycle updates continue through final cleanup even after collapsing. Native tool
+framing, images and execution behavior remain Pi-owned.
+
+Only `codemode` is customized. Other tools, specialized self-renderers and other
+palettes retain their renderers. No arguments/results, model context, cost ledger,
+installed settings or external footer configuration are changed. Hosts without
+`registerToolRenderer` retain native rendering. `PI_SIGNATURE_COMPACT_FOOTER=0`
+retains the native footer instead of the two custom rows. If the custom footer is
+disabled or replaced, native progress falls back to a single row below the editor.
+Replacing the editor relinquishes this progress handoff to Pi. Other palettes
+retain their existing footer layout.
 
 ## Footer accounting
 
@@ -92,8 +131,9 @@ external footer configuration are changed.
 
 ## Editor and ownership
 
-Rounded frame requires at least 34 columns and 18 rows. Smaller terminals keep
-compact rails; autocomplete and pathological widths use stock fallbacks.
+Quiet top/bottom separators replace the rounded frame. The shortcut hint is
+hidden; file mentions, slash commands and native newline keybindings still work. Short terminals omit the
+top separator; autocomplete and pathological widths use stock fallbacks.
 Input remains delegated to `CustomEditor`; Pi's host `onChange` stays intact.
 The root editor factory registers its exact instance and app keybindings in a process-local weak registry.
 Package UI adapters use that identity to distinguish Main from dialog editors;
@@ -107,8 +147,10 @@ Pi has one editor slot. Conflicts warn and preserve last-loaded-wins behavior;
 the bundle never forcefully reclaims another editor. Terminal settings own base
 background and font; `#111613`, Fira Code or JetBrains Mono are optional choices.
 
-Requires Pi `>=1.0.0`; validated against `1.0.2`. Host packages come from Pi;
-no additional runtime dependency or settings mutation is needed.
+Requires Pi `>=1.0.0`; optional renderer API is capability-checked. Redesign APIs
+were inspected in Pi 1.1.0 and 1.2.0; previous bundle smoke covered 1.0.2.
+Redesign runtime/visual validation is pending a hard-limited runner. Host packages
+come from Pi; no additional runtime dependency or settings mutation is needed.
 
 ## Validation
 

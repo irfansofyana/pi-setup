@@ -122,7 +122,7 @@ export async function createTrustedRoleBackend(options: { role: string; agentDir
   const extensionPaths = options.definition ? localExtensions.map(name => name === "web-research" ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath) :
     [research ? new URL("../web-research/index.ts", import.meta.url).pathname : options.fffPath];
   if (extensionPaths.some(path => !path) || (!options.definition && !research && !["code-mapper", "reviewer", "builder"].includes(options.role))) return { ok: false, code: "unsupported_resource" };
-  const skillPaths = research ? { "my-web-search": new URL("../../../skills/my-web-search/SKILL.md", import.meta.url).pathname } : options.skillPaths ?? {};
+  const skillPaths = research ? { "my-web-search": new URL("../../skills/my-web-search/SKILL.md", import.meta.url).pathname } : options.skillPaths ?? {};
   if (Object.keys(skillPaths).sort().join() !== [...resolved.loadout.skills].sort().join()) return { ok: false, code: "unsupported_resource" };
   const expectedExtensions = options.definition ? localExtensions.flatMap(name => name === "web-research" ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", ...(process.env.PI_FFF_MULTIGREP === "1" ? ["fff-multi-grep"] : [])]) : research ? ["web_fetch", "web_search"] : ["fffind", "ffgrep", "fff-multi-grep"];
   const expectedTools = options.definition ? (resolved as AgentDefinition).toolNames.filter(name=>!(delegationTools as readonly string[]).includes(name)) : research ? expectedExtensions : ["read", "grep", "find", "ls", ...expectedExtensions, ...(options.role === "builder" ? ["edit", "write"] : [])];

@@ -57,12 +57,14 @@ Existing 9router and Tavily/Exa MCP integrations may coexist for benchmark and r
 
 Package-owned `pi/themes/pi-irfan-devs/` combines palette, editor and Signature UI without patching Pi or `@earendil-works/pi-tui`.
 
-- `theme.json`: phosphor green, amber/gold/cyan accents and dark panels; no CSS effects or font control.
-- `index.ts`: one manifest-loaded UI entrypoint registering editor and Signature.
-- `signature.ts`: centered phosphor block `π` with a gentle 3.2-second brightness pulse and stationary credit; compact pulsing mark below 40 columns or 24 rows. Runtime also owns the working indicator, footer usage/statuses and terminal title. Legacy palettes retain their prior Signature styles. Set `PI_SIGNATURE_ANIMATION=0` before startup for a static header.
-- Editor: placeholder, state labels, spinner, scroll indicators and input hints. Rounded frame at 34+ columns and 18+ rows; otherwise compact rail. Stock autocomplete, IME markers, mouse click geometry and drag selection remain supported.
+- `theme.json`: original green-led palette with softer phosphor, distinct selection/search and quieter tool surfaces; no CSS effects or font control.
+- `index.ts`: sole manifest-loaded UI entrypoint; native editor behavior with subtle separator rails.
+- `signature.ts`: minimal header, native working/tool activity, footer model/context/cost and footer service statuses.
+- `codemode-ui.ts`: compact call/result summaries with original rendering on expansion. Does not change execution or model-visible results.
+- Welcome: static idle π, optional finite replay, content-first dock budgeting. `PI_SIGNATURE_ANIMATION=0` disables artwork replay, not native work indicators.
+- `/pi-ui`: read-only full model, main-session token/cache usage, recorded main-plus-settled-child cost and service status inspection.
 
-Requires Pi `>=1.0.0`; tested against `1.0.2`. Pi supplies host modules; no extra runtime dependency. Editor activates only for `pi-irfan-devs`. No compatibility palette or standalone Signature adapter is shipped; tests live beside runtime in the theme bundle. Run `/reload` after package updates or theme switches.
+Requires Pi `>=1.0.0`; optional tool-renderer API is capability-checked. SDK APIs inspected in 1.1.0/1.2.0; redesign runtime/visual validation remains pending. Pi supplies host modules; no extra runtime dependency. Editor activates only for `pi-irfan-devs`; unrelated palettes retain their layouts. See the [component README](../../pi/themes/pi-irfan-devs/README.md) for accounting, fallback and validation details. Run `/reload` after loading updated package code.
 
 Legacy `~/.pi/agent/extensions/command-deck` may be a duplicate-loader candidate; verify loading and use [approval-gated migration](installation.md#existing-device-migration) before removal. Pi has one editor slot: collisions warn, last-loaded wins, and this bundle never forcefully reclaims another editor. Palette and Signature remain available independently of editor ownership.
 
@@ -88,7 +90,7 @@ See [extension README](../../pi/extensions/context/README.md) for ownership and 
 
 Purpose: route Pi model requests through the complete Headroom proxy so compression and statistics appear in the global dashboard. Local tool-result compression and retrieval remain an explicit legacy mode.
 
-The adapter starts Headroom automatically for each Pi session, or adopts an already healthy proxy. Concurrent startup losers recheck and adopt the healthy winner. Native routing performs a pre-request readiness check; if an adopted proxy later stops, an auto-start session restores native providers before the request and makes one managed replacement attempt. Manual/off modes never recover automatically, and there is no background polling. If the CLI is missing, log/PID setup fails, startup times out, spawning fails, or the managed proxy exits unexpectedly, Pi always shows a warning and safely bypasses compression. `notifyFailures` only controls repetitive compression-path warnings.
+The adapter starts Headroom automatically for each Pi session, or adopts an already healthy proxy. Concurrent startup losers recheck and adopt the healthy winner. Successful session startup is quiet; inspect the footer or `/headroom status`. Explicit start/restart and recovery still confirm success, and failures remain visible. Native routing performs a pre-request readiness check; if an adopted proxy later stops, an auto-start session restores native providers before the request and makes one managed replacement attempt. Manual/off modes never recover automatically, and there is no background polling. If the CLI is missing, log/PID setup fails, startup times out, spawning fails, or the managed proxy exits unexpectedly, Pi always shows a warning and safely bypasses compression. `notifyFailures` only controls repetitive compression-path warnings.
 
 Install CLI and adapter:
 

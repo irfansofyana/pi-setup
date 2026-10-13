@@ -7,7 +7,7 @@ if (!piRoot) {
 	throw new Error("Set PI_ROOT to installed @earendil-works/pi-coding-agent root");
 }
 
-const [{ loadExtensions }, { KeybindingsManager }, { loadThemeFromPath }, { visibleWidth }] = await Promise.all([
+const [{ loadExtensions }, { KeybindingsManager }, { loadThemeFromPath }, { visibleWidth, stripTerminalSequences }] = await Promise.all([
 	import(path.join(piRoot, "dist/core/extensions/loader.js")),
 	import(path.join(piRoot, "dist/core/keybindings.js")),
 	import(path.join(piRoot, "dist/modes/interactive/theme/theme.js")),
@@ -28,18 +28,21 @@ const themePath = fileURLToPath(new URL("./theme.json", import.meta.url));
 const theme = loadThemeFromPath(themePath);
 assert.equal(theme.name, "pi-irfan-devs");
 let editorFactory;
+let footerFactory;
 const notifications = [];
 let signatureHeaders = 0;
+let workingMessage;
 const context = {
 	mode: "tui",
 	cwd: process.cwd(),
+	getContextUsage: () => undefined,
 	sessionManager: { getSessionFile: () => undefined, getHeader: () => undefined, getEntries: () => [], getLeafId: () => null },
 	ui: {
 		theme,
 		setHeader() { signatureHeaders++; },
-		setFooter() {},
+		setFooter(factory) { footerFactory = factory; },
 		setWidget() {},
-		setWorkingMessage() {},
+		setWorkingMessage(value) { workingMessage = value; },
 		setWorkingIndicator() {},
 		setTitle() {},
 		setEditorComponent(factory) {
@@ -73,7 +76,50 @@ const editor = editorFactory(tui, editorTheme, new KeybindingsManager());
 editor.focused = true;
 const thinkingColor = "\x1b[38;2;79;111;216m";
 editor.borderColor = (text) => `${thinkingColor}${text}\x1b[39m`;
-assert(editor.render(80)[0].includes(thinkingColor), "frame should use Pi's live thinking-level border color");
+assert(!editor.render(80)[0].includes(thinkingColor), "quiet rails do not glow with thinking-level color");
+assert.equal(editor.embedWorkingStatus, true, "native loader is embedded once below input");
+const statusStub = (kind, message) => ({
+  kind,
+  renderInBorder: () => `• ${message}`,
+  renderSpinnerInBorder: () => "•",
+});
+editor.setWorkingStatusIndicator(statusStub("working", "Working"));
+let progressLines = editor.render(80);
+assert.match(progressLines.at(-1), /Consulting rubber duck/);
+assert.equal(progressLines.filter(line => line.includes("Consulting rubber duck")).length, 1);
+assert(!progressLines.slice(0, -1).some(line => line.includes("Working")));
+assert.equal(editor.render(12).at(-1).trim(), "•", "narrow panes drop the whole quip");
+for (const [kind, message] of [["working", "2 tools · read, edit"], ["retry", "Retrying in 2s"], ["compaction", "Auto-compacting..."]]) {
+  editor.setWorkingStatusIndicator(statusStub(kind, message));
+  assert(editor.render(80).at(-1).includes(message), "factual native status is preserved");
+}
+editor.setWorkingStatusIndicator(statusStub("idle", "ready"));
+assert(!editor.render(80).some(line => line.includes("ready")));
+editor.setWorkingStatusIndicator(undefined);
+
+// Real integrated factories share one native status; no extra editor row.
+const footerData = {
+  getGitBranch: () => "main", getExtensionStatuses: () => new Map(),
+  onBranchChange: () => () => {},
+};
+const integratedFooter = footerFactory(tui, theme, footerData);
+const idleRows = editor.render(120).length;
+editor.setWorkingStatusIndicator(statusStub("working", "Working"));
+assert.equal(editor.render(120).length, idleRows, "footer owns progress without an extra composer row");
+assert(!editor.render(120).some(line => line.includes("rubber duck")));
+assert.equal(integratedFooter.render(120).length, 2, "two footer rows even without service statuses");
+assert.match(integratedFooter.render(120)[0], /main.*no-model.*Consulting rubber duck/);
+assert.match(stripTerminalSequences(integratedFooter.render(120)[0]), /Consulting rubber duck…\s*$/);
+editor.setWorkingStatusIndicator(statusStub("retry", "Retrying in 2s"));
+assert.match(integratedFooter.render(120)[0], /Retrying in 2s/);
+assert(!editor.render(120).some(line => line.includes("Retrying")));
+const replacementFooter = footerFactory(tui, theme, footerData);
+integratedFooter.dispose();
+assert.equal(editor.render(120).length, idleRows, "old footer disposal cannot steal progress from replacement");
+assert.match(replacementFooter.render(120)[0], /Retrying/);
+replacementFooter.dispose();
+assert.match(editor.render(120).at(-1), /Retrying/, "missing/replaced footer restores native-status fallback");
+editor.setWorkingStatusIndicator(undefined);
 
 for (const rows of [4, 8, 10, 11, 17, 18, 24, 60]) {
 	tui.terminal.rows = rows;
@@ -95,11 +141,11 @@ tui.terminal.rows = 24;
 
 const wide = editor.render(80).map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""));
 assert.doesNotMatch(wide.join("\n"), /ASK|┌|┐|└|┘/);
-assert.match(wide.at(-1), /ready/);
+assert.doesNotMatch(wide.join("\n"), /ready/);
 assert(wide.some((line) => line.includes("Ask, build, or investigate")));
-assert(wide.some((line) => line.includes("@ files") && line.includes("/ commands")));
-assert.equal(wide.length, 4, "24-row terminal should use theme-specific editor chrome");
-assert(wide.some((line) => line.includes("╭") && line.includes("╮")), "new theme should show rounded cell border");
+assert(!wide.some((line) => /@ files|\/ commands|newline/.test(line)), "composer omits shortcut hint");
+assert.equal(wide.length, 3, "quiet composer uses top rail, input, and bottom rail");
+assert(!wide.some((line) => /[╭╮╰╯│]/.test(line)), "no bright framed box");
 if (process.env.SHOW_IRFAN_DEVS === "1") console.log(wide.join("\n"));
 // Hit-test the displayed text, not stock border geometry. Include host padding override.
 for (const rows of [24, 12]) {
@@ -109,7 +155,7 @@ for (const rows of [24, 12]) {
     editor.setText("abcde");
     const lines = editor.render(80);
     const framed = rows >= 18;
-    const event = { type: "click", button: "left", x: (framed ? 4 : 3) + padding + 2, y: framed ? 1 : 0,
+    const event = { type: "click", button: "left", x: 3 + padding + 2, y: framed ? 1 : 0,
       screenX: 0, screenY: 0, width: 80, height: lines.length, shift: false, alt: false, ctrl: false };
     assert.equal(editor.handleMouse(event)?.focus, true);
     editor.handleInput("X");
@@ -122,7 +168,7 @@ editor.setPaddingX(2);
 editor.setText("");
 editor.handleInput("x");
 assert.equal(editor.getText(), "x", "custom editor should preserve normal input handling");
-assert(!editor.render(80).some((line) => line.includes("@ files")), "hint should disappear after first input");
+assert(!editor.render(80).some((line) => line.includes("@ files")), "shortcut hint stays absent while typing");
 editor.setText("");
 
 tui.terminal.rows = 8;
@@ -152,9 +198,11 @@ editor.setText("");
 
 await emit("agent_start");
 assert.deepEqual(notifications, [], "sole custom editor should not trigger a collision warning");
-assert.match(renderedText(), statePattern("THINKING"));
+assert.equal(workingMessage, "Working");
+assert.doesNotMatch(renderedText(), /thinking|ready/);
 await emit("tool_execution_start", { type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
-assert.match(renderedText(), statePattern("TOOLS"));
+assert.equal(workingMessage, "1 tool · read");
+const inputBeforeFailure = renderedText();
 await emit("tool_execution_end", {
 	type: "tool_execution_end",
 	toolCallId: "tool-1",
@@ -162,13 +210,17 @@ await emit("tool_execution_end", {
 	result: {},
 	isError: true,
 });
-assert.match(renderedText(), statePattern("ERROR"));
+assert.equal(renderedText(), inputBeforeFailure, "tool failure must not recolor or label the composer");
+assert.doesNotMatch(renderedText(), /tool error/);
+await emit("tool_execution_end", { type: "tool_execution_end", toolCallId: "tool-2", toolName: "read", result: {}, isError: false });
+assert.equal(renderedText(), inputBeforeFailure, "successful follow-up needs no editor error reset");
 editor.handleInput("x");
-assert.match(renderedText(), statePattern("THINKING"), "typing should clear a latched tool error");
+assert.doesNotMatch(renderedText(), /tool error/, "typing keeps the composer free of tool error state");
 await emit("agent_end", { type: "agent_end", messages: [] });
-assert.match(renderedText(), statePattern("THINKING"), "agent_end should stay busy until automatic continuations settle");
+assert.doesNotMatch(renderedText(), /@ files/, "shortcut hint stays absent after agent_end");
+assert.equal(workingMessage, "Working");
 await emit("agent_settled", { type: "agent_settled" });
-assert.match(renderedText(), statePattern("READY"));
+assert.doesNotMatch(renderedText(), /ready/);
 
 editor.setText("!pwd");
 assert.match(renderedText(), statePattern("BASH"));
@@ -236,6 +288,8 @@ await emit("session_shutdown");
   let headerFactory;
   let footerFactory;
   let indicator;
+  let message;
+  const widgets = new Map();
   const signatureContext = {
     mode: "tui",
     cwd: process.cwd(),
@@ -245,8 +299,8 @@ await emit("session_shutdown");
       theme,
       setHeader: (factory) => { headerFactory = factory; },
       setFooter: (factory) => { footerFactory = factory; },
-      setWidget() {},
-      setWorkingMessage() {},
+      setWidget(key, value) { if (value === undefined) widgets.delete(key); else widgets.set(key, value); },
+      setWorkingMessage(value) { message = value; },
       setWorkingIndicator: (value) => { indicator = value; },
       setTitle() {},
     },
@@ -262,7 +316,8 @@ await emit("session_shutdown");
     }
     assert.equal(typeof headerFactory, "function");
     assert.equal(typeof footerFactory, "function");
-    assert(indicator.frames.every((frame) => frame.includes("working")));
+    assert.equal(message, "Working");
+    assert(indicator.frames.every((frame) => !frame.includes("working")), "native message is not duplicated in frames");
     const header = headerFactory(tui, theme);
     let unsubscribed = false;
     const footer = footerFactory(tui, theme, {
@@ -271,14 +326,20 @@ await emit("session_shutdown");
       getExtensionStatuses: () => new Map([["mcp", "MCP 4/4 servers"]]),
       onBranchChange: () => () => { unsubscribed = true; },
     });
+    assert(!widgets.has("pi-irfan-devs-session-status"), "no summary above task widgets");
+    assert.match(footer.render(80)[0], /no-model.*ctx \?/);
+    assert.equal(footer.render(80).length, 2);
+    assert.match(footer.render(120)[0], /feature\/theme.*no-model/);
+    assert.doesNotMatch(footer.render(80).join("\n"), /\/pi-ui details/);
     for (let width = 0; width <= 240; width++) {
       for (const line of [...header.render(width), ...footer.render(width)]) {
         assert(visibleWidth(line) <= width, `Signature exceeded width ${width}`);
       }
     }
-    assert(header.render(80).join("\n").includes("pi-irfan-devs"));
+    assert.match(stripTerminalSequences(header.render(80).join("\n")), /^π · /);
+    assert.doesNotMatch(stripTerminalSequences(header.render(80).join("\n")), /pi-irfan-devs/);
     if (process.env.SHOW_IRFAN_DEVS === "1") console.log(header.render(80).join("\n"));
-    assert(footer.render(80).every((line) => line.includes("\x1b[48;")), "footer should use theme panel background");
+    assert(footer.render(80).every((line) => !line.includes("\x1b[48;")), "footer uses terminal-default background");
     header.invalidate();
     header.dispose();
     // Minimal Pi header has no timer; other palettes retain their own orbit.
@@ -340,7 +401,8 @@ await emit("session_shutdown");
       globalThis.clearInterval = realClearInterval;
     }
     footer.dispose();
-    assert(unsubscribed, "footer must release its branch subscription");
+    assert(unsubscribed, "footer releases branch subscription");
+    assert(!widgets.has("pi-irfan-devs-session-status"), "footer disposal removes owned summary");
   } finally {
     if (footerOverride === undefined) delete process.env.PI_SIGNATURE_COMPACT_FOOTER;
     else process.env.PI_SIGNATURE_COMPACT_FOOTER = footerOverride;

@@ -1703,7 +1703,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     return false;
   };
 
-  const runManagedProxyStart = async (attempt: HeadroomStartAttempt, ctx: ExtensionContext): Promise<void> => {
+  const runManagedProxyStart = async (attempt: HeadroomStartAttempt, ctx: ExtensionContext, notifySuccess = true): Promise<void> => {
     const startupSignal = getContextSignal(ctx);
     try {
       dependencies.ensureDirs();
@@ -1759,7 +1759,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
-      if (ctx.hasUI) ctx.ui.notify(`Headroom proxy already running (${owner}).`, "info");
+      if (notifySuccess && ctx.hasUI) ctx.ui.notify(`Headroom proxy already running (${owner}).`, "info");
       return;
     }
     if (managedProcess) {
@@ -1913,7 +1913,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
-      if (ctx.hasUI) ctx.ui.notify("Headroom proxy started.", "info");
+      if (notifySuccess && ctx.hasUI) ctx.ui.notify("Headroom proxy started.", "info");
       return;
     }
 
@@ -1946,7 +1946,7 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
       }
       runtimeEnabled = config.enabled;
       updateStatus(ctx, runtimeEnabled, owner, stats);
-      if (ctx.hasUI) ctx.ui.notify("Headroom adopted a concurrent Headroom proxy after its own startup attempt ended.", "info");
+      if (notifySuccess && ctx.hasUI) ctx.ui.notify("Headroom adopted a concurrent Headroom proxy after its own startup attempt ended.", "info");
       return;
     }
     if (pendingTerminalNotice) notifyLifecycleFailure(ctx, pendingTerminalNotice.message);
@@ -1982,10 +1982,10 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     void operation.then(cleanup, cleanup);
     await operation;
   };
-  const startManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
+  const startManagedProxy = async (ctx: ExtensionContext, notifySuccess = true): Promise<void> => {
     if (stopInFlight) await stopInFlight;
     if (startInFlight) return startInFlight;
-    await trackStart(startCoordinator.start(ctx));
+    await trackStart(startCoordinator.start(ctx, notifySuccess));
   };
   const restartManagedProxy = async (ctx: ExtensionContext): Promise<void> => {
     if (stopInFlight) await stopInFlight;
@@ -2114,7 +2114,8 @@ export default function headroom(pi: ExtensionAPI, dependencyOverrides: Partial<
     } catch (error) {
       notifyLifecycleFailure(ctx, `Headroom local-store cleanup failed: ${error instanceof Error ? error.message : String(error)}. Compression will remain disabled unless startup succeeds.`);
     }
-    if (config.startup === "auto" && !config.localToolResultCompression) await startManagedProxy(ctx);
+    // Routine session startup is quiet on success; failures still use lifecycle warnings.
+    if (config.startup === "auto" && !config.localToolResultCompression) await startManagedProxy(ctx, false);
     else updateStatus(ctx, runtimeEnabled, owner, stats);
   });
 

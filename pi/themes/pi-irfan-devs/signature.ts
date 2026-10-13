@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { userInfo } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme, WorkingIndicatorOptions } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { createWatermarkPresentation } from "./watermark-ui.ts";
 import { footerUsage, separateFooterStatus } from "./footer-usage.ts";
 import { footerStyle, cavemanLevel } from "./footer-style.ts";
+import { footerSessionLine, statusChipsLine } from "./session-status.ts";
+import { createFooterProgress, type FooterProgress } from "./footer-progress.ts";
+
 
 type WatermarkPresentation = ReturnType<typeof createWatermarkPresentation>;
 
@@ -170,7 +173,7 @@ function orbitLogoLines(frame: number, width: number): string[] {
 function devSignatureLines(theme: Theme, width: number, cwd: string): string[] {
 	const path = formatCwdForFooter(cwd, process.env.HOME || process.env.USERPROFILE);
 	const mark = theme.bold(theme.fg("accent", "π"));
-	return [truncateToWidth(`${mark} ${theme.fg("muted", IRFAN_DEVS_THEME)} ${theme.fg("dim", `· ${path}`)}`, width, "")];
+	return [truncateToWidth(`${mark} ${theme.fg("dim", `· ${path}`)}`, width, "")];
 }
 
 function signatureLines(owner: string, theme: Theme, width: number, frame = 0, cwd = process.cwd()): string[] {
@@ -275,15 +278,14 @@ function funnySpinner(theme: Theme): WorkingIndicatorOptions {
 function workingIndicator(theme: Theme): WorkingIndicatorOptions {
 	if (theme.name !== IRFAN_DEVS_THEME) return funnySpinner(theme);
 	return {
-		frames: ["·", "∙", "•", "∙"].map((mark) => `${theme.fg("accent", mark)} ${theme.fg("muted", "working")}`),
+		frames: ["·", "∙", "•", "∙"].map((mark) => theme.fg("accent", mark)),
 		intervalMs: 220,
 	};
 }
 
 function sanitizeStatusText(text: string): string {
-	return text
-		.replace(/\x1b\[[0-9;]*m/g, "")
-		.replace(/[\r\n\t]/g, " ")
+	return stripTerminalSequences(text)
+		.replace(/[\x00-\x1f\x7f]/g, " ")
 		.replace(/ +/g, " ")
 		.trim();
 }
@@ -365,7 +367,7 @@ function compactStatusChip(key: string, text: string, theme: Theme): StatusChip 
 	if (hindsight) {
 		const state = hindsight[2]!.toLowerCase() === "working" ? "ok" : hindsight[2]!.toLowerCase();
 		const value = state === "offline" ? theme.fg("error", state) : state === "checking" ? theme.fg("warning", state) : ink.healthy(state);
-		return { priority: state === "offline" ? 0 : 30, text: `${ink.label("mem")} ${value}` };
+		return { priority: state === "offline" ? 0 : theme.name === IRFAN_DEVS_THEME && state === "checking" ? 15 : 30, text: `${ink.label("mem")} ${value}` };
 	}
 
 	const mcp = plain.match(/^MCP:?\s+(\d+)\/(\d+)\s+servers?/i);
@@ -374,7 +376,7 @@ function compactStatusChip(key: string, text: string, theme: Theme): StatusChip 
 		const total = Number(mcp[2]);
 		const count = `${ready}/${total}`;
 		const value = ready === total && total > 0 ? ink.healthy(count) : theme.fg(ready === 0 ? "warning" : "accent", count);
-		return { priority: 40, text: `${ink.label("MCP")} ${value}` };
+		return { priority: theme.name === IRFAN_DEVS_THEME && ready < total ? 0 : 40, text: `${ink.label("MCP")} ${value}` };
 	}
 
 	const caveman = theme.name === IRFAN_DEVS_THEME ? cavemanLevel(plain) : plain.match(/^caveman(?:\s+level:)?\s+(.+)$/i)?.[1]?.trim();
@@ -386,7 +388,7 @@ function compactStatusChip(key: string, text: string, theme: Theme): StatusChip 
 	const hasProblem = /\b(error|failed|offline|blocked)\b/i.test(plain);
 	const label = truncateToWidth(`${key}: ${plain}`, 34, "…");
 	const active = /\b(checking|pending|running|working)\b/i.test(plain);
-	return { priority: hasProblem ? 0 : 100, text: hasProblem ? theme.fg("error", label) : active ? ink.active(label) : theme.fg("dim", label) };
+	return { priority: hasProblem ? 0 : theme.name === IRFAN_DEVS_THEME && active ? 15 : 100, text: hasProblem ? theme.fg("error", label) : active ? ink.active(label) : theme.fg("dim", label) };
 }
 
 function footerStatusLine(footerData: ReadonlyFooterDataProvider, theme: Theme, width: number): string | undefined {
@@ -397,28 +399,55 @@ function footerStatusLine(footerData: ReadonlyFooterDataProvider, theme: Theme, 
 		.sort((a, b) => a.priority - b.priority)
 		.map((chip) => chip.text);
 	if (!chips.length) return undefined;
+	if (theme.name === IRFAN_DEVS_THEME) return statusChipsLine(chips, theme, width);
 	const ink = footerStyle(theme);
 	return truncateToWidth(ink.separator("• ") + chips.join(ink.separator(" · ")), width, theme.fg("dim", "…"));
 }
 
-function compactFooter(ctx: ExtensionContext, presentation: WatermarkPresentation, getThinkingLevel: () => string) {
-	return (tui: { requestRender: () => void }, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
+function compactFooter(
+	ctx: ExtensionContext,
+	presentation: WatermarkPresentation,
+	getThinkingLevel: () => string,
+	captureFooter: (data: ReadonlyFooterDataProvider | undefined) => void,
+	progress: FooterProgress,
+) {
+	return (tui: TUI, theme: Theme, footerData: ReadonlyFooterDataProvider) => {
+		captureFooter(footerData);
 		const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+		const releaseProgress = progress.mountFooter(() => theme.name === IRFAN_DEVS_THEME);
+		tui.requestRender();
+		let disposed = false;
 		const component = {
-			dispose: unsubscribe,
+			dispose() {
+				if (disposed) return;
+				disposed = true;
+				unsubscribe();
+				releaseProgress();
+				tui.requestRender();
+				captureFooter(undefined);
+			},
 			invalidate() {},
 			render(width: number): string[] {
+				if (disposed) return [];
 				const cwd = formatCwdForFooter(ctx.cwd, process.env.HOME || process.env.USERPROFILE);
 				const branch = footerData.getGitBranch();
+				const devs = theme.name === IRFAN_DEVS_THEME;
 				const pathLine = truncateToWidth(
-					theme.fg("dim", cwd) + (branch ? theme.fg("muted", ` (${branch})`) : ""),
-					width,
-					theme.fg("dim", "…"),
+					theme.fg("dim", devs ? basename(ctx.cwd) || cwd : cwd) + (branch ? theme.fg("muted", ` (${branch})`) : ""),
+					width, theme.fg("dim", "…"),
 				);
-				const lines = [pathLine, footerStatsLine(ctx, theme, footerData, width, getThinkingLevel())];
+				const lines = devs
+					? [footerSessionLine(theme, {
+						model: ctx.model?.id ?? "no-model",
+						thinking: ctx.model?.reasoning ? getThinkingLevel() : undefined,
+						contextPercent: ctx.getContextUsage()?.percent,
+						cost: footerUsage(ctx.sessionManager.getEntries()).cost,
+					}, pathLine, progress.read(width), width)]
+					: [pathLine, footerStatsLine(ctx, theme, footerData, width, getThinkingLevel())];
 				const statuses = footerStatusLine(footerData, theme, width);
-				if (statuses) lines.push(statuses);
-				const rendered = theme.name === IRFAN_DEVS_THEME ? lines.map((line) => {
+				if (devs) lines.push(statuses ?? "");
+				else if (statuses) lines.push(statuses);
+				const rendered = devs ? lines.map((line) => {
 					const clipped = truncateToWidth(line, width, "");
 					return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
 				}) : lines;
@@ -426,37 +455,88 @@ function compactFooter(ctx: ExtensionContext, presentation: WatermarkPresentatio
 				return rendered;
 			},
 		};
-		// This owned footer is bounded to three rows before first measurement.
-		presentation.footer(component, 3);
+		presentation.footer(component, theme.name === IRFAN_DEVS_THEME ? 2 : 3);
 		return component;
 	};
 }
 
-export default function piSignature(pi: ExtensionAPI) {
+export default function piSignature(pi: ExtensionAPI, progress: FooterProgress = createFooterProgress()) {
 	let presentation: WatermarkPresentation | undefined;
+	let currentFooter: ReadonlyFooterDataProvider | undefined;
+	const activeTools = new Map<string, string>();
+	const updateWorkingMessage = (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui" || ctx.ui.theme.name !== IRFAN_DEVS_THEME) return;
+		const names = [...new Set(activeTools.values())].slice(0, 2).join(", ");
+		ctx.ui.setWorkingMessage(activeTools.size
+			? `${activeTools.size} tool${activeTools.size === 1 ? "" : "s"} · ${names}`
+			: "Working");
+	};
 	pi.on("session_start", async (event, ctx) => {
+		progress.reset();
 		presentation?.dispose();
 		presentation = undefined;
+		currentFooter = undefined;
+		activeTools.clear();
 		if (ctx.mode !== "tui") return;
 		presentation = createWatermarkPresentation(ctx, event.reason);
 		const owner = detectOwner(ctx);
 		ctx.ui.setHeader(signatureHeader(owner, ctx, presentation));
-		ctx.ui.setWorkingMessage("");
+		ctx.ui.setWorkingMessage(ctx.ui.theme.name === IRFAN_DEVS_THEME ? "Working" : "");
 		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
-		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") ctx.ui.setFooter(compactFooter(ctx, presentation, () => pi.getThinkingLevel()));
 		presentation.install();
+		if (process.env.PI_SIGNATURE_COMPACT_FOOTER !== "0") {
+			ctx.ui.setFooter(compactFooter(ctx, presentation, () => pi.getThinkingLevel(), data => { currentFooter = data; }, progress));
+		}
 		ctx.ui.setTitle(`π · ${owner} · Irfan's Pi setup`);
 	});
 	pi.on("agent_start", async (_event, ctx) => {
 		presentation?.retire();
 		if (ctx.mode !== "tui") return;
+		activeTools.clear();
+		ctx.ui.setWorkingMessage(ctx.ui.theme.name === IRFAN_DEVS_THEME ? "Working" : "");
 		ctx.ui.setWorkingIndicator(workingIndicator(ctx.ui.theme));
 	});
+	pi.on("tool_execution_start", (event, ctx) => {
+		activeTools.set(event.toolCallId, sanitizeStatusText(event.toolName));
+		updateWorkingMessage(ctx);
+	});
+	pi.on("tool_execution_end", (event, ctx) => {
+		activeTools.delete(event.toolCallId);
+		updateWorkingMessage(ctx);
+	});
+	pi.on("agent_end", (_event, ctx) => { activeTools.clear(); updateWorkingMessage(ctx); });
+	pi.on("agent_settled", () => { activeTools.clear(); });
 	pi.on("input", () => { presentation?.retire(); return undefined; });
 	pi.on("message_start", () => { presentation?.retire(); });
 	pi.on("user_bash", () => { presentation?.retire(); return undefined; });
 	pi.on("session_tree", () => { presentation?.retire(); });
-	pi.on("session_shutdown", () => { presentation?.dispose(); presentation = undefined; });
+	pi.on("session_shutdown", () => {
+		progress.reset();
+		presentation?.dispose();
+		presentation = undefined;
+		currentFooter = undefined;
+		activeTools.clear();
+	});
+	pi.registerCommand("pi-ui", {
+		description: "Inspect model, main-session usage, total settled cost and all service statuses (read-only)",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) return;
+			const usage = footerUsage(ctx.sessionManager.getEntries());
+			const context = ctx.getContextUsage();
+			const percent = context?.percent;
+			const window = context?.contextWindow ?? ctx.model?.contextWindow;
+			const lines = [
+				`Model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "no-model"}${ctx.model?.reasoning ? ` · thinking ${pi.getThinkingLevel()}` : ""}`,
+				`Context (main session estimate): ${percent == null ? "unknown" : `${percent.toFixed(1)}%`}${window ? ` / ${formatTokens(window)}` : ""}`,
+				`Main tokens: ↑${formatTokens(usage.input)} ↓${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)}`,
+				`Recorded cost: $${usage.cost.toFixed(3)} (main + settled children; not live child billing)`,
+			];
+			for (const [key, text] of currentFooter?.getExtensionStatuses() ?? []) {
+				if (separateFooterStatus(key)) lines.push(`${sanitizeStatusText(key)}: ${sanitizeStatusText(text)}`);
+			}
+			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
 	pi.registerCommand("pi-watermark", {
 		description: "Replay Pi welcome artwork, or inspect visibility with status",
 		handler: async (args, ctx) => {

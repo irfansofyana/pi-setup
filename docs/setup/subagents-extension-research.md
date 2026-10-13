@@ -56,7 +56,7 @@ The theme smoke loads real Pi extension/TUI code with controlled fixture events;
 - Current role tools are intentionally narrower than generic Pi agents. Preserve FFF search, native Web Research, Headroom provider routing, no nested-agent tools, and role-specific mutation restrictions.
 - Existing documentation already describes FleetView, live viewers, and steering through Tintinweb. Ownership and clearer control UX are distinct goals from adding those basic capabilities.
 
-Current owning sources: [Subagent team](subagents.md), [agent packaging research](agent-packaging-research.md), [bundled native definitions](../../pi/extensions/subagents/agents), [setup procedure](../../skills/pi-setup/SKILL.md). The original `pi/agents/` templates are retired.
+Current owning sources: [Subagent team](subagents.md), [agent packaging research](agent-packaging-research.md), [bundled native definitions](../../pi/extensions/subagents/agents), [setup procedure](../../pi/skills/pi-setup/SKILL.md). The original `pi/agents/` templates are retired.
 
 ### Existing UI constraints
 

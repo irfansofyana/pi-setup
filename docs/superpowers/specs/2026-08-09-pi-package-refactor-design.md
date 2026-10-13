@@ -176,7 +176,7 @@ The bundled skill must:
 - `docs/setup/local-extensions.md`: runtime/config behavior; package ownership instead of manual copy procedures.
 - `docs/setup/operations.md`: update, deduplication checks, verification, rollback.
 - `docs/setup/subagents.md`: existing reviewed template deployment procedure remains authoritative.
-- `skills/pi-setup/SKILL.md`: procedural audit/proposal/approval/migration workflow, referencing owning docs rather than duplicating commands.
+- `pi/skills/pi-setup/SKILL.md`: procedural audit/proposal/approval/migration workflow, referencing owning docs rather than duplicating commands.
 
 ## Risks and mitigations
 

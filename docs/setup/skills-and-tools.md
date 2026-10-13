@@ -1,11 +1,18 @@
 # Skills and Optional Tools
 
-The aggregate package loads its declared `skills/` resources directly. Install third-party skills only with `npx skills` or `npx skills@latest`; do not manually copy either package-owned or external skill files unless intentionally developing one.
+The aggregate package loads its declared `pi/skills/` resources directly. Install third-party skills only with `npx skills` or `npx skills@latest`; do not manually copy either package-owned or external skill files unless intentionally developing one.
 
 ## Bundled skills
 
-- `pi-setup` — audit and approval-gated migration workflow.
-- `my-web-search` — provider-neutral research method used by the main agent and preloaded by the bundled `researcher` role.
+- [`pi-setup`](../../pi/skills/pi-setup/SKILL.md) — audit and approval-gated migration workflow.
+- [`my-web-search`](../../pi/skills/my-web-search/SKILL.md) — provider-neutral research method used by the main agent and preloaded by the bundled `researcher` role.
+
+Both live under package-owned `pi/skills/`; skill names and commands are unchanged.
+If personal package resource filters or custom integrations explicitly reference
+the former root `skills/` paths, review and update those references to `pi/skills/`
+when adopting the updated package. Unfiltered package loading follows the manifest.
+User-owned `~/.pi/agent/skills/`, `.pi/skills/` and managed skills are not moved.
+After loading the updated package, run `/reload` or restart Pi.
 
 Neither bundled skill needs a separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by the bundled researcher, and must be removed only after an explicit audit and approval.
 

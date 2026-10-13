@@ -72,6 +72,12 @@ test("natural prompt triggers can start or stop caveman", () => {
   assert.equal(promptTriggerDecision("short answers", { ...DEFAULT_CONFIG, triggerLevel: "micro" }), "micro");
 });
 
+test("phrase detection ignores missing and non-string prompts", () => {
+	for (const prompt of [undefined, null, 123, {}, ["normal mode"]]) {
+		assert.equal(promptTriggerDecision(prompt, DEFAULT_CONFIG), undefined);
+	}
+});
+
 test("status and config text expose important knobs", () => {
   assert.equal(statusText("full", DEFAULT_CONFIG), "level=full default=full status=on auto-trigger=on trigger-level=full");
   assert.match(configText(DEFAULT_CONFIG), /Config path:/);

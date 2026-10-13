@@ -34,7 +34,12 @@ Do not keep the old external Caveman package active at the same time. Both regis
 /caveman trigger-level full      Level used by phrase triggers
 ```
 
-Natural phrases also work when `autoTrigger` is on:
+Natural phrases in user prompts also work when `autoTrigger` is on. Pi 1.2
+custom-message turns (such as subagent wake/summary notifications) preserve the
+current level and receive its style guidance, but never toggle modes from their
+message content. Older Pi user events remain supported.
+
+Supported phrases:
 
 - `caveman mode`
 - `talk like caveman`

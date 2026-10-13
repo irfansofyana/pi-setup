@@ -7,7 +7,7 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 - Root `package.json` owns the executable Pi package manifest, exact companion package sources, declared first-party resources, and fresh-theme metadata.
 - `README.md` owns the first-party package bootstrap, concise companion inventory, feature summary, configuration-scope summary, and stable topic index.
 - `docs/setup/` owns detailed installation, safe migration, configuration, MCP, permissions, subagents, local-extension, skills/tools, operations, and troubleshooting guidance.
-- `skills/pi-setup/SKILL.md` owns the audit/proposal/approval/migration procedure and references the relevant topic docs; it must read companion sources from root metadata instead of duplicating the manifest.
+- `pi/skills/pi-setup/SKILL.md` owns the audit/proposal/approval/migration procedure and references the relevant topic docs; it must read companion sources from root metadata instead of duplicating the manifest.
 - Keep `README.md` around 90–130 lines, short and direct. Move operational detail into existing `docs/setup/` topic files.
 - Keep README-to-topic links and topic filenames stable. Update links deliberately when a rename is unavoidable.
 - `AGENTS.md` contains working instructions for future agent sessions in this repository.
@@ -86,5 +86,5 @@ For real Pi config changes:
 - Re-read targets, back up privately, and apply only approved proposal numbers.
 - Preserve unknown keys and user-owned state; stop on drift or ambiguity.
 - Update the owning documentation when a change should persist.
-- Keep `skills/pi-setup/SKILL.md` procedural and reference owning docs instead of copying long commands.
+- Keep `pi/skills/pi-setup/SKILL.md` procedural and reference owning docs instead of copying long commands.
 - Tell the user to run `/reload` or restart Pi.
