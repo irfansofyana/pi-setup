@@ -214,7 +214,7 @@ pi-setup
 ├── pi/extensions/<web-extension>/
 │   ├── index.ts
 │   └── tests
-├── skills/my-web-search/
+├── pi/skills/my-web-search/
 │   ├── SKILL.md
 │   └── references/
 └── pi/extensions/subagents/agents/researcher.md

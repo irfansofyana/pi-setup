@@ -19,7 +19,7 @@ test("root manifest exposes the repository as one installable Pi package", async
   assert.ok(!manifest.pi.extensions.includes("./pi/extensions/pi-signature.ts"), "standalone Signature extension must not return");
   assert.ok(manifest.pi.extensions.includes("./pi/themes/pi-irfan-devs/index.ts"));
   assert.ok(manifest.pi.extensions.includes("./pi/extensions/*/index.ts"));
-  assert.ok(manifest.pi.skills.includes("./skills"));
+  assert.ok(manifest.pi.skills.includes("./pi/skills"));
   assert.deepEqual(manifest.pi.prompts, ["./pi/prompts/*.md"]);
   assert.deepEqual(manifest.pi.themes, ["./pi/themes/*.json", "./pi/themes/pi-irfan-devs/theme.json"]);
 });
@@ -31,10 +31,10 @@ test("package manifest ships every declared resource path", async () => {
     "pi/themes/pi-irfan-devs/index.ts",
     "pi/themes/pi-irfan-devs/signature.ts",
     "pi/themes/pi-irfan-devs/signature.test.ts",
-    "skills/pi-setup/SKILL.md",
-    "skills/my-web-search/SKILL.md",
-    "skills/my-web-search/references/source-hierarchy.md",
-    "skills/my-web-search/references/templates.md",
+    "pi/skills/pi-setup/SKILL.md",
+    "pi/skills/my-web-search/SKILL.md",
+    "pi/skills/my-web-search/references/source-hierarchy.md",
+    "pi/skills/my-web-search/references/templates.md",
     "pi/extensions/ask-user-question/index.ts",
     "pi/extensions/ask-user-question/model.ts",
     "pi/extensions/ask-user-question/ui.ts",
@@ -60,7 +60,7 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(!manifest.files.includes("pi/agents"), "retired legacy templates must not ship");
   await assert.rejects(readFile(path.join(root, "pi/agents/package.json")), { code: "ENOENT" });
   assert.ok(manifest.files.includes("pi/prompts"));
-  assert.ok(manifest.files.includes("skills"));
+  assert.ok(manifest.files.includes("pi/skills"));
 });
 
 test("package and lockfile versions agree with reviewed install examples", async () => {
@@ -197,14 +197,14 @@ test("root Pi manifest loads only repository-owned package resources", async () 
     "./pi/themes/pi-irfan-devs/index.ts",
     "./pi/extensions/*/index.ts",
   ]);
-  assert.deepEqual(manifest.pi.skills, ["./skills"]);
+  assert.deepEqual(manifest.pi.skills, ["./pi/skills"]);
   assert.ok(manifest.pi.extensions.every((resource) => !resource.includes("node_modules")));
 });
 
 test("documentation keeps companion packages separate from aggregate ownership", async () => {
   const readme = await readFile(path.join(root, "README.md"), "utf8");
   const installation = await readFile(path.join(root, "docs/setup/installation.md"), "utf8");
-  const setupSkill = await readFile(path.join(root, "skills/pi-setup/SKILL.md"), "utf8");
+  const setupSkill = await readFile(path.join(root, "pi/skills/pi-setup/SKILL.md"), "utf8");
   const proposal = await readFile(
     path.join(root, "docs/superpowers/specs/2026-08-09-pi-package-refactor-design.md"),
     "utf8",
@@ -221,12 +221,12 @@ test("documentation keeps companion packages separate from aggregate ownership",
 
 test("native web extension and my-web-search skill ship as one provider-neutral delivery", async () => {
   const manifest = await readJson("package.json");
-  const skill = await readFile(path.join(root, "skills/my-web-search/SKILL.md"), "utf8");
-  const hierarchy = await readFile(path.join(root, "skills/my-web-search/references/source-hierarchy.md"), "utf8");
-  const templates = await readFile(path.join(root, "skills/my-web-search/references/templates.md"), "utf8");
+  const skill = await readFile(path.join(root, "pi/skills/my-web-search/SKILL.md"), "utf8");
+  const hierarchy = await readFile(path.join(root, "pi/skills/my-web-search/references/source-hierarchy.md"), "utf8");
+  const templates = await readFile(path.join(root, "pi/skills/my-web-search/references/templates.md"), "utf8");
 
   assert.ok(manifest.pi.extensions.includes("./pi/extensions/*/index.ts"));
-  assert.deepEqual(manifest.pi.skills, ["./skills"]);
+  assert.deepEqual(manifest.pi.skills, ["./pi/skills"]);
   assert.match(skill, /^name: my-web-search$/m);
   assert.match(skill, /^description: Use when substantial public-web research needs multiple sources, current evidence, or citation verification\./m);
   assert.match(skill, /web_search/);
