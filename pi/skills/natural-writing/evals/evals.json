@@ -1,0 +1,203 @@
+{
+  "skill_name": "natural-writing",
+  "status": "not_run",
+  "note": "Authored scenarios only. Static contracts do not constitute model evaluations or prove automatic triggering. active_caveman describes an isolated test condition, not live configuration.",
+  "evals": [
+    {
+      "id": 1,
+      "active_caveman": "off",
+      "category": "prose",
+      "prompt": "Rewrite this email clearly: 'It is important to note that the token expires after 60 seconds. Please request a replacement before expiry.'",
+      "expected_output": "Natural professional prose retaining the 60-second expiry and replacement instruction, without filler or added facts.",
+      "expectations": [
+        "Expiry remains 60 seconds.",
+        "Replacement instruction remains present.",
+        "Only the rewritten email is returned."
+      ]
+    },
+    {
+      "id": 2,
+      "active_caveman": "lite",
+      "category": "prose",
+      "prompt": "Polish this PR description for reviewers: 'This robust change simply renames the timeout field. It does not change the default of 30 seconds.'",
+      "expected_output": "Professional concise description preserving rename-only scope, negation and the 30-second default.",
+      "expectations": [
+        "No claim of behavior change is introduced.",
+        "The 30-second default and negation are preserved.",
+        "No self-scoring or editing audit is appended."
+      ]
+    },
+    {
+      "id": 3,
+      "active_caveman": "full",
+      "category": "mode-fit",
+      "prompt": "Clean up this status note without expanding it: 'Token expires: 60 seconds. Refresh behavior unknown. No retry yet.'",
+      "expected_output": "Compact fragments preserving expiry, uncertainty and missing retry, without restoring articles or adding narrative.",
+      "expectations": [
+        "Intentional fragments remain acceptable.",
+        "No first-person anecdote or reaction is added.",
+        "Expiry and unknown refresh behavior remain unchanged."
+      ]
+    },
+    {
+      "id": 4,
+      "active_caveman": "ultra",
+      "category": "mode-fit",
+      "prompt": "Tighten this existing terse explanation: 'Cache disabled. DB lookup each req. Latency impact unknown.'",
+      "expected_output": "Short explanation preserving shorthand, disabled state and uncertainty, with no stylistic expansion.",
+      "expectations": [
+        "DB and req shorthand need not expand.",
+        "Disabled does not become enabled.",
+        "No latency number is invented."
+      ]
+    },
+    {
+      "id": 5,
+      "active_caveman": "micro",
+      "category": "mode-fit",
+      "prompt": "Revise this terse message without adding detail: 'Config saved. Restart required. Existing sessions unchanged.'",
+      "expected_output": "Minimal message preserving all three facts without explanation or follow-up offers.",
+      "expectations": [
+        "Restart requirement remains.",
+        "Existing sessions remain unchanged.",
+        "No extra paragraph is added."
+      ]
+    },
+    {
+      "id": 6,
+      "active_caveman": "off",
+      "category": "facts",
+      "prompt": "Rewrite without changing claims: 'On one runner, p95 latency fell from 120 ms to 100 ms in a sample of 8 requests. Results may not generalize. Errors did not decrease.'",
+      "expected_output": "Clear prose retaining quantities, units, limited sample, uncertainty and unchanged error rate.",
+      "expectations": [
+        "120 ms, 100 ms and 8 requests are preserved.",
+        "The one-runner/sample limitation and uncertainty remain.",
+        "The negative finding about errors remains."
+      ]
+    },
+    {
+      "id": 7,
+      "active_caveman": "off",
+      "category": "literals",
+      "prompt": "Polish only the prose and leave literals exact:\nThis robust config is below.\n```json\n{\"label\":\"fast—safe\",\"timeout_ms\":1000}\n```\nCommand: `tool --dry-run --request-timeout=10`\nQuote: \"The old label was fast—safe.\"\nURL: https://example.org/guide?q=a--b",
+      "expected_output": "Less padded prose with the JSON block, command, quotation and URL preserved byte-for-byte, including protected dash characters.",
+      "expectations": [
+        "Protected JSON and quotation retain their em dashes.",
+        "Command flags are unchanged.",
+        "The complete URL is unchanged."
+      ]
+    },
+    {
+      "id": 8,
+      "active_caveman": "off",
+      "category": "punctuation",
+      "prompt": "Rewrite this prose with the package's punctuation preference: 'The change is small — it renames one function — and leaves behavior unchanged.'",
+      "expected_output": "Natural prose using commas, colons or periods instead of em dashes, preserving scope and unchanged behavior.",
+      "expectations": [
+        "Generated prose contains no em dash.",
+        "Exactly one function is still renamed.",
+        "No behavior change is claimed."
+      ]
+    },
+    {
+      "id": 9,
+      "active_caveman": "off",
+      "category": "voice",
+      "prompt": "Edit this author's note but preserve their viewpoint: 'I prefer the smaller API. I have not tried it in production. It might reduce setup work.'",
+      "expected_output": "Clear version retaining supplied first-person preference, lack of production experience and uncertainty.",
+      "expectations": [
+        "The author's supplied preference is preserved.",
+        "No production experience is fabricated.",
+        "Might does not silently become will."
+      ]
+    },
+    {
+      "id": 10,
+      "active_caveman": "ultra",
+      "category": "safety",
+      "prompt": "Improve this warning without weakening it: 'This action permanently deletes 8 records. Back up the data first. Explicit approval is required before proceeding.'",
+      "expected_output": "Fully clear warning retaining irreversible consequence, count, backup instruction and approval requirement despite compressed style.",
+      "expectations": [
+        "Permanent deletion and 8 records remain explicit.",
+        "Backup and approval requirements remain.",
+        "Compression does not hide the consequence."
+      ]
+    },
+    {
+      "id": 11,
+      "active_caveman": "full",
+      "category": "trigger-negative",
+      "prompt": "Return exactly {\"ready\":true} with no prose, no Markdown and no extra whitespace. This is an exact-output request, not a prose-editing task.",
+      "expected_output": "The exact requested JSON only; automatic writing-skill activation is unnecessary and formatting is not humanized.",
+      "expectations": [
+        "Output is exactly {\"ready\":true}.",
+        "No explanation or stylistic preamble appears.",
+        "No code/data punctuation changes."
+      ]
+    },
+    {
+      "id": 12,
+      "active_caveman": "off",
+      "category": "facts",
+      "prompt": "Draft a release note from only these supplied facts: 'New caching code landed. No benchmark data was supplied.' Make it readable without adding claims.",
+      "expected_output": "Plain release note without invented speedups, adoption metrics, personal reactions or claims that measurements were or were not performed.",
+      "expectations": [
+        "No percentage or latency result is invented.",
+        "Absence of supplied data is not rewritten as proof that no benchmark exists.",
+        "No invented anecdote or testimonial appears."
+      ]
+    },
+    {
+      "id": 13,
+      "active_caveman": "lite",
+      "category": "uncertainty",
+      "prompt": "Polish this incident note without adding certainty: 'Cache may cause timeout. Connection pool likely involved. Root cause unknown. No benchmark data supplied.'",
+      "expected_output": "Compressed note retaining possible cache involvement, likely pool involvement, unknown root cause and absence of supplied benchmark data.",
+      "expectations": [
+        "May and likely retain their distinct confidence levels; neither becomes a confirmed cause.",
+        "Unknown root cause stays unknown.",
+        "No supplied benchmark data is not rewritten as no benchmark exists.",
+        "Output respects active compression without removing factual qualifiers."
+      ]
+    },
+    {
+      "id": 14,
+      "active_caveman": "full",
+      "category": "uncertainty",
+      "prompt": "Polish this incident note without adding certainty: 'Cache may cause timeout. Connection pool likely involved. Root cause unknown. No benchmark data supplied.'",
+      "expected_output": "Compressed note retaining possible cache involvement, likely pool involvement, unknown root cause and absence of supplied benchmark data.",
+      "expectations": [
+        "May and likely retain their distinct confidence levels; neither becomes a confirmed cause.",
+        "Unknown root cause stays unknown.",
+        "No supplied benchmark data is not rewritten as no benchmark exists.",
+        "Output respects active compression without removing factual qualifiers."
+      ]
+    },
+    {
+      "id": 15,
+      "active_caveman": "ultra",
+      "category": "uncertainty",
+      "prompt": "Polish this incident note without adding certainty: 'Cache may cause timeout. Connection pool likely involved. Root cause unknown. No benchmark data supplied.'",
+      "expected_output": "Compressed note retaining possible cache involvement, likely pool involvement, unknown root cause and absence of supplied benchmark data.",
+      "expectations": [
+        "May and likely retain their distinct confidence levels; neither becomes a confirmed cause.",
+        "Unknown root cause stays unknown.",
+        "No supplied benchmark data is not rewritten as no benchmark exists.",
+        "Output respects active compression without removing factual qualifiers."
+      ]
+    },
+    {
+      "id": 16,
+      "active_caveman": "micro",
+      "category": "uncertainty",
+      "prompt": "Polish this incident note without adding certainty: 'Cache may cause timeout. Connection pool likely involved. Root cause unknown. No benchmark data supplied.'",
+      "expected_output": "Compressed note retaining possible cache involvement, likely pool involvement, unknown root cause and absence of supplied benchmark data.",
+      "expectations": [
+        "May and likely retain their distinct confidence levels; neither becomes a confirmed cause.",
+        "Unknown root cause stays unknown.",
+        "No supplied benchmark data is not rewritten as no benchmark exists.",
+        "Output respects active compression without removing factual qualifiers."
+      ]
+    }
+  ]
+}

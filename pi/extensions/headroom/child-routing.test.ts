@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import headroom, { acquireHeadroomChildRoute, headroomChildBridgeSupported, DEFAULT_CONFIG } from "./index.ts";
 import { createTrustedRoleBackend } from "../subagents/trusted.ts";
 
@@ -69,14 +69,20 @@ test("unready proxy, wrong model and remote route never acquire a child lease", 
   assert.deepEqual(requests, []);
   setReady(false);
   assert.deepEqual(await acquireHeadroomChildRoute({ registry, model, proxyUrl }), { ok: false, code: "unsupported_routing" });
-  assert.deepEqual(requests, ["/readyz"]);
+  assert.deepEqual(requests, headroomChildBridgeSupported(VERSION) ? ["/readyz"] : []);
   await stop();
   assert.equal(registry.find("openai", "gpt-4")?.baseUrl, "https://api.openai.com/v1");
 }));
 
-test("a failed post-acquire readiness check blocks use and release is idempotent", async () => fixture(async ({ registry, proxyUrl, start, stop, setReady }) => {
+test("a failed post-acquire readiness check blocks use and release is idempotent", async () => fixture(async ({ registry, proxyUrl, start, stop, setReady, requests }) => {
   await start();
   const result = await acquireHeadroomChildRoute({ registry, model, proxyUrl });
+  if (!headroomChildBridgeSupported(VERSION)) {
+    assert.deepEqual(result, { ok: false, code: "unsupported_routing" });
+    assert.deepEqual(requests, [], "unaudited SDK must reject before readiness I/O");
+    await stop();
+    return;
+  }
   assert.equal(result.ok, true);
   if (!result.ok) return;
   setReady(false);
@@ -92,9 +98,16 @@ test("child bridge admits only audited Pi version and already-owned exact proxy 
   assert.equal(headroomChildBridgeSupported("1.1.0"), true);
   assert.equal(headroomChildBridgeSupported("1.0.0"), false);
   assert.equal(headroomChildBridgeSupported("1.1.1"), false);
+  assert.equal(headroomChildBridgeSupported("1.3.0"), false, "current SDK is not audited for private routed leases");
   assert.deepEqual(await acquireHeadroomChildRoute({ registry, model, proxyUrl }), { ok: false, code: "unsupported_routing" });
   await start();
   const acquired = await acquireHeadroomChildRoute({ registry, model, proxyUrl });
+  if (!headroomChildBridgeSupported(VERSION)) {
+    assert.deepEqual(acquired, { ok: false, code: "unsupported_routing" });
+    assert.deepEqual(requests, [], "unaudited SDK must not acquire or probe a lease");
+    await stop();
+    return;
+  }
   assert.equal(acquired.ok, true, JSON.stringify({ acquired, route: registry.find("openai", "gpt-4")?.baseUrl, registered: registry.getRegisteredProviderIds(), config: registry.runtime.getRegisteredProviderConfig("openai") }));
   if (!acquired.ok) return;
   assert.equal(await acquired.lease.ready(), true);

@@ -7,13 +7,13 @@ import test from "node:test";
 const root = path.resolve(import.meta.dirname, "..");
 const skillRoot = path.join(root, "pi/skills");
 
-test("both bundled skills live only under the declared packaged skill root", async () => {
+test("bundled skills live only under the declared packaged skill root", async () => {
   const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.deepEqual(manifest.pi.skills, ["./pi/skills"]);
   assert.ok(manifest.files.includes("pi/skills"));
   assert.ok(!manifest.files.includes("skills"));
   const dirs = (await readdir(skillRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
-  assert.deepEqual(dirs, ["my-web-search", "pi-setup"]);
+  assert.deepEqual(dirs, ["browser-assist", "browser-setup", "my-web-search", "natural-writing", "pi-setup"]);
   for (const name of dirs) {
     const content = await readFile(path.join(skillRoot, name, "SKILL.md"), "utf8");
     assert.match(content, new RegExp(`^name: ${name}$`, "m"));

@@ -130,7 +130,9 @@ test("closing an unavailable panel cannot overwrite its replacement's reading st
   f.threads[1].costId = "replacement";
   const replacement = { path: "/root/first", identity: "replacement" };
   f.views.get(replacement).anchor = "replacement-anchor";
-  f.panel.refresh(); f.panel.render(100); f.panel.close();
+  f.panel.refresh(); f.panel.render(100);
+  assert.equal(f.views.get(replacement).anchor, "replacement-anchor", "render must not mark a replaced task seen");
+  f.panel.close();
   assert.equal(f.views.get(replacement).anchor, "replacement-anchor");
 });
 

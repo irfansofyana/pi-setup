@@ -15,6 +15,8 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 ## Writing style
 
+- For drafting or revising user-facing prose (docs, emails, PR text, longer explanations), read `pi/skills/natural-writing/SKILL.md`. Preserve active Caveman style; skip code-only and exact-output tasks. This routing applies to this repository, not every project using the package.
+
 - Be concise and operational.
 - Prefer copy-pasteable commands and config blocks.
 - Use clear section headings and short bullets.
@@ -52,6 +54,8 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 - `docs/setup/subagents.md` owns team roles, deployment/rollback, orchestration prompts, and trust guidance.
 
 ## Package resources
+
+- Browser assistance loads from `pi/extensions/browser/index.ts` with bundled `browser-setup`/`browser-assist` skills. Fresh devices stay off; `/browser enable` explicitly remembers global opt-in in user-owned `browser/config.json`, allowing native MCP registration in later interactive TUI/RPC sessions only. Expose only `/browser setup`, `/browser enable`, `/browser disable` and `/browser status`; disable stops current registration and future automatic access. Session exit cleans up connections without revoking saved opt-in. Removed lifecycle arguments must never be aliased to persistent consent. No Chrome extension, profile copying, shared daemon, project-local enablement or silent fallback. Preserve Chrome approval, private backups, config drift/lock safeguards and unknown keys. Read `docs/setup/mcp.md#browser-assistance` and the component README before lifecycle/exposure changes. Implementation approval is not local activation approval.
 
 - Root manifest must continue exposing theme-owned Signature UI, local extension directories, themes, and skills. Load Signature through the canonical theme entrypoint; do not restore a standalone Signature adapter.
 - `pi/themes/pi-irfan-devs/` owns palette, canonical editor/Signature entrypoint, welcome controller/renderer, adjacent tests, smoke scripts and component `README.md`. For welcome UI changes, read that component README for layout priority, visibility and diagnostics. Manifest loads only `index.ts`; preserve unrelated palettes and the single-editor conflict policy. Retired theme aliases and standalone Signature adapters stay removed.

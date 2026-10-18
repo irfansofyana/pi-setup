@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, chmod, rm } from "node:fs/promises";
+import { mkdtemp, chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createManagedSupervisor } from "./manager-service.ts";
@@ -114,7 +114,11 @@ test("tree continuation cannot bypass retained-result backpressure", async () =>
 test("tree continuation cannot bypass a real persistence failure", async () => {
   const f = await fixture(true);
   try {
-    await chmod(join(f.root,"subagents-state"),0o500);
+    // chmod does not deny writes to root in the CI container. A directory at the
+    // state-file path forces a real storage failure regardless of effective UID.
+    const state = join(f.root,"subagents-state","state.json");
+    await rm(state);
+    await mkdir(state);
     await f.orchestration.flush();
     assert.ok(f.warnings.some(message=>/state write failed/.test(message)));
     await assert.rejects(f.scope.steer(f.path,"should not launch"),/backpressure/);

@@ -142,7 +142,7 @@ export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
       cleanup();
       resolve();
     }, ms);
-    timer.unref?.();
+    // This timer settles awaited work; unlike cache expiry it must keep Node alive.
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }

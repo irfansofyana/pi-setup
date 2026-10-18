@@ -36,6 +36,12 @@ Package-owned `pi/extensions/ask-user-question/index.ts` provides an original Cl
 
 Answers live in normal session tool results. Do not enter secrets; this tool is not a permission/security gate. If the retired source remains installed, verify the included tool and propose old-source removal separately to avoid duplicate `ask_user_question` registrations. Old config cleanup also requires separate approval; preserve local settings. Run `/reload` or restart Pi after approved package/source changes.
 
+## Browser assistance
+
+Loads from `pi/extensions/browser/index.ts`. `/browser setup` delegates a read-only audit; `/browser enable` records one-time global opt-in in user-owned `browser/config.json` and makes official Chrome DevTools MCP tools available in later interactive TUI/RPC sessions. Fresh devices stay off; print/JSON startup stays off. Only setup, enable, disable and status are public. `/browser disable` revokes remembered startup and removes current registration; normal Pi exit cleans up its connection without revoking opt-in. Status reports registration/preference metadata, not browser identity. No Chrome extension, profile copy, shared daemon or persistent MCP definition is created.
+
+See [MCP browser assistance](mcp.md#browser-assistance) for prerequisites, existing-server conflicts, data exposure and live acceptance checks. The [component README](../../pi/extensions/browser/README.md) owns lifecycle/test details; `browser-assist` guides bounded summaries, extraction and navigation. Reload/restart restores availability only after remembered opt-in; Chrome still controls each debugging connection.
+
 ## Native web research
 
 The package-owned [`web-research`](../../pi/extensions/web-research/README.md) extension exposes two read-only primitives:

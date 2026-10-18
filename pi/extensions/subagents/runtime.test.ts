@@ -151,7 +151,7 @@ test("native runtime registers tools/UI, executes child, reads result and closes
     assert.equal(changed.details.thinkingLevel,"low");
     assert.equal(transports.at(-1).target.id,"changed","new admissions must follow a parent model change");
     assert.equal(editorReplaced,0,"agent UI must preserve the theme's editor slot");
-    assert.equal(shortcuts.has("ctrl+shift+a"),true,"tree navigation has a cooperative shortcut");
+    assert.equal(shortcuts.has("ctrl+shift+a"),false,"inline task navigation must not claim a global shortcut");
     const beforePause=requests;
     const paused=await tools.get("agent_spawn").execute("pause",{path:"checkpoint",type:"worker",task:"Please checkpoint"},undefined,undefined,ctx);
     assert.equal(paused.details.state,"paused");assert.equal(paused.details.output,undefined);assert.equal(requests,beforePause+1);

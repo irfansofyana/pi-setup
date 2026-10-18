@@ -32,7 +32,16 @@ test("package manifest ships every declared resource path", async () => {
     "pi/themes/pi-irfan-devs/signature.ts",
     "pi/themes/pi-irfan-devs/signature.test.ts",
     "pi/skills/pi-setup/SKILL.md",
+    "pi/skills/browser-setup/SKILL.md",
+    "pi/skills/browser-assist/SKILL.md",
+    "pi/extensions/browser/index.ts",
+    "pi/extensions/browser/preferences.ts",
+    "pi/extensions/browser/README.md",
+    "pi/extensions/browser/evaluation-cases.json",
     "pi/skills/my-web-search/SKILL.md",
+    "pi/skills/natural-writing/SKILL.md",
+    "pi/skills/natural-writing/references/sources.md",
+    "pi/skills/natural-writing/evals/evals.json",
     "pi/skills/my-web-search/references/source-hierarchy.md",
     "pi/skills/my-web-search/references/templates.md",
     "pi/extensions/ask-user-question/index.ts",
@@ -48,6 +57,7 @@ test("package manifest ships every declared resource path", async () => {
     "pi/themes/pi-irfan-devs/theme.json",
     "pi/prompts/research.md",
     "pi/prompts/push-changes.md",
+    "pi/prompts/understand.md",
   ]) {
     await access(path.join(root, requiredPath));
   }
@@ -124,7 +134,7 @@ test("Irfan Devs palette keeps readable dim text", async () => {
   const theme = await readJson("pi/themes/pi-irfan-devs/theme.json");
   assert.equal(theme.name, "pi-irfan-devs");
   assert.equal(theme.appearance, "dark");
-  assert.equal(theme.vars.phosphor, "#36ff7a");
+  assert.equal(theme.vars.phosphor, "#78df9b");
   const luminance = (hex) => {
     const rgb = hex.slice(1).match(/../g).map((pair) => parseInt(pair, 16) / 255);
     return rgb.map((c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)

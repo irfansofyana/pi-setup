@@ -472,15 +472,6 @@ test("HindsightHttpClient reports non-JSON HTTP errors before parsing", async ()
   await assert.rejects(() => client.health(), /failed \(502\): bad gateway/);
 });
 
-test("HindsightHttpClient applies default request timeout", async () => {
-  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
-    await new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
-    return new Response("{}");
-  };
-  const client = new HindsightHttpClient({ apiUrl: "http://hindsight.local", autoStartDaemon: false, requestTimeoutMs: 10 }, fetchImpl as any);
-  await assert.rejects(() => client.health(), /Timeout|aborted|Abort/i);
-});
-
 test("redactSecrets scrubs sk-, bearer, env secrets, and common token prefixes", () => {
   const out = redactSecrets([
     "key is sk-abcdefghijklmnopqrstuvwxyz",

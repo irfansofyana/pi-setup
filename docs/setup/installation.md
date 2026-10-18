@@ -34,8 +34,8 @@ pi install git:github.com/irfansofyana/pi-setup@v0.6.0
 
 Replace `v0.6.0` with a newer release only after reviewing it.
 
-This branch prepares `0.7.0`; `v0.7.0` is not published yet. Once that tag is
-published and reviewed, use `pi install git:github.com/irfansofyana/pi-setup@v0.7.0`.
+This branch prepares `0.9.0`; `v0.9.0` is not published yet. Once that tag is
+published and reviewed, use `pi install git:github.com/irfansofyana/pi-setup@v0.9.0`.
 The resource inventory below describes the upcoming branch; `v0.6.0` retains its
 legacy subagent setup. See [release preparation](operations.md#release-preparation).
 

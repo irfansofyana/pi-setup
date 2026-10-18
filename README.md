@@ -26,9 +26,9 @@ Inside Pi:
 /reload
 ```
 
-This branch prepares **0.7.0**; its tag is not published yet. After publication and review,
-install it with `pi install git:github.com/irfansofyana/pi-setup@v0.7.0`.
-The inventory below describes 0.7.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
+This branch prepares **0.9.0**; its tag is not published yet. After publication and review,
+install it with `pi install git:github.com/irfansofyana/pi-setup@v0.9.0`.
+The inventory below describes 0.9.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
 
 Init audits and proposes numbered changes; approval comes before mutation.
 Doctor is read-only. Neither command changes settings directly.
@@ -38,12 +38,14 @@ Existing devices use the same install, then [review migration proposals](docs/se
 
 - **UI:** `pi-irfan-devs` green palette, integrated editor, Signature UI, and π welcome panel; blue/Gruvbox alternatives remain available.
 - **Research:** native `web_search`/`web_fetch`, Tavily-first routing, optional Exa, and bundled `my-web-search`.
+- **Writing:** bundled `natural-writing` prose guidance with factual/literal preservation and Caveman-aware brevity. See [usage](docs/setup/skills-and-tools.md#natural-writing).
+- **Browser:** one-time opt-in for existing default Chrome through official MCP; remembered session reuse, `/browser` controls and setup/assist skills. No Chrome extension. See [activation and safety](docs/setup/mcp.md#browser-assistance).
 - **Todos:** live session plans with manual editing, plus searchable project todos; shared `todo` tool, persistent project files, cleanup off by default.
 - **Questions:** included `ask_user_question` with custom answers, multi-select, previews, and final review; disposable `/ask-demo` smoke UI.
 - **Memory:** local Hindsight adapter and generated Managed Skills.
 - **Context:** Headroom proxy integration and read-only `/context` diagnostics.
 - **Workflow:** persisted `/goal`, paced `/loop`, side-channel `/btw`, and `/caveman` response style.
-- **Prompts:** seven packaged research, planning, debugging, review, and push workflows.
+- **Prompts:** eight packaged code-understanding, research, planning, debugging, review, and push workflows.
 - **Delegation:** bundled researcher, scout, builder and reviewer; `code-mapper` aliases scout. No manual role deployment.
 - **Native subagents:** enabled by default; compact Subagents dock, `/agents tasks` live messages, steering/follow-up, unread indicators and scoped builder worktrees. Outcome persistence, schedules and workflows remain opt-in; configured Tintinweb sources suppress native registration.
 - **Setup:** bundled audit/proposal/migration skill; native Pi MCP guidance.
