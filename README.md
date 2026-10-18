@@ -26,9 +26,9 @@ Inside Pi:
 /reload
 ```
 
-This branch prepares **0.7.0**; its tag is not published yet. After publication and review,
-install it with `pi install git:github.com/irfansofyana/pi-setup@v0.7.0`.
-The inventory below describes 0.7.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
+This branch prepares **0.8.0**; its tag is not published yet. After publication and review,
+install it with `pi install git:github.com/irfansofyana/pi-setup@v0.8.0`.
+The inventory below describes 0.8.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
 
 Init audits and proposes numbered changes; approval comes before mutation.
 Doctor is read-only. Neither command changes settings directly.

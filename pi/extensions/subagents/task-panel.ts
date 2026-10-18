@@ -136,7 +136,10 @@ export class TaskPanel {
     // A configured composer submission/newline wins over panel navigation keys.
     if (this.editing && (submit || keys.matches(data, "tui.input.newLine"))) {
       if (!this.canCompose()) { this.enlarge(); return; }
-      this.editor.handleInput(data); this.saveDraft(); this.options.host.requestRender(); return;
+      // Pi's editor handles Tab completion before submit bindings, even without a provider.
+      if (tab && submit && !keys.matches(data, "tui.input.newLine")) this.editor.onSubmit?.(this.editor.getExpandedText());
+      else this.editor.handleInput(data);
+      this.saveDraft(); this.options.host.requestRender(); return;
     }
     if (escape) {
       if (this.editing) { this.saveDraft(); this.compose(false); } else this.close();
@@ -227,7 +230,7 @@ export class TaskPanel {
     }
     const top = waiting ? 0 : this.scrollTop;
     const visible = rows.slice(top, top + this.viewport).map(row => theme.fg(row.tone, row.text));
-    if (this.follow && this.focused && this.viewport > 0 && selection && !waiting) this.views.markSeen(selection, this.messages);
+    if (this.follow && this.focused && this.viewport > 0 && thread && selection && !this.unavailable && !waiting) this.views.markSeen(selection, this.messages);
     while (visible.length < this.viewport) visible.push("");
     const keys = getKeybindings();
     const label = (key: string) => key.split("+").map(part => part.charAt(0).toUpperCase() + part.slice(1)).join("+");

@@ -54,18 +54,19 @@ export function wrapTaskMessages(messages: readonly TaskMessage[], width: number
     if (rows.length) rows.push({ key: `${message.key}:separator`, text: "", tone: "dim" });
     rows.push({ key: `${message.key}:role`, text: truncateToWidth(message.role, width, ""), tone: "accent" });
     if (message.omitted) {
-      for (const [index, chunk] of wrapTextWithAnsi("Earlier text omitted…", width).entries()) rows.push({ key: `${message.key}:omitted:${index}`, text: truncateToWidth(chunk, width, ""), tone: "dim" });
+      for (const [index, chunk] of wrapTextWithAnsi("Earlier text omitted…", width).entries()) rows.push({ key: `${message.key}:omitted:${index}`, text: taskText(truncateToWidth(taskText(chunk), width, "")), tone: "dim" });
     }
     let offset = message.offset;
     for (const line of message.text.split("\n")) {
       const chunks = wrapTextWithAnsi(line, width);
       let cursor = 0;
-      for (const chunk of chunks) {
-        // Pi may emit an empty row before a grapheme wider than the viewport.
+      for (const wrapped of chunks) {
+        const chunk = taskText(wrapped);
+        // Pi may emit an empty/ANSI-only row before a grapheme wider than the viewport.
         if (!chunk && chunks.length > 1) continue;
         // Projection is plain text; recover offsets across whitespace trimmed by Pi.
         const start = Math.max(cursor, line.indexOf(chunk, cursor));
-        rows.push({ key: `${message.key}:${offset + start}`, text: truncateToWidth(chunk, width, ""), tone: "text" });
+        rows.push({ key: `${message.key}:${offset + start}`, text: taskText(truncateToWidth(chunk, width, "")), tone: "text" });
         cursor = start + chunk.length;
       }
       offset += line.length + 1;

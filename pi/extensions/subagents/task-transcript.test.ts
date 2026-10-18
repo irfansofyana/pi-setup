@@ -56,6 +56,7 @@ test("single-column wrapping clips oversized graphemes without duplicate anchors
   const message = { key: "message", role: "Agent" as const, text: "界😀x\n\ntail", offset: 0, omitted: true };
   const rows = wrapTaskMessages([message], 1);
   assert.ok(rows.every(line => visibleWidth(line.text) <= 1));
+  assert.ok(rows.every(line => !line.text.includes("\x1b")), "plain-text wrapping must not introduce ANSI controls");
   assert.equal(new Set(rows.map(line => line.key)).size, rows.length);
   assert.deepEqual(rows.filter(line => line.tone === "text" && line.text).map(line => line.text), ["x", "t", "a", "i", "l"]);
   assert.deepEqual(wrapTaskMessages([message], 0), []);
