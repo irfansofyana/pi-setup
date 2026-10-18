@@ -179,8 +179,8 @@ First-party package updates change repository-owned extensions, themes, skills, 
 
 ## Release preparation
 
-`package.json` and the root lockfile prepare **0.7.0 (unreleased)**. The install
-examples retain the existing `v0.6.0` tag until a reviewed `v0.7.0` is published.
+`package.json` and the root lockfile prepare **0.9.0 (unreleased)**. The install
+examples retain the existing `v0.6.0` tag until a reviewed `v0.9.0` is published.
 This version bump creates no tag or release and does not update a live installation.
 
 Changes since `main` include default native subagents with four bundled roles,
