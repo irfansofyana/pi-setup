@@ -25,6 +25,8 @@ test("one bounded CI matrix covers minimum, pinned and current SDK without dupli
   assert.equal(workflow.concurrency["cancel-in-progress"], true);
   const run = job.steps.find(step => step.run).run;
   for (const pattern of [/--memory=2g --memory-swap=2g --cpus=2 --pids-limit=128/, /timeout --kill-after/, /npm ci/, /npm run test:ci/, /type=bind.*readonly/]) assert.match(run, pattern);
+  assert.match(run, /apt-get install -y --no-install-recommends git/);
+  assert.match(run, /git --version/);
   assert.doesNotMatch(run, /npm run test:ci\s*\|\|/);
   assert.equal(job["continue-on-error"], undefined);
 });

@@ -4,8 +4,8 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ModelRuntime, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import headroom, { DEFAULT_CONFIG } from "../headroom/index.ts";
+import { ModelRuntime, ModelRegistry, VERSION } from "@earendil-works/pi-coding-agent";
+import headroom, { DEFAULT_CONFIG, headroomChildBridgeSupported } from "../headroom/index.ts";
 import { createTrustedRoleBackend } from "./trusted.ts";
 
 // Missing lease retention, a native-provider fallback, or ignoring the installed
@@ -67,6 +67,11 @@ test("canonical routed Ciung retains a real parent lease, pins role model/auth, 
   const rolePath = join(options.agentDir, "agents", "researcher.md");
   await writeFile(rolePath, (await readFile(rolePath, "utf8")).replace("thinking: medium", "model: openai/gpt-4\nthinking: medium"));
   const result = await createTrustedRoleBackend({ ...options, model: "openai/gpt-4o-mini" });
+  if (!headroomChildBridgeSupported(VERSION)) {
+    assert.deepEqual(result, { ok: false, code: "unsupported_routing" });
+    assert.deepEqual(requests, [], "unaudited SDK must reject before provider I/O");
+    return;
+  }
   assert.equal(result.ok, true, result.ok ? undefined : result.code);
   if (!result.ok) return;
   try {
@@ -91,6 +96,11 @@ test("canonical routed Ciung retains a real parent lease, pins role model/auth, 
 
 test("routed child refuses requests after proxy readiness loss and does not fall back upstream", async () => fixture(async ({ options, requests, setReady }) => {
   const result = await createTrustedRoleBackend(options);
+  if (!headroomChildBridgeSupported(VERSION)) {
+    assert.deepEqual(result, { ok: false, code: "unsupported_routing" });
+    assert.deepEqual(requests, [], "unaudited SDK must not borrow a parent lease");
+    return;
+  }
   assert.equal(result.ok, true, result.ok ? undefined : result.code);
   if (!result.ok) return;
   try {

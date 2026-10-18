@@ -43,6 +43,10 @@ jobs:
             --tmpfs /work:rw,exec,size=1g --workdir /work \
             -e PI_VERSION=${{ matrix.pi }} -e NODE_OPTIONS=--max-old-space-size=512 \
             node:${{ matrix.node }}-bookworm-slim timeout --kill-after=10s 15m sh -eu -c '
+              apt-get update
+              apt-get install -y --no-install-recommends git
+              rm -rf /var/lib/apt/lists/*
+              git --version
               cp -a /source/. /work/
               npm ci --no-audit --no-fund
               npm install --no-save --ignore-scripts --no-audit --no-fund \
