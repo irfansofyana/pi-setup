@@ -6,6 +6,7 @@ The aggregate package loads its declared `pi/skills/` resources directly. Instal
 
 - [`pi-setup`](../../pi/skills/pi-setup/SKILL.md) — audit and approval-gated migration workflow.
 - [`my-web-search`](../../pi/skills/my-web-search/SKILL.md) — provider-neutral research method used by the main agent and preloaded by the bundled `researcher` role.
+- [`natural-writing`](../../pi/skills/natural-writing/SKILL.md): original prose-editing guidance that preserves facts, technical literals and active Caveman style.
 
 - [`browser-setup`](../../pi/skills/browser-setup/SKILL.md) — read-only audit, approved one-time opt-in and troubleshooting for existing default Chrome.
 - [`browser-assist`](../../pi/skills/browser-assist/SKILL.md) — scoped summaries, extraction, navigation and form preparation through native MCP. Browser access is opt-in; see [activation and safety](mcp.md#browser-assistance).
@@ -18,6 +19,18 @@ User-owned `~/.pi/agent/skills/`, `.pi/skills/` and managed skills are not moved
 After loading the updated package, run `/reload` or restart Pi.
 
 Bundled skills need no separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by the bundled researcher, and must be removed only after an explicit audit and approval.
+
+### Natural writing
+
+Pi advertises the skill description and loads its instructions for relevant prose drafting/revision; automatic selection is best-effort, not an output filter. Explicit use:
+
+```text
+/skill:natural-writing Rewrite this PR description without changing facts
+```
+
+Caveman retains control of compression and fragments; the skill never toggles it or rewrites protected code, commands, data or quotations. No global settings or Caveman preferences are changed. This repository's `AGENTS.md` adds a prose-routing pointer; a global `~/.pi/agent/AGENTS.md` pointer requires separate approval and is not installed by the package. Do not stack conflicting third-party humanizers for the same task; removing existing skills/configuration requires its own approval.
+
+[Provenance and evaluation guidance](../../pi/skills/natural-writing/references/sources.md) distinguish original instructions, source references, static contract checks and authored model cases that have not been run. Run `/reload` after loading the updated package.
 
 ## Core personal skills
 
@@ -51,7 +64,9 @@ Run `/reload` after skill changes.
 
 ## Optional: Understand-Anything
 
-Adds Pi commands for codebase graphs, dashboard, chat, diffs, explanations, and onboarding.
+The package-owned `/understand <question>` uses read-only scouts and answers in chat without graph files; see [prompt workflows](operations.md#packaged-prompt-templates). The optional Understand-Anything workflow below generates knowledge graphs and dashboard artifacts.
+
+For skill-based installs, use explicit `/skill:understand` commands to distinguish them from the bundled prompt. Audit existing bare `/understand` wrappers separately; never overwrite or remove them automatically.
 
 Install from Egonex fork:
 
@@ -62,12 +77,12 @@ curl -fsSL https://raw.githubusercontent.com/Egonex-AI/Understand-Anything/main/
 Useful commands:
 
 ```text
-/understand
-/understand-dashboard
-/understand-chat How does authentication work?
-/understand-diff
-/understand-explain README.md
-/understand-onboard
+/skill:understand
+/skill:understand-dashboard
+/skill:understand-chat How does authentication work?
+/skill:understand-diff
+/skill:understand-explain README.md
+/skill:understand-onboard
 ```
 
 Uninstall:

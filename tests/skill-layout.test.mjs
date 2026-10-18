@@ -13,7 +13,7 @@ test("bundled skills live only under the declared packaged skill root", async ()
   assert.ok(manifest.files.includes("pi/skills"));
   assert.ok(!manifest.files.includes("skills"));
   const dirs = (await readdir(skillRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
-  assert.deepEqual(dirs, ["browser-assist", "browser-setup", "my-web-search", "pi-setup"]);
+  assert.deepEqual(dirs, ["browser-assist", "browser-setup", "my-web-search", "natural-writing", "pi-setup"]);
   for (const name of dirs) {
     const content = await readFile(path.join(skillRoot, name, "SKILL.md"), "utf8");
     assert.match(content, new RegExp(`^name: ${name}$`, "m"));

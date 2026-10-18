@@ -33,33 +33,38 @@ The root manifest loads `pi/prompts/*.md` directly from the installed package. T
 
 | Command | Purpose | Default boundary |
 | --- | --- | --- |
+| `/understand <topic / path / question>` | Focused read-only scouts explain code flow, state and owning tests | Chat only; no graphs, edits or execution |
 | `/research <topic>` | 2–3 parallel researcher lanes, focused queries, fetched evidence | Findings in chat; no edits |
 | `/research-fit <capability>` | Researcher public constraints + scout local feasibility | Proposal only |
 | `/research-gap <feature and references>` | User-visible parity and gap matrix | Analysis only |
 | `/plan-change <change>` | Acceptance criteria, vertical slices, verification, risks | Wait for implementation approval |
 | `/debug <symptom>` | Reproduction, discriminating checks, root-cause evidence | Diagnosis only unless a fix is requested |
 | `/review-change [base or focus]` | Independent reviewer standards/spec lanes | Read-only; parent owns test execution |
-| `/push-changes [scope and destination]` | Scoped commit and ordinary branch push | No PR/MR unless explicitly requested |
+| `/push-changes [scope / destination]` | Fast commit + push + create/reuse PR/MR | PR/MR by default; `push only` skips it |
 
 Research, planning, mapping, and review lanes use the package-owned native roles from [Subagent team](subagents.md); package prompts do not deploy agents. The extension loads bundled roles directly; global copies are unnecessary. Follow that guide's trust requirements before invoking specialists in an untrusted repository. Research uses bundled `my-web-search`; `diagnosing-bugs` and `pr` are optional installed skills, not new package requirements. Templates do not change permission policy; their instructions are not a sandbox or enforced security boundary. Missing CLIs or skills are not installed implicitly.
 
 Examples:
 
 ```text
+/understand How browser access survives session restarts
 /research Ways to evaluate agent setup bloat repeatedly
 /research-fit Add provider-backed capability discovery
 /research-gap Our goal loop versus public reference implementations
 /plan-change Add a bounded cancellation path
 /debug Extension fails when optional provider config is missing
 /review-change main, focus on cancellation and lifecycle behavior
-/push-changes Current task changes only; push to the agreed feature branch
+/push-changes
+/push-changes push only
 /push-changes Current task changes; create a GitHub PR against main
 /push-changes Current task changes; create a GitLab MR against develop
 ```
 
-`/push-changes` keeps Git mutations in the parent session. It checks file scope, outgoing history, destination, secrets, and verification before committing/pushing; it preserves unrelated staged changes and stops on ambiguity or failures. Git alone handles commit/push. An explicitly requested GitHub PR uses `gh`; a GitLab MR uses `glab`. The selected remote determines the provider, including reviewed self-hosted configuration. Existing matching requests are reused. No force-push, history rewrite, publishing, releases, tags, deployment, or automatic merging is authorized.
+`/understand` uses one scout for narrow questions or 2–3 complementary scout lanes for broader flows, then synthesizes file/line evidence, invariants and unknowns in chat. It does not invoke the optional Understand-Anything graph/dashboard skills, write artifacts, run tests or change files. Install no extra package for this prompt; native bundled scouts provide the capability.
 
-After updating the package, run `/reload` and confirm all seven commands appear in completion. A harmless smoke test is `/plan-change Explain the change surface for adding another prompt, without implementation`. Adding the templates does not itself commit or push this repository.
+`/push-changes` uses the current task scope, feature branch and upstream without redundant confirmation. It reuses fresh checks, runs only required verification and does not wait for CI unless asked. Git mutations stay in the parent; unrelated work is preserved. By default it creates or reuses a matching PR/MR using the selected remote's host (`gh` for GitHub, `glab` for GitLab); `push only` skips that step. Ambiguity, unrelated staged/outgoing work, failed required checks and unsafe Git state still block progress. It never authorizes publishing, tags, releases, deployments or merging.
+
+After updating the package, run `/reload` and confirm all eight commands appear in completion. A harmless smoke test is `/plan-change Explain the change surface for adding another prompt, without implementation`. Adding the templates does not itself commit or push this repository.
 
 ## Verify setup
 

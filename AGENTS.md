@@ -15,6 +15,8 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 
 ## Writing style
 
+- For drafting or revising user-facing prose (docs, emails, PR text, longer explanations), read `pi/skills/natural-writing/SKILL.md`. Preserve active Caveman style; skip code-only and exact-output tasks. This routing applies to this repository, not every project using the package.
+
 - Be concise and operational.
 - Prefer copy-pasteable commands and config blocks.
 - Use clear section headings and short bullets.

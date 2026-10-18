@@ -39,6 +39,9 @@ test("package manifest ships every declared resource path", async () => {
     "pi/extensions/browser/README.md",
     "pi/extensions/browser/evaluation-cases.json",
     "pi/skills/my-web-search/SKILL.md",
+    "pi/skills/natural-writing/SKILL.md",
+    "pi/skills/natural-writing/references/sources.md",
+    "pi/skills/natural-writing/evals/evals.json",
     "pi/skills/my-web-search/references/source-hierarchy.md",
     "pi/skills/my-web-search/references/templates.md",
     "pi/extensions/ask-user-question/index.ts",
@@ -54,6 +57,7 @@ test("package manifest ships every declared resource path", async () => {
     "pi/themes/pi-irfan-devs/theme.json",
     "pi/prompts/research.md",
     "pi/prompts/push-changes.md",
+    "pi/prompts/understand.md",
   ]) {
     await access(path.join(root, requiredPath));
   }

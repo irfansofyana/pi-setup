@@ -7,8 +7,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = path.resolve(import.meta.dirname, "..");
 const directory = path.join(root, "pi/prompts");
 const names = [
-  "debug", "plan-change", "push-changes", "research", "research-fit",
-  "research-gap", "review-change",
+  "debug",
+  "plan-change",
+  "push-changes",
+  "research",
+  "research-fit",
+  "research-gap",
+  "review-change",
+  "understand",
 ];
 
 async function read(name) {
@@ -21,7 +27,7 @@ function parse(content) {
   return { frontmatter: match[1], body: match[2] };
 }
 
-test("ships exactly seven discoverable, parameterized prompt commands", async () => {
+test("ships discoverable, parameterized prompt commands", async () => {
   const files = (await readdir(directory)).filter((file) => file.endsWith(".md")).sort();
   assert.deepEqual(files, names.map((name) => `${name}.md`).sort());
   const descriptions = new Set();
@@ -120,35 +126,59 @@ test("review separates standards/spec lanes without giving reviewers shell autho
   assert.match(review, /never claim proof of no bugs/);
 });
 
-test("push defaults to scoped commit/push with explicit optional PR/MR provider selection", async () => {
-  const push = await read("push-changes");
-  assert.match(push, /Create a pull request \(PR\) or merge request \(MR\) only when explicitly requested/);
-  assert.match(push, /parent owns every Git and host CLI action/);
-  assert.match(push, /GitHub: use gh/);
-  assert.match(push, /GitLab: use glab/);
-  assert.match(push, /hosting service from the selected[\s\S]*repository\/remote/);
-  assert.match(push, /self-hosted or unclear providers, ask/);
-  assert.match(push, /source repository\/branch and target repository\/branch match/);
-  assert.match(push, /--head\/--base/);
-  assert.match(push, /--source-branch\/--target-branch/);
-  assert.match(push, /Avoid auto-push flags such as glab --fill or --push/);
+test("understand uses bounded read-only scouts and synthesizes a focused answer", async () => {
+  const { body } = parse(await read("understand"));
+  assert.ok(body.trim().split(/\s+/).length <= 240, "keep code understanding lightweight");
+  for (const pattern of [
+    /topic.*missing.*ambiguous/, /one scout.*narrow/,
+    /2–3 non-overlapping/, /independent lanes together/,
+    /wait: false/, /self-contained/, /read-only and network-free/,
+    /Do not invoke .*skill:understand/, /No file changes, graph artifacts/,
+    /file:line/, /owning tests/, /observed behavior from inference/,
+    /synthesize rather than concatenate/, /stopped[\s\S]*incomplete/,
+  ]) assert.match(body, pattern);
+  const skills = await readFile(path.join(root, "docs/setup/skills-and-tools.md"), "utf8");
+  assert.match(skills, /\/skill:understand/);
+  assert.match(skills, /package-owned .\/understand/);
 });
 
-test("push preserves unrelated work and stops on verification or Git failures", async () => {
+test("push defaults to commit/push and a matching PR/MR with a push-only override", async () => {
   const push = await read("push-changes");
-  assert.match(push, /Review every outgoing commit and its diff/);
-  assert.match(push, /outgoing history includes unrelated work, ask/);
-  assert.match(push, /Stop on failures/);
-  assert.match(push, /required checks cannot run[\s\S]*explicit approval/);
-  assert.match(push, /Stage only explicit approved paths or hunks/);
-  assert.match(push, /Preserve unrelated working-tree and staged changes/);
-  assert.match(push, /out-of-scope changes, stop and ask/);
-  assert.match(push, /detached HEAD or a default\/protected branch/);
-  assert.match(push, /do not use --no-verify or amend existing commits/);
-  assert.match(push, /Never force-push, rewrite history, rebase, reset, clean/);
-  assert.match(push, /no package publishing, releases, tags, deployment, merge/);
-  assert.match(push, /remote branch resolves to the pushed local commit/);
-  assert.match(push, /never undo a successful push automatically/);
+  assert.match(push, /Default: commit, push, create or reuse a PR\/MR/);
+  assert.match(push, /"push only" skips PR\/MR/);
+  assert.match(push, /current feature branch and existing upstream/);
+  assert.match(push, /Proceed without another confirmation/);
+  assert.match(push, /host from remote: GitHub .gh., GitLab .glab./);
+  assert.match(push, /exact repo\/head\/base/);
+  assert.match(push, /matching open PR\/MR/);
+  assert.match(push, /already-pushed branch/);
+  assert.match(push, /No duplicate requests or edits to existing metadata/);
+  assert.match(push, /no automatic installs, login or forks/);
+});
+
+test("push stays short and reuses verification instead of adding ceremony", async () => {
+  const { body } = parse(await read("push-changes"));
+  assert.ok(body.trim().split(/\s+/).length <= 300, "keep push fast path within 300 words");
+  assert.match(body, /Reuse fresh checks for unchanged content/);
+  assert.match(body, /smallest required checks/);
+  assert.match(body, /No optional full suites or CI waiting unless requested/);
+  assert.match(body, /Ask only for unsafe or genuinely ambiguous/);
+});
+
+test("push preserves scoped work, required checks and non-destructive Git boundaries", async () => {
+  const push = await read("push-changes");
+  for (const pattern of [
+    /including outgoing commits/, /secrets and artifacts/,
+    /explicit paths\/hunks/, /preserve unrelated work/,
+    /index or outgoing history includes unrelated changes/,
+    /detached\/default\/protected/, /Stop on failures/,
+    /ask before skipping required checks/, /honor hooks/,
+    /explicit remote\/branch ref/, /verify remote SHA/,
+    /Stop on divergence, drift or rejected push/,
+    /Parent owns mutations; no delegation/,
+    /No force-push, history rewrites, hook bypass/,
+    /tags, releases, publishing, deployment or merge/,
+  ]) assert.match(push, pattern);
 });
 
 test("operations documents all commands and native ownership without manual copying", async () => {
@@ -156,6 +186,6 @@ test("operations documents all commands and native ownership without manual copy
   for (const name of names) assert.ok(operations.includes(`/${name}`));
   assert.match(operations, /do not copy them into `~\/\.pi\/agent\/prompts\/`/);
   assert.match(operations, /package prompts do not deploy agents/);
-  assert.match(operations, /No PR\/MR unless explicitly requested/);
+  assert.match(operations, /PR\/MR by default; .*push only/);
   assert.match(operations, /Adding the templates does not itself commit or push/);
 });
