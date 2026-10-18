@@ -38,6 +38,7 @@ Existing devices use the same install, then [review migration proposals](docs/se
 
 - **UI:** `pi-irfan-devs` green palette, integrated editor, Signature UI, and π welcome panel; blue/Gruvbox alternatives remain available.
 - **Research:** native `web_search`/`web_fetch`, Tavily-first routing, optional Exa, and bundled `my-web-search`.
+- **Browser:** one-time opt-in for existing default Chrome through official MCP; remembered session reuse, `/browser` controls and setup/assist skills. No Chrome extension. See [activation and safety](docs/setup/mcp.md#browser-assistance).
 - **Todos:** live session plans with manual editing, plus searchable project todos; shared `todo` tool, persistent project files, cleanup off by default.
 - **Questions:** included `ask_user_question` with custom answers, multi-select, previews, and final review; disposable `/ask-demo` smoke UI.
 - **Memory:** local Hindsight adapter and generated Managed Skills.

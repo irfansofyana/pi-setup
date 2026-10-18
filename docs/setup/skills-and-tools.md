@@ -7,14 +7,17 @@ The aggregate package loads its declared `pi/skills/` resources directly. Instal
 - [`pi-setup`](../../pi/skills/pi-setup/SKILL.md) — audit and approval-gated migration workflow.
 - [`my-web-search`](../../pi/skills/my-web-search/SKILL.md) — provider-neutral research method used by the main agent and preloaded by the bundled `researcher` role.
 
-Both live under package-owned `pi/skills/`; skill names and commands are unchanged.
+- [`browser-setup`](../../pi/skills/browser-setup/SKILL.md) — read-only audit, approved one-time opt-in and troubleshooting for existing default Chrome.
+- [`browser-assist`](../../pi/skills/browser-assist/SKILL.md) — scoped summaries, extraction, navigation and form preparation through native MCP. Browser access is opt-in; see [activation and safety](mcp.md#browser-assistance).
+
+All live under package-owned `pi/skills/`; existing skill names and commands are unchanged.
 If personal package resource filters or custom integrations explicitly reference
 the former root `skills/` paths, review and update those references to `pi/skills/`
 when adopting the updated package. Unfiltered package loading follows the manifest.
 User-owned `~/.pi/agent/skills/`, `.pi/skills/` and managed skills are not moved.
 After loading the updated package, run `/reload` or restart Pi.
 
-Neither bundled skill needs a separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by the bundled researcher, and must be removed only after an explicit audit and approval.
+Bundled skills need no separate marketplace command. An existing separately installed `9router-web-researcher` may remain during side-by-side dogfood, but it is legacy, is not preloaded by the bundled researcher, and must be removed only after an explicit audit and approval.
 
 ## Core personal skills
 
