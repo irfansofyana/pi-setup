@@ -23,7 +23,8 @@
   },
   "scripts": {
     "test": "npm run test:package && npm run test:prompts && npm run test:extensions && npm run test:subagent-manager && npm run test:signature",
-    "test:package": "node --test --test-concurrency=1 tests/package-contract.test.mjs tests/skill-layout.test.mjs tests/browser-contract.test.mjs",
+    "test:package": "node --test --test-concurrency=1 tests/package-contract.test.mjs tests/skill-layout.test.mjs tests/browser-contract.test.mjs tests/ci-contract.test.mjs",
+    "test:ci": "node scripts/test-ci.mjs",
     "test:prompts": "node --test tests/prompt-templates.test.mjs",
     "test:browser": "node --test --test-concurrency=1 pi/extensions/browser/browser.test.ts pi/extensions/browser/preferences.test.ts tests/browser-contract.test.mjs",
     "test:extensions": "node --experimental-transform-types --test --test-concurrency=1 pi/extensions/*/*.test.ts",

@@ -134,10 +134,12 @@ The Headroom child bridge requires the audited Pi SDK `1.1.0`; use an isolated f
 `offline-smoke.mjs` also serializes its test files and bounds each Node heap, but still needs an outer process-tree memory/CPU limit on a shared host. Keep live settings, services, installed sources and credentials out of test fixtures.
 
 The [CI workflow](../../.github/workflows/test.yml) owns exact validation versions
-and the serial task-panel compatibility job: Pi 1.0.0/1.0.4/1.1.0, 2 GiB hard RAM,
+and the serial three-profile matrix: Node/Pi 22.19.0/1.0.0 (minimum), 24.18.0/1.1.0 (pinned), 24.18.0/1.3.0 (current), 2 GiB hard RAM,
 no swap, 2 CPUs and bounded runtime. Current npm test scripts use
 `--experimental-transform-types`; local Node 26.8.1 rejects that flag. Use the
 workflow's pinned Node versions for those scripts until the launcher is updated.
+Each profile runs the browser import smoke and package, prompt, extension, upstream-manager and Signature suites once. `scripts/test-ci.mjs` collects suite failures and still runs later suites; only the minimum profile skips the two experimental routed-lease files requiring Pi 1.1.0. Superseded runs cancel automatically. Required-check rules, if configured, must be reviewed for the new `test (minimum)`, `test (pinned)` and `test (current)` names; this repository never changes GitHub protection settings automatically.
+
 Static `node --check` does not load the SDK, typecheck or verify terminal behavior.
 
 ## Troubleshooting

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import test from "node:test";
+import { buildCiSuites } from "../scripts/test-ci.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (file) => readFile(resolve(root, file), "utf8");
@@ -62,10 +63,14 @@ test("active instructions and research command examples contain no removed comma
   }
 });
 
-test("browser CI independently checks SDK imports and focused tests under hard limits", async () => {
-  const ci = await read(".github/workflows/test.yml");
-  const browserJob = ci.split("  task-panel-compatibility:")[0];
-  for (const pattern of [/  browser:/, /pi: \[1\.0\.0, 1\.3\.0\]/, /--memory=2g --memory-swap=2g --cpus=2 --pids-limit=128/, /timeout --kill-after/, /npm run test:browser/, /pi\/extensions\/browser\/index\.ts/]) assert.match(browserJob, pattern);
+test("consolidated CI keeps browser SDK import and test coverage", async () => {
+  assert.match(await read(".github/workflows/test.yml"), /npm run test:ci/);
+  for (const version of ["1.0.0", "1.1.0", "1.3.0"]) {
+    const suites = buildCiSuites(root, version);
+    assert.match(suites[0].args.at(-1), /pi\/extensions\/browser\/index\.ts/);
+    const extensions = suites.find(suite => suite.name === "Extensions").args;
+    for (const file of ["browser.test.ts", "preferences.test.ts"]) assert.ok(extensions.includes(`pi/extensions/browser/${file}`));
+  }
 });
 
 test("scenario corpus is explicitly not a completed live skill evaluation", async () => {

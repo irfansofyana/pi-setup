@@ -50,11 +50,13 @@ export function projectTaskMessages(snapshot: TranscriptSnapshot): TaskMessage[]
 export function wrapTaskMessages(messages: readonly TaskMessage[], width: number): TaskLine[] {
   if (width <= 0) return [];
   const rows: TaskLine[] = [];
+  // Clipping may add ANSI resets even to plain labels; sanitize every output path.
+  const clip = (text: string) => taskText(truncateToWidth(taskText(text), width, ""));
   for (const message of messages) {
     if (rows.length) rows.push({ key: `${message.key}:separator`, text: "", tone: "dim" });
-    rows.push({ key: `${message.key}:role`, text: truncateToWidth(message.role, width, ""), tone: "accent" });
+    rows.push({ key: `${message.key}:role`, text: clip(message.role), tone: "accent" });
     if (message.omitted) {
-      for (const [index, chunk] of wrapTextWithAnsi("Earlier text omitted…", width).entries()) rows.push({ key: `${message.key}:omitted:${index}`, text: taskText(truncateToWidth(taskText(chunk), width, "")), tone: "dim" });
+      for (const [index, chunk] of wrapTextWithAnsi("Earlier text omitted…", width).entries()) rows.push({ key: `${message.key}:omitted:${index}`, text: clip(chunk), tone: "dim" });
     }
     let offset = message.offset;
     for (const line of message.text.split("\n")) {
@@ -66,7 +68,7 @@ export function wrapTaskMessages(messages: readonly TaskMessage[], width: number
         if (!chunk && chunks.length > 1) continue;
         // Projection is plain text; recover offsets across whitespace trimmed by Pi.
         const start = Math.max(cursor, line.indexOf(chunk, cursor));
-        rows.push({ key: `${message.key}:${offset + start}`, text: taskText(truncateToWidth(chunk, width, "")), tone: "text" });
+        rows.push({ key: `${message.key}:${offset + start}`, text: clip(chunk), tone: "text" });
         cursor = start + chunk.length;
       }
       offset += line.length + 1;

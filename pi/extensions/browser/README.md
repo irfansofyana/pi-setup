@@ -49,7 +49,7 @@ Remembered availability is not blanket authorization: scope actions to the user'
 
 ## Verification
 
-`npm run test:browser` covers the four-command interface and no-op removal guidance, preferences/backup/drift/locking, future-session reuse and revocation, duplicate detection, lifecycle cancellation, sanitized failures and skill/package contracts without starting Chrome. The separate bounded `browser` CI job checks SDK imports and tests; adding it does not mean CI ran. Existing-profile reading has been exercised; remembered startup, full tab-close/detach behavior and OS/policy compatibility still need user-approved live checks. Scenario cases are not completed LLM evaluations.
+`npm run test:browser` covers the four-command interface and no-op removal guidance, preferences/backup/drift/locking, future-session reuse and revocation, duplicate detection, lifecycle cancellation, sanitized failures and skill/package contracts without starting Chrome. The consolidated bounded CI matrix checks SDK imports and tests; adding it does not mean CI ran. Existing-profile reading has been exercised; remembered startup, full tab-close/detach behavior and OS/policy compatibility still need user-approved live checks. Scenario cases are not completed LLM evaluations.
 
 Final independent static review of the four-command interface and remembered-access implementation found no blocking defects. That review did not rerun tests or replace the remaining CI/live acceptance checks.
 
