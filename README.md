@@ -13,7 +13,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 # or: npm install -g @earendil-works/pi-coding-agent
 
 # Install reviewed package release
-pi install git:github.com/irfansofyana/pi-setup@v0.6.0
+pi install "git:github.com/irfansofyana/pi-setup@<release-tag>"
 pi
 ```
 
@@ -26,9 +26,9 @@ Inside Pi:
 /reload
 ```
 
-This branch prepares **0.9.0**; its tag is not published yet. After publication and review,
-install it with `pi install git:github.com/irfansofyana/pi-setup@v0.9.0`.
-The inventory below describes 0.9.0. See [release preparation and validation](docs/setup/operations.md#release-preparation).
+Replace `<release-tag>` with a reviewed published tag from [release tags](https://github.com/irfansofyana/pi-setup/tags).
+Inventory below follows this branch; selected release may differ.
+See [release preparation and validation](docs/setup/operations.md#release-preparation).
 
 Init audits and proposes numbered changes; approval comes before mutation.
 Doctor is read-only. Neither command changes settings directly.
@@ -44,6 +44,7 @@ Existing devices use the same install, then [review migration proposals](docs/se
 - **Questions:** included `ask_user_question` with custom answers, multi-select, previews, and final review; disposable `/ask-demo` smoke UI.
 - **Memory:** local Hindsight adapter and generated Managed Skills.
 - **Context:** Headroom proxy integration and read-only `/context` diagnostics.
+- **Stats:** bundled `/stats` usage dashboard, comparisons, heatmap, model inspector and local cache. See [Stats](docs/setup/local-extensions.md#stats).
 - **Workflow:** persisted `/goal`, paced `/loop`, side-channel `/btw`, and `/caveman` response style.
 - **Prompts:** eight packaged code-understanding, research, planning, debugging, review, and push workflows.
 - **Delegation:** bundled researcher, scout, builder and reviewer; `code-mapper` aliases scout. No manual role deployment.
@@ -58,14 +59,14 @@ Headroom's Python CLI and Hindsight's daemon remain separate tools.
 
 ## Required companion packages
 
-Two companions remain **separate Pi package sources**, installed only after approval.
-Root `piSetup.requiredPackages` owns their sources and minimum versions; newer installed versions satisfy minimums.
+One companion remains a **separate Pi package source**, installed only after approval.
+Root `piSetup.requiredPackages` owns its source and minimum version; newer installed versions satisfy the minimum.
 
 | Package | Minimum version | Purpose |
 | --- | --- | --- |
 | `@ff-labs/pi-fff` | `>=0.10.5` | Specialist search |
-| `pi-stats-ext` | `>=0.2.0` | Usage statistics |
 
+Stats is package-owned, replacing separate `pi-stats-ext`; remove old source only after verification and separate approval. Preserve cache/history. See [Stats](docs/setup/local-extensions.md#stats).
 Todos is package-owned, replacing `npm:@juicesharp/rpiv-todo`.
 If that old source remains installed, remove it only through a separately approved proposal to avoid duplicate tools.
 No automatic todo-data migration or settings activation. See [Todos](docs/setup/local-extensions.md#todos).
@@ -93,7 +94,7 @@ Subagents are package-owned; legacy Tintinweb removal requires separate approval
 | [Permissions](docs/setup/permissions.md) | Trust boundaries and manual approvals |
 | [Subagent team](docs/setup/subagents.md) | Native roles, task panel, migration, trust |
 | [Agent packaging research](docs/setup/agent-packaging-research.md) | Bundled roles and user-owned legacy files |
-| [Local extensions](docs/setup/local-extensions.md) | Todos, structured questions, component behavior/config/state |
+| [Local extensions](docs/setup/local-extensions.md) | Stats, Todos, structured questions, component behavior/config/state |
 | [Using Hindsight day to day](docs/setup/hindsight-daily-use.md) | Memory scopes, tools, hygiene |
 | [Skills and tools](docs/setup/skills-and-tools.md) | `npx skills`, Understand-Anything, Notion CLI |
 | [Operations](docs/setup/operations.md) | Prompt workflows, verification, updates, troubleshooting |

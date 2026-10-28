@@ -62,6 +62,7 @@ Audit relevant surfaces:
 - Native `web-research` discovery, both exact tool names, bundled `my-web-search`, and owner-only artifact state without reading fetched bodies.
 - Presence and installed source/version of every separately managed package in `piSetup.requiredPackages`; compare installed versions against each source's version suffix. Installed versions at or above that floor are compliant, not drifted.
 - Known legacy manual extension files/directories under `~/.pi/agent/extensions/`, including same-command or same-tool registrations.
+- Separately installed npm/Git `pi-stats-ext` and manual Stats loaders as redundant dashboard sources, not companion requirements. Bundled command is `/stats`; upstream standalone command remains `/pi-stats`. Follow `docs/setup/local-extensions.md#stats`; preserve existing stats cache and session history.
 - Potential custom-editor claimants among enabled, resolved package entrypoints. Inspect effective load order plus runtime feature/config evidence. Report static `setEditorComponent()` matches as potential claimants; call them effective owners only when proven, otherwise classify ownership as `blocked`. Never reorder packages during audit.
 - Manually copied package themes under `~/.pi/agent/themes/`.
 - Selected theme and unrelated settings in `~/.pi/agent/settings.json`.
@@ -112,6 +113,7 @@ Separate proposal groups:
 - required first-party package verification;
 - missing or below-minimum companion package installation/update;
 - duplicate legacy manual loader cleanup;
+- standalone Stats source/manual-loader cleanup after bundled `/stats` verification, preserving cache/history;
 - optional settings/config changes, including theme;
 - selected custom-agent import or approved exact legacy-template/config cleanup;
 - native runtime configuration/companion cutover, separate from repository implementation and isolated manual acceptance;

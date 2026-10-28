@@ -29,25 +29,28 @@ pi --version
 Install a reviewed release tag:
 
 ```bash
-pi install git:github.com/irfansofyana/pi-setup@v0.6.0
+pi install git:github.com/irfansofyana/pi-setup@v0.9.0
 ```
 
-Replace `v0.6.0` with a newer release only after reviewing it.
+`v0.9.0` is latest published tag. Select newer releases only after review.
 
-This branch prepares `0.9.0`; `v0.9.0` is not published yet. Once that tag is
-published and reviewed, use `pi install git:github.com/irfansofyana/pi-setup@v0.9.0`.
-The resource inventory below describes the upcoming branch; `v0.6.0` retains its
-legacy subagent setup. See [release preparation](operations.md#release-preparation).
+This branch prepares **0.10.0 (unreleased)** with bundled Stats. Inventory below
+follows this branch. Tagged `v0.9.0` still uses standalone `pi-stats-ext`;
+follow installed package metadata until bundled replacement is released.
+After `v0.10.0` is published and reviewed, use
+`pi install git:github.com/irfansofyana/pi-setup@v0.10.0`.
+See [release preparation](operations.md#release-preparation).
 
-The upcoming package provides:
+This branch provides:
 
 - all declared repository extensions under `pi/extensions/`;
 - themes under `pi/themes/`, including recommended `pi-irfan-devs` and unrelated blue/Gruvbox alternatives;
 - integrated editor and Signature from `pi/themes/pi-irfan-devs/index.ts` only, with no compatibility or standalone Signature adapter;
-- seven prompt templates under `pi/prompts/`, loaded as slash commands;
+- eight prompt templates under `pi/prompts/`, loaded as slash commands;
 - the bundled `pi-setup` skill;
 - native subagent roles and their extension-owned loader, with no global template copying;
-- metadata listing the two companion package sources and their minimum version floors for the setup skill;
+- bundled `/stats` dashboard with existing local cache/history compatibility;
+- metadata listing required companion sources and minimum version floors for the setup skill;
 
 Do not clone the repository, install the setup skill separately, or copy package resources into `~/.pi/agent/` for a normal fresh setup. Companion packages are installed separately because they retain independent ownership, updates, and lifecycle scripts.
 
@@ -128,6 +131,7 @@ The audit must cover:
 - selected theme and unrelated keys in `~/.pi/agent/settings.json`;
 - component config/state paths listed in [Configuration](configuration.md);
 - global and project MCP configuration;
+- separately installed npm/Git `pi-stats-ext` or manual Stats loaders as redundant dashboard sources (legacy `/pi-stats`, bundled `/stats`); preserve `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-stats/cache.json` and session history; removal needs separate approval;
 - any installed `npm:@juicesharp/rpiv-todo` source as a separate duplicate-tool candidate now that Todos is package-owned; no automatic data migration or settings activation;
 - duplicate `ask_user_question` registrations from separately loaded extensions; source removal and configuration cleanup need separate explicit approval; do not edit local settings during repository implementation;
 - separately installed `9router-web-researcher`, Tavily/Exa MCP definitions, and legacy 9router web routes as distinct migration targets;
@@ -163,7 +167,7 @@ The cleanup order is:
 4. reload/restart Pi;
 5. verify the component before continuing.
 
-The two current companion packages are expected separate sources. Install or update them only after an explicit proposal is approved; do not remove them as first-party-package duplicates. Tintinweb is now a legacy subagent source; its removal requires a separate [native cutover proposal](subagents.md#native-runtime-cutover). The retired `npm:@juicesharp/rpiv-todo` source is also separate: verify bundled Todos first, then remove the old source only after explicit approval to avoid duplicate tools. Preserve its data and settings; no rpiv-todo migration or local settings activation is part of package installation. See [Todos](local-extensions.md#todos).
+The remaining required companion, `@ff-labs/pi-fff`, stays a separate source. Install or update it only after an explicit proposal is approved; do not remove it as a first-party-package duplicate. Stats is now package-owned: verify bundled `/stats`, then propose separate cleanup of any old stats source/manual loader. Preserve existing cache and session history; see [Stats](local-extensions.md#stats). Tintinweb is now a legacy subagent source; its removal requires a separate [native cutover proposal](subagents.md#native-runtime-cutover). The retired `npm:@juicesharp/rpiv-todo` source is also separate: verify bundled Todos first, then remove the old source only after explicit approval to avoid duplicate tools. Preserve its data and settings; no rpiv-todo migration or local settings activation is part of package installation. See [Todos](local-extensions.md#todos).
 
 Structured questions are package-owned. Verify `ask_user_question` is registered once before proposing duplicate-source removal. Preserve user-owned configuration unless its cleanup is separately approved; package installation changes no local settings. See [Structured questions](local-extensions.md#structured-questions) for interactive checks and session-result privacy.
 

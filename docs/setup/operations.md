@@ -23,6 +23,7 @@
 | Disposable structured-question smoke UI | `/ask-demo` |
 | Goal status | `/goal` (or `/goal status`) |
 | Context diagnostics | `/context` |
+| Local usage dashboard | `/stats [range]` |
 | Update Pi | `pi update` |
 | Update extensions | `pi update --extensions` |
 | List packages | `pi list` |
@@ -87,6 +88,8 @@ Inside Pi:
 /scoped-models
 /settings
 ```
+
+Stats verification: confirm bundled `/stats` appears once without `/pi-stats` alias, then inspect default/custom ranges, all four views, model selection/inspector and narrow/wide layouts. Command refreshes user-owned cache from local sessions; it does not call providers or alter history. Preserve cache/history when separately approving old-source cleanup. See [Stats](local-extensions.md#stats).
 
 Todos verification: open `/todos project` and search existing entries, then close without edits. Open `/todos plan` to inspect the current session's plan. Confirm `todo` is registered once and resolves the intended project store (or `PI_TODO_PATH` override). Do not create/delete tasks, migrate old data, or enable GC merely to verify installation. See [Todos](local-extensions.md#todos).
 
@@ -184,16 +187,26 @@ First-party package updates change repository-owned extensions, themes, skills, 
 
 ## Release preparation
 
-`package.json` and the root lockfile prepare **0.9.0 (unreleased)**. The install
-examples retain the existing `v0.6.0` tag until a reviewed `v0.9.0` is published.
-This version bump creates no tag or release and does not update a live installation.
+Latest published tag is **v0.9.0**; detailed installation examples use it.
+README keeps a `<release-tag>` placeholder rather than pinning a package version.
+`package.json` and root lockfile prepare **0.10.0 (unreleased)**, a minor feature
+bump above target branch's `0.9.0`. Follow [versioning rules](../../AGENTS.md#versioning)
+for every change branch/PR before handoff.
+Branch-only changes below are not available through existing tag. No tag,
+release or live installation changes happen during repository implementation.
 
-Changes since `main` include default native subagents with four bundled roles,
+Published `v0.9.0` includes default native subagents with four bundled roles,
 approved custom definitions, scoped builder worktrees, Goal/Prompt Loop integration
 and parent Headroom routing. The Subagents dock folds completed rows and provides
 live messages, per-agent reading state, unread indicators, steering/follow-up and
-delivery receipts. Only two companions remain required. Optional outcome storage
-does not persist child conversations or enable seamless reload recovery.
+delivery receipts. Optional outcome storage does not persist child conversations
+or enable seamless reload recovery.
+
+This branch bundles upstream dashboard as `/stats` (no `/pi-stats` alias); only `@ff-labs/pi-fff`
+remains required companion. Published `v0.9.0` still requires standalone Stats.
+Standalone Stats cleanup needs separate approval after bundled command verification
+and preserves cache/history. Run focused Stats tests plus package contracts before
+next release; then repeat dashboard smoke checks on supported Node/Pi versions.
 
 Documentation/package checks on 2026-10-12: package contracts passed 11/11 and
 prompt contracts passed 9/9, including native prompt discovery. These checks load

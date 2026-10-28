@@ -49,6 +49,11 @@ test("package manifest ships every declared resource path", async () => {
     "pi/extensions/ask-user-question/ui.ts",
     "pi/extensions/ask-user-question/README.md",
     "docs/setup/ask-user-question-research.md",
+    "pi/extensions/stats/index.ts",
+    "pi/extensions/stats/dashboard.ts",
+    "pi/extensions/stats/stats.ts",
+    "pi/extensions/stats/LICENSE",
+    "pi/extensions/stats/README.md",
     "pi/extensions/todos/index.ts",
     "pi/extensions/todos/LICENSE",
     "pi/extensions/todos/README.md",
@@ -73,15 +78,17 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(manifest.files.includes("pi/skills"));
 });
 
-test("package and lockfile versions agree with reviewed install examples", async () => {
+test("versions agree while README uses a reviewed release placeholder", async () => {
   const manifest = await readJson("package.json");
   const lock = await readJson("package-lock.json");
   assert.equal(lock.version, manifest.version);
   assert.equal(lock.packages[""].version, manifest.version);
-  for (const file of ["README.md", "docs/setup/installation.md"]) {
-    const docs = await readFile(path.join(root, file), "utf8");
-    assert.ok(docs.includes(`pi install git:github.com/irfansofyana/pi-setup@v${manifest.version}`));
-  }
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  assert.ok(readme.includes('pi install "git:github.com/irfansofyana/pi-setup@<release-tag>"'));
+  assert.match(readme, /Replace `<release-tag>` with a reviewed published tag/);
+  assert.doesNotMatch(readme, /pi-setup@v\d+\.\d+\.\d+/);
+  const installation = await readFile(path.join(root, "docs/setup/installation.md"), "utf8");
+  assert.ok(installation.includes(`pi install git:github.com/irfansofyana/pi-setup@v${manifest.version}`));
 });
 
 test("web-research evaluation corpus freezes every required benchmark dimension", async () => {
@@ -151,7 +158,6 @@ test("Irfan Devs palette keeps readable dim text", async () => {
 test("setup metadata keeps third-party Pi packages separately managed", async () => {
   const manifest = await readJson("package.json");
   const expected = [
-    "npm:pi-stats-ext@0.2.0",
     "npm:@ff-labs/pi-fff@0.10.5",
   ];
   assert.deepEqual(manifest.dependencies, { fuzzysort: "4.0.2", "shell-quote": "1.8.3", yaml: "2.8.1" }, "only reviewed upstream viewer libraries are runtime dependencies");
@@ -164,7 +170,8 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     assert.equal(manifest.peerDependencies?.[name], undefined, `${name} must remain a separate Pi source`);
   }
   assert.deepEqual(manifest.piSetup.requiredPackages, expected);
-  assert.equal(expected.length, 2);
+  assert.equal(expected.length, 1);
+  assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("pi-stats-ext")), "stats must be package-owned");
   assert.ok(!manifest.piSetup.requiredPackages.some(source => source.includes("pi-subagents")), "native subagents replace the legacy companion requirement");
   assert.ok(!manifest.piSetup.requiredPackages.some((source) => source.includes("rpiv-todo")), "todos must be package-owned");
   assert.equal(manifest.peerDependencies.typebox, "*", "use Pi's host schema library");
@@ -181,6 +188,29 @@ test("setup metadata keeps third-party Pi packages separately managed", async ()
     assert.ok(match, `required companion must encode npm minimum: ${spec}`);
     assert.equal(minimums.get(match[1]), match[2], `${match[1]} README minimum must match manifest`);
   }
+});
+
+test("bundled stats retains provenance, state ownership and approval-gated source cleanup", async () => {
+  const manifest = await readJson("package.json");
+  for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+    assert.equal(manifest[field]?.["pi-stats-ext"], undefined, "stats source must be bundled, not installed as a dependency");
+  }
+  for (const name of ["dashboard", "index", "stats"]) {
+    await access(path.join(root, `pi/extensions/stats/${name}.test.ts`));
+  }
+  const component = await readFile(path.join(root, "pi/extensions/stats/README.md"), "utf8");
+  assert.match(component, /572574a039fe7bba4af6caceea4ba0af6067f5b0/);
+  assert.match(component, /`0\.2\.0`/);
+  assert.match(await readFile(path.join(root, "pi/extensions/stats/LICENSE"), "utf8"), /MIT License/);
+  const guide = await readFile(path.join(root, "docs/setup/local-extensions.md"), "utf8");
+  assert.match(guide, /## Stats/);
+  assert.match(guide, /pi-stats\/cache\.json/);
+  assert.match(guide, /separately approved duplicate/);
+  assert.match(guide, /Preserve cache and history/);
+  const setupSkill = await readFile(path.join(root, "pi/skills/pi-setup/SKILL.md"), "utf8");
+  assert.match(setupSkill, /`pi-stats-ext`.*redundant dashboard sources/);
+  assert.match(setupSkill, /Bundled command is `\/stats`/);
+  assert.match(setupSkill, /preserve existing stats cache and session history/);
 });
 
 test("native MCP guidance uses Pi-owned paths and native server fields", async () => {
