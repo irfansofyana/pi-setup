@@ -42,6 +42,7 @@ export type CachedFile = {
   mtimeMs: number;
   size: number;
   parsedAt: number;
+  parserVersion?: number;
   session: SessionSummary;
 };
 
@@ -86,6 +87,8 @@ export type AggregatedStats = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Reparse old files after accounting changes without discarding usable v2 cache data.
+const PARSER_VERSION = 1;
 
 export function getAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
@@ -162,6 +165,7 @@ function isStatsCache(value: unknown): value is StatsCache {
 
 function isCachedFile(value: unknown): value is CachedFile {
   if (!isRecord(value) || typeof value.path !== "string" || !finiteNumber(value.mtimeMs) || !finiteNumber(value.size) || !finiteNumber(value.parsedAt)) return false;
+  if (value.parserVersion !== undefined && (!finiteNumber(value.parserVersion) || !Number.isInteger(value.parserVersion) || value.parserVersion < 0)) return false;
   const session = value.session;
   if (!isRecord(session) || typeof session.sessionPath !== "string" || typeof session.sessionId !== "string" || typeof session.sessionName !== "string") return false;
   if (typeof session.cwd !== "string" || typeof session.project !== "string" || !finiteNumber(session.startedAt) || !Array.isArray(session.events)) return false;
@@ -233,13 +237,13 @@ export async function refreshCache(sessionDir: string, cachePath: string): Promi
     const cached = cache.files[file];
     try {
       const s = await stat(file);
-      if (cached && cached.mtimeMs === s.mtimeMs && cached.size === s.size) {
+      if (cached && cached.parserVersion === PARSER_VERSION && cached.mtimeMs === s.mtimeMs && cached.size === s.size) {
         nextFiles[file] = cached;
         reusedFiles++;
         continue;
       }
       if (cached && s.size < cached.size) throw new Error(`session file shrank from ${cached.size} to ${s.size} bytes`);
-      nextFiles[file] = { path: file, mtimeMs: s.mtimeMs, size: s.size, parsedAt: Date.now(), session: await parseSessionFile(file) };
+      nextFiles[file] = { path: file, mtimeMs: s.mtimeMs, size: s.size, parsedAt: Date.now(), parserVersion: PARSER_VERSION, session: await parseSessionFile(file) };
       parsedFiles++;
     } catch (error) {
       if (cached) {
@@ -287,18 +291,19 @@ export function parseSessionText(raw: string, file = "session.jsonl"): SessionSu
 
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    let entry: any;
+    let entry: unknown;
     try {
       entry = JSON.parse(line);
     } catch {
       continue;
     }
+    if (!isRecord(entry)) continue;
 
     if (entry.type === "session") {
       sessionId = String(entry.id || sessionId);
       cwd = typeof entry.cwd === "string" && entry.cwd ? entry.cwd : cwd;
-      const headerTs = Date.parse(entry.timestamp || "");
-      if (Number.isFinite(headerTs)) startedAt = headerTs;
+      const headerTs = normalizeTimestamp(entry.timestamp);
+      if (headerTs !== undefined) startedAt = headerTs;
       continue;
     }
 
@@ -307,33 +312,41 @@ export function parseSessionText(raw: string, file = "session.jsonl"): SessionSu
       continue;
     }
 
-    if (entry.type !== "message" || !entry.message) continue;
-    const message = entry.message;
-
-    if (message.role === "user" && !firstUser) {
-      firstUser = contentPreview(message.content);
+    let source: Record<string, unknown>;
+    if (entry.type === "message") {
+      if (!isRecord(entry.message)) continue;
+      const message = entry.message;
+      if (message.role === "user" && !firstUser) {
+        firstUser = contentPreview(message.content);
+        continue;
+      }
+      if (message.role !== "assistant" && message.role !== "toolResult") continue;
+      source = message;
+    } else if (entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary") {
+      source = entry;
+    } else {
       continue;
     }
 
-    if (message.role !== "assistant" || !message.usage) continue;
-
-    const usage = message.usage;
-    const timestamp = (normalizeTimestamp(message.timestamp) ?? normalizeTimestamp(entry.timestamp) ?? startedAt) || 0;
+    // Nested details and tokensBefore are not additional billed usage.
+    const usage = source.usage;
+    if (!isRecord(usage)) continue;
+    const timestamp = (normalizeTimestamp(source.timestamp) ?? normalizeTimestamp(entry.timestamp) ?? startedAt) || 0;
     if (!timestamp) continue;
     const input = number(usage.input);
     const output = number(usage.output);
     const cacheRead = number(usage.cacheRead);
     const cacheWrite = number(usage.cacheWrite);
     const totalTokens = number(usage.totalTokens) || input + output + cacheRead + cacheWrite;
-    const cost = number(usage.cost?.total);
+    const cost = number(isRecord(usage.cost) ? usage.cost.total : undefined);
     const project = projectLabel(cwd);
 
     events.push({
-      eventId: typeof entry.id === "string" && entry.id ? entry.id : typeof message.id === "string" && message.id ? message.id : undefined,
+      eventId: typeof entry.id === "string" && entry.id ? entry.id : typeof source.id === "string" && source.id ? source.id : undefined,
       timestamp,
       day: dayKey(timestamp),
-      provider: String(message.provider || "unknown"),
-      model: String(message.model || "unknown"),
+      provider: String(source.provider || "unknown"),
+      model: String(source.model || "unknown"),
       input,
       output,
       cacheRead,
@@ -341,7 +354,7 @@ export function parseSessionText(raw: string, file = "session.jsonl"): SessionSu
       totalTokens,
       freshTokens: input + output + cacheWrite,
       cost,
-      messages: 1,
+      messages: entry.type === "message" ? 1 : 0,
       sessionPath: file,
       sessionId,
       sessionName: "",

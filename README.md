@@ -13,7 +13,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 # or: npm install -g @earendil-works/pi-coding-agent
 
 # Install reviewed package release
-pi install git:github.com/irfansofyana/pi-setup@v0.9.0
+pi install "git:github.com/irfansofyana/pi-setup@<release-tag>"
 pi
 ```
 
@@ -26,9 +26,8 @@ Inside Pi:
 /reload
 ```
 
-Latest published tag: **v0.9.0**. This branch prepares **0.10.0 (unreleased)** with bundled Stats.
-Inventory below follows this branch; `v0.9.0` still uses standalone `pi-stats-ext`.
-After `v0.10.0` is published and reviewed, use `pi install git:github.com/irfansofyana/pi-setup@v0.10.0`.
+Replace `<release-tag>` with a reviewed published tag from [release tags](https://github.com/irfansofyana/pi-setup/tags).
+Inventory below follows this branch; selected release may differ.
 See [release preparation and validation](docs/setup/operations.md#release-preparation).
 
 Init audits and proposes numbered changes; approval comes before mutation.

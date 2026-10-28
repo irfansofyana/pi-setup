@@ -78,15 +78,17 @@ test("package manifest ships every declared resource path", async () => {
   assert.ok(manifest.files.includes("pi/skills"));
 });
 
-test("package and lockfile versions agree with reviewed install examples", async () => {
+test("versions agree while README uses a reviewed release placeholder", async () => {
   const manifest = await readJson("package.json");
   const lock = await readJson("package-lock.json");
   assert.equal(lock.version, manifest.version);
   assert.equal(lock.packages[""].version, manifest.version);
-  for (const file of ["README.md", "docs/setup/installation.md"]) {
-    const docs = await readFile(path.join(root, file), "utf8");
-    assert.ok(docs.includes(`pi install git:github.com/irfansofyana/pi-setup@v${manifest.version}`));
-  }
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  assert.ok(readme.includes('pi install "git:github.com/irfansofyana/pi-setup@<release-tag>"'));
+  assert.match(readme, /Replace `<release-tag>` with a reviewed published tag/);
+  assert.doesNotMatch(readme, /pi-setup@v\d+\.\d+\.\d+/);
+  const installation = await readFile(path.join(root, "docs/setup/installation.md"), "utf8");
+  assert.ok(installation.includes(`pi install git:github.com/irfansofyana/pi-setup@v${manifest.version}`));
 });
 
 test("web-research evaluation corpus freezes every required benchmark dimension", async () => {

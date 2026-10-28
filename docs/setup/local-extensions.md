@@ -107,11 +107,18 @@ owns exact commit, MIT attribution, keyboard controls and cache details.
   or Tab changes views; Up/Down or `j`/`k` selects models; Enter inspects; `q`/Esc closes.
 - Reads local session history only, with cached-first display and incremental refresh.
   Non-TUI modes retain upstream stdout indexing summary. No provider calls or startup scan.
+- Counts assistant/tool-result usage, standalone `usage`, compaction and branch-summary
+  usage once per record. Missing model/provider attribution stays `unknown`; nested
+  details and pre-compaction token counts are not billed usage. Message counts exclude
+  standalone usage and summaries.
 
 State remains `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-stats/cache.json`;
 input remains `sessions/` under same agent root. Version-2 cache, session names,
-project paths and usage metadata remain user-owned. Preserve cache and history
-through updates and source cleanup; no automatic data migration or local settings change.
+project paths and usage metadata remain user-owned. Per-file parser revision forces
+one successful refresh of old cached files, even if unchanged; unavailable/shrinking
+sources retain old data and retry after recovery. Totals can remain incomplete until
+refresh succeeds. Preserve cache and history through updates/source cleanup; no
+installation-time data migration or local settings change.
 
 Existing standalone `pi-stats-ext` exposes legacy `/pi-stats`, not `/stats`.
 Audit npm/Git/manual loaders as redundant dashboard sources, verify bundled command,

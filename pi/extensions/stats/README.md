@@ -8,7 +8,8 @@ MIT license, Copyright (c) 2026 Irfan Sofyana. See [LICENSE](LICENSE).
 
 Upstream dashboard features preserved. Command, header and indexing-summary prefix
 renamed to `stats`; no `/pi-stats` alias. Relative imports use `.ts` for native
-Node tests, with added command/cache compatibility checks. Root extension glob loads `index.ts`.
+Node tests, with added accounting/command/cache compatibility checks. Local accounting
+also includes native supplemental usage records described below. Root extension glob loads `index.ts`.
 No extra runtime dependency, model call, network request or startup scan.
 
 ## Dashboard
@@ -59,11 +60,21 @@ panels and fit table columns to available width.
 Agent root: `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}`.
 
 - Reads `sessions/**/*.jsonl`; never rewrites session history.
+- Counts assistant and usage-bearing tool-result messages, standalone `usage`,
+  `compaction.usage` and `branch_summary.usage`. Each record contributes only its own
+  top-level usage; nested details and `tokensBefore` are not added again.
+- Uses recorded provider/model when present; unattributed summary/tool usage stays
+  in `unknown` model/provider buckets rather than borrowing parent model identity.
+  Message counts include assistant/tool-result records only, not summaries or standalone usage.
 - Keeps existing version-2 cache at `pi-stats/cache.json`, including session names,
   project paths and usage metadata. Treat cache as private user-owned state.
-- Reuses unchanged files, deduplicates copied fork events and saves cache atomically.
+- Per-file parser revision triggers one reparse of old/incomplete cached files, even
+  when mtime/size match. Successful parses get current revision; subsequent unchanged
+  files reuse cache. Copied fork events remain deduplicated and saves stay atomic.
 - Missing session root or shrinking/unreadable file retains prior cached data and
-  reports indexing errors. Invalid/legacy cache rebuilds from session files.
+  reports indexing errors. Failed refreshes keep stale parser revision so recovery
+  retries later. Totals may remain incomplete until refresh succeeds. Structurally
+  invalid/unsupported cache rebuilds from session files.
 - TUI opens dashboard. Other modes retain upstream stdout indexing summary rather
   than custom UI. No new configuration or model-facing tool.
 
@@ -79,8 +90,10 @@ Run `/reload` after approved package/source changes; restart Pi after changing
 27 upstream tests cover aggregation/cache safety, date ranges, responsive layout,
 comparisons, activity, Kitty keys, model inspection and command lifecycle. Added
 registration test enforces `/stats` without legacy alias; command refresh test
-checks unchanged version-2 cache path. Root
-extension suite and bounded CI discover adjacent `*.test.ts` files automatically.
+checks unchanged version-2 cache path. Native SDK fixtures cover every usage source,
+unknown attribution, date filters, malformed records, fork deduplication and legacy
+cache refresh/recovery. Root extension suite and bounded CI discover adjacent
+`*.test.ts` files automatically.
 
 Focused command, inside resource-bounded validation environment:
 

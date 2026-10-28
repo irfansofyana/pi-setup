@@ -187,7 +187,8 @@ First-party package updates change repository-owned extensions, themes, skills, 
 
 ## Release preparation
 
-Latest published tag is **v0.9.0**; README and installation examples use it.
+Latest published tag is **v0.9.0**; detailed installation examples use it.
+README keeps a `<release-tag>` placeholder rather than pinning a package version.
 `package.json` and root lockfile prepare **0.10.0 (unreleased)**, a minor feature
 bump above target branch's `0.9.0`. Follow [versioning rules](../../AGENTS.md#versioning)
 for every change branch/PR before handoff.
