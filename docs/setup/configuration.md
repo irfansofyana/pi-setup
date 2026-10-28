@@ -20,6 +20,7 @@ Keep package-owned resources, global Pi configuration, and project-local configu
 | `<project>/.pi/agent/subagent-manager/agents/` | Project-local | Native project definitions; explicit trust required |
 | `~/.pi/agent/subagent-manager/settings.json` | Global Pi | Native manager UI/model preferences; edited through `/agents` |
 | `<project>/.pi/agent/subagent-manager/settings.json` | Project-local | Trusted project manager preferences |
+| `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-stats/cache.json` | Global Pi | User-owned Stats cache; reads `sessions/` under same agent root |
 | `~/.pi/agent/headroom/config.json` | Global Pi | Headroom adapter config |
 | `~/.pi/agent/hindsight/config.json` | Global Pi | Hindsight daemon config |
 | `~/.pi/agent/managed-skills/config.json` | Global Pi | Managed skills config |

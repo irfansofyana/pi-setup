@@ -1,6 +1,6 @@
 {
   "name": "@irfansofyana/pi-setup",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "description": "Irfan's installable Pi coding-agent setup",
   "type": "module",
@@ -51,7 +51,6 @@
   "piSetup": {
     "defaultTheme": "pi-irfan-devs",
     "requiredPackages": [
-      "npm:pi-stats-ext@0.2.0",
       "npm:@ff-labs/pi-fff@0.10.5"
     ]
   },

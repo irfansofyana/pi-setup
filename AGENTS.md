@@ -26,7 +26,7 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 ## Pi package conventions
 
 - Normal installation is one reviewed release tag, for example `pi install git:github.com/irfansofyana/pi-setup@v0.1.0`.
-- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; the two exact companions remain separate Pi package sources.
+- Do not restore manual-copy-first extension/theme instructions as the normal path. Repository extensions, themes, and skills load from the first-party Pi package; required companions remain separate Pi package sources.
 - Keep companion names and documented minimum versions aligned with `piSetup.requiredPackages`; newer installed versions satisfy minimums and remain separate Pi package sources after approval.
 - Package installation must not overwrite user settings, config, state, logs, generated skills, memory, or secrets. Keep the package free of postinstall mutation.
 - `pi-irfan-devs` is the recommended fresh-install default; the setup skill reads `piSetup.defaultTheme` from the manifest. Repository implementation approval does not authorize local activation. Changing an existing device's selected theme requires separate explicit approval.
@@ -60,7 +60,8 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 - Root manifest must continue exposing theme-owned Signature UI, local extension directories, themes, and skills. Load Signature through the canonical theme entrypoint; do not restore a standalone Signature adapter.
 - `pi/themes/pi-irfan-devs/` owns palette, canonical editor/Signature entrypoint, welcome controller/renderer, adjacent tests, smoke scripts and component `README.md`. For welcome UI changes, read that component README for layout priority, visibility and diagnostics. Manifest loads only `index.ts`; preserve unrelated palettes and the single-editor conflict policy. Retired theme aliases and standalone Signature adapters stay removed.
 - The `pi-irfan-devs` theme owns its green palette, editor, and Signature UI; unrelated blue/Gruvbox palettes retain their existing styles.
-- The package owns native Web Research, bundled `my-web-search`, Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, Todos, Structured Questions, BTW, Caveman, the integrated pi-irfan-devs editor, signature UI, themes, and setup skill. Third-party companions remain separate Pi package sources declared in `piSetup.requiredPackages`.
+- The package owns Stats, native Web Research, bundled `my-web-search`, Headroom, Hindsight, Managed Skills, Goal Loop, Prompt Loop, Todos, Structured Questions, BTW, Caveman, the integrated pi-irfan-devs editor, signature UI, themes, and setup skill. Third-party companions remain separate Pi package sources declared in `piSetup.requiredPackages`.
+- Stats loads from `pi/extensions/stats/index.ts`, ported from `irfansofyana/pi-stats-ext`; component README owns upstream version/commit and MIT attribution. Expose `/stats` only, intentionally renaming upstream `/pi-stats`; preserve dashboard feature parity and existing `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-stats/cache.json` format/path. Standalone stats sources/manual loaders are duplicate candidates, not required companions; removal needs verification, private backup and separate approval. Never delete cache or session history during cutover. See `docs/setup/local-extensions.md#stats`.
 - Todos loads from `pi/extensions/todos/index.ts`; read `docs/setup/local-extensions.md#todos` for storage, claims, and cleanup changes. Keep GC off by default; old rpiv-todo removal, data migration, and settings activation need separate approval. Credit upstream Armin Ronacher/mitsuhiko under Apache-2.0; the component README owns the upstream commit reference.
 - Structured Questions loads from `pi/extensions/ask-user-question/index.ts`; read `docs/setup/local-extensions.md#structured-questions` and the component README before API/UI changes, and `docs/setup/ask-user-question-research.md` for design evidence. Keep final review, whole-questionnaire cancellation, interactive-only answers, and disposable user-invoked `/ask-demo`; session tool results are not secret storage or a permission gate. Duplicate tool sources and configuration cleanup need separate approval; ship no new runtime package, config, external state, or telemetry. Describe original Claude Code-style behavior, not an exact clone or copied source.
 - Component docs should describe runtime/configuration behavior and package ownership, not repeat package installation commands.
@@ -71,6 +72,13 @@ This repository is an installable personal Pi coding-agent package. Keep changes
 - `docs/setup/permissions.md` owns trust boundaries and manual approval procedures; keep its topic link stable.
 - Setup/migration approvals remain procedural. Do not describe them as automatic tool-execution gates or a sandbox.
 - Pi extensions execute with the Pi process's OS permissions. Preserve user-owned policies/configuration from removed tools unless separately approved for cleanup.
+
+## Versioning
+
+- Every change branch/PR must include a Semantic Versioning bump above its PR/target branch before commit, push, PR update or final handoff, even when the user does not ask. Read the actual target branch's `package.json`; use `main` only when no other target is specified. If target/version is ambiguous, resolve it before handoff.
+- Choose MAJOR for breaking changes, MINOR for backward-compatible features, PATCH for fixes, documentation-only or other backward-compatible changes. Apply one appropriate bump per logical PR/change set, not per edit or review fix; preserve an already-correct bump.
+- Keep root `package.json`, root `package-lock.json` version and `packages[""].version` identical. Update release-preparation docs while keeping normal install examples on the latest published reviewed tag; label upcoming versions unreleased.
+- Before handoff, verify branch version exceeds target version, lockfile agrees, and relevant package contracts pass. Version bumps never authorize tags, publishing, releases or local activation.
 
 ## Validation
 

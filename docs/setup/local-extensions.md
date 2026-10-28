@@ -84,9 +84,45 @@ PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent" npm run test:themes
 
 Set `PI_ROOT` explicitly for non-npm installations. Tests cover widths, Unicode/IME, mouse geometry, lifecycle/collisions, integrated Signature, footer cleanup and live header theme switches.
 
+## Stats
+
+Package-owned `pi/extensions/stats/index.ts` replaces separate `pi-stats-ext` source.
+Upstream `0.2.0` dashboard features retained under shorter `/stats` command,
+without `/pi-stats` alias. [Component README](../../pi/extensions/stats/README.md)
+owns exact commit, MIT attribution, keyboard controls and cache details.
+
+```text
+/stats
+/stats 7d
+/stats all
+/stats 2026-06-01..2026-06-30
+```
+
+- Default `30d`; also today, 7d, 90d, all and inclusive custom UTC dates.
+- Overview, Models, Projects and Sessions; responsive theme-aware cards, prior-period
+  comparisons, spend/cache signals, model efficiency table and routing inspector.
+- Calendar heatmap, activity cadence, peak/average usage, current/best streaks,
+  busiest weekday and fresh-token trend. Project/session tables rank by cost/tokens.
+- `1`–`5` select ranges; arrows cycle ranges; `d` enters dates; `o`/`m`/`p`/`s`
+  or Tab changes views; Up/Down or `j`/`k` selects models; Enter inspects; `q`/Esc closes.
+- Reads local session history only, with cached-first display and incremental refresh.
+  Non-TUI modes retain upstream stdout indexing summary. No provider calls or startup scan.
+
+State remains `${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/pi-stats/cache.json`;
+input remains `sessions/` under same agent root. Version-2 cache, session names,
+project paths and usage metadata remain user-owned. Preserve cache and history
+through updates and source cleanup; no automatic data migration or local settings change.
+
+Existing standalone `pi-stats-ext` exposes legacy `/pi-stats`, not `/stats`.
+Audit npm/Git/manual loaders as redundant dashboard sources, verify bundled command,
+privately back up source/settings evidence, then remove only separately approved duplicate. Keep rollback source/ref
+and resource filters; restore only approved source if verification fails.
+`@ff-labs/pi-fff` remains separate companion. Run `/reload` after approved
+package/source changes; restart Pi after changing `PI_CODING_AGENT_DIR`.
+
 ## Context diagnostics
 
-Package-owned `/context` is a read-only active-session report, separate from companion `pi-stats-ext` (`/pi-stats`). It distinguishes session-file spend across all branches from current `buildContextEntries()` context, includes provider/model and tool facts, and reports prompt contributor char/byte sizes without dumping raw prompt, context-file, skill, or tool output content. It makes no token estimates — the only token figures are provider-reported — and flags only a tool-bloat threshold.
+Package-owned `/context` is a read-only active-session report, separate from bundled [Stats](#stats) (`/stats`). It distinguishes session-file spend across all branches from current `buildContextEntries()` context, includes provider/model and tool facts, and reports prompt contributor char/byte sizes without dumping raw prompt, context-file, skill, or tool output content. It makes no token estimates — the only token figures are provider-reported — and flags only a tool-bloat threshold.
 
 TUI opens a theme-aware scrollable overlay; `q`, `Escape`, or `Ctrl-C` closes it. Print mode emits readable stdout; RPC mode sends a readable notification; JSON mode writes to stderr so structured stdout stays protocol-safe. The command does not call models, append messages, mutate session/config, or write cache. Run `/reload` after package updates.
 
